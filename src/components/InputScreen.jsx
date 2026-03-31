@@ -23,7 +23,7 @@ export default function InputScreen({
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && onSubmit()}
-          placeholder="e.g. kobidynasty"
+          placeholder="e.g. UserName"
         />
         {error && (
           <div

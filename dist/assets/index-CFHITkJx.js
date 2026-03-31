@@ -11143,7 +11143,7 @@ function hd({
             value: y,
             onChange: (P) => S(P.target.value),
             onKeyDown: (P) => P.key === "Enter" && d(),
-            placeholder: "e.g. kobidynasty",
+            placeholder: "e.g. UserName",
           }),
           C &&
             c.jsx("div", {
