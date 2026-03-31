@@ -1,0 +1,158 @@
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: #141722;
+}
+
+body {
+  font-family: "DM Mono", "Courier New", monospace;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 245, 160, 0.18);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 245, 160, 0.35);
+}
+
+/* ── Base interactive resets ─────────────────────────────────────────────── */
+button {
+  cursor: pointer;
+  font-family: inherit;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+input::placeholder {
+  color: #7a8098;
+}
+input:focus {
+  outline: none;
+  border-color: rgba(0, 245, 160, 0.45) !important;
+  box-shadow: 0 0 0 3px rgba(0, 245, 160, 0.07);
+}
+
+/* ── Component hover states ──────────────────────────────────────────────── */
+.dyn-btn:hover:not(:disabled) {
+  background: #00dda0;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 245, 160, 0.2);
+}
+.dyn-btn {
+  transition:
+    background 0.15s,
+    transform 0.15s,
+    box-shadow 0.15s;
+}
+
+.dyn-btn-outline:hover {
+  background: rgba(0, 245, 160, 0.07);
+  border-color: rgba(0, 245, 160, 0.6);
+}
+.dyn-btn-outline {
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.dyn-btn-ghost:hover {
+  color: #eef1ff;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.dyn-btn-ghost {
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.dyn-tab:hover {
+  color: #e3e8fb;
+}
+.dyn-tab {
+  transition:
+    color 0.15s,
+    border-bottom-color 0.15s;
+}
+
+.dyn-room-toggle:hover .dyn-room-label {
+  opacity: 1;
+}
+.dyn-room-label {
+  transition: opacity 0.15s;
+}
+
+.dyn-expand-btn:hover {
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  color: #eef1ff !important;
+}
+.dyn-expand-btn {
+  transition:
+    border-color 0.15s,
+    color 0.15s;
+}
+
+.dyn-grade-help:hover {
+  background: rgba(0, 245, 160, 0.12) !important;
+  border-color: rgba(0, 245, 160, 0.6) !important;
+}
+.dyn-grade-help {
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.dyn-card-player {
+  transition: border-color 0.15s;
+}
+.dyn-card-player:hover {
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+/* ── Modal ───────────────────────────────────────────────────────────────── */
+.dyn-modal-backdrop {
+  animation: fadeIn 0.15s ease;
+}
+.dyn-modal {
+  animation: slideUp 0.18s ease;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
