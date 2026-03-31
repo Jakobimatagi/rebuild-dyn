@@ -36,6 +36,7 @@ export default function Dashboard({
     <>
       <div style={styles.header}>
         <div
+          className="dyn-header-top-row"
           style={{
             display: "flex",
             justifyContent: "space-between",
@@ -52,6 +53,7 @@ export default function Dashboard({
           </button>
         </div>
         <div
+          className="dyn-header-bottom-row"
           style={{
             display: "flex",
             justifyContent: "space-between",
@@ -79,6 +81,7 @@ export default function Dashboard({
       </div>
 
       <div
+        className="dyn-tabs-row"
         style={{
           display: "flex",
           borderBottom: "1px solid rgba(255,255,255,0.08)",
