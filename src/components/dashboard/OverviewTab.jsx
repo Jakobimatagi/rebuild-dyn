@@ -47,6 +47,7 @@ export default function OverviewTab({
       </div>
 
       <div
+        className="dyn-grid-4"
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(4, 1fr)",
@@ -103,6 +104,7 @@ export default function OverviewTab({
       </div>
 
       <div
+        className="dyn-grid-2"
         style={{
           display: "grid",
           gridTemplateColumns: "1fr 1fr",
@@ -157,6 +159,7 @@ export default function OverviewTab({
       <div style={{ ...styles.card, marginBottom: 16 }}>
         <div style={styles.sectionLabel}>Roster Value Balance</div>
         <div
+          className="dyn-grid-4"
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(4, 1fr)",

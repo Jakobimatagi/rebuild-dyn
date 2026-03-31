@@ -23,6 +23,7 @@ export default function AdviceTab({ aiAdvice, aiLoading, onGetAIAdvice }) {
   return (
     <div>
       <div
+        className="dyn-grid-2"
         style={{
           display: "grid",
           gridTemplateColumns: "1fr 1fr",
