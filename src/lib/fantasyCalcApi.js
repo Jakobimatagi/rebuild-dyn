@@ -37,6 +37,10 @@ export async function fetchFantasyCalcValues(league) {
         Date.now() - parsed.timestamp < ONE_DAY_MS &&
         Array.isArray(parsed.data)
       ) {
+        console.log(
+          `[FantasyCalc] Cache hit — ${parsed.data.length} players loaded`,
+          parsed.data,
+        );
         return parsed.data;
       }
     }
@@ -56,6 +60,10 @@ export async function fetchFantasyCalcValues(league) {
   if (!res.ok) throw new Error(`FantasyCalc API error: ${res.status}`);
 
   const data = await res.json();
+  console.log(
+    `[FantasyCalc] Fresh fetch — ${data.length} players loaded`,
+    data,
+  );
 
   try {
     localStorage.setItem(
