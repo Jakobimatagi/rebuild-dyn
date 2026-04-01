@@ -151,13 +151,18 @@ function buildBenchmarks(
   stats24,
   leagueContext = null,
   historicalStats = [],
+  lastSeasonYear,
 ) {
+  const yr0 = String(lastSeasonYear);
+  const yr1 = String(lastSeasonYear - 1);
+  const yr2 = String(lastSeasonYear - 2);
+
   const raw = { QB: {}, RB: {}, WR: {}, TE: {} };
   POSITION_PRIORITY.forEach((pos) => {
-    raw[pos] = { 2022: [], 2023: [], 2024: [] };
+    raw[pos] = { [yr0]: [], [yr1]: [], [yr2]: [] };
   });
 
-  const allStats = { 2022: stats22, 2023: stats23, 2024: stats24 };
+  const allStats = { [yr0]: stats24, [yr1]: stats23, [yr2]: stats22 };
   Object.entries(allStats).forEach(([year, stats]) => {
     Object.entries(stats).forEach(([id, s]) => {
       if (!s || !s.gp || s.gp < 8) return;
@@ -190,7 +195,7 @@ function buildBenchmarks(
   const replacementLevel = {};
   POSITION_PRIORITY.forEach((pos) => {
     replacementLevel[pos] = {};
-    ["2022", "2023", "2024"].forEach((yr) => {
+    [yr0, yr1, yr2].forEach((yr) => {
       const sorted = raw[pos][yr];
       if (!sorted.length) {
         replacementLevel[pos][yr] = 0;
@@ -205,9 +210,9 @@ function buildBenchmarks(
   // Build empirical age curves from all available seasons (recent 3 + historical).
   // More seasons → more samples per age bucket → more reliable peak/decline/cliff.
   const allForAgeCurves = [
-    { year: 2024, stats: stats24 },
-    { year: 2023, stats: stats23 },
-    { year: 2022, stats: stats22 },
+    { year: lastSeasonYear, stats: stats24 },
+    { year: lastSeasonYear - 1, stats: stats23 },
+    { year: lastSeasonYear - 2, stats: stats22 },
     ...historicalStats,
   ];
   const ageCurves = buildAgeCurves(players, allForAgeCurves);
@@ -221,11 +226,15 @@ function getPctileRank(ppg, sorted) {
   return Math.round((below / sorted.length) * 100);
 }
 
-function playerPctiles(s24, s23, s22, pos, benchmarks) {
+function playerPctiles(s24, s23, s22, pos, benchmarks, lastSeasonYear) {
   // Support both old format (raw arrays) and new format ({ raw, replacementLevel })
   const raw = benchmarks.raw || benchmarks;
   const rl = benchmarks.replacementLevel?.[pos] || {};
   const b = raw[pos] || {};
+
+  const yr0 = String(lastSeasonYear);
+  const yr1 = String(lastSeasonYear - 1);
+  const yr2 = String(lastSeasonYear - 2);
 
   const ppgOf = (s) => (s?.gp >= 6 ? (s.pts_ppr || 0) / s.gp : 0);
 
@@ -244,13 +253,13 @@ function playerPctiles(s24, s23, s22, pos, benchmarks) {
     return pctile;
   };
 
-  const p24 = parAdjPctile(ppgOf(s24), b["2024"], rl["2024"] || 0);
-  const p23 = parAdjPctile(ppgOf(s23), b["2023"], rl["2023"] || 0);
-  const p22 = parAdjPctile(ppgOf(s22), b["2022"], rl["2022"] || 0);
-  const valid = [p24, p23, p22].filter((v) => v !== null);
+  const pLast = parAdjPctile(ppgOf(s24), b[yr0], rl[yr0] || 0);
+  const pPrev = parAdjPctile(ppgOf(s23), b[yr1], rl[yr1] || 0);
+  const pOlder = parAdjPctile(ppgOf(s22), b[yr2], rl[yr2] || 0);
+  const valid = [pLast, pPrev, pOlder].filter((v) => v !== null);
   const peak = valid.length > 0 ? Math.max(...valid) : null;
-  const current = p24 ?? (peak != null ? Math.round(peak * 0.65) : 40);
-  return { current, peak, p24, p23, p22 };
+  const current = pLast ?? (peak != null ? Math.round(peak * 0.65) : 40);
+  return { current, peak, pLast, pPrev, pOlder };
 }
 
 function draftCapitalScore(round, slot) {
@@ -290,8 +299,13 @@ function ageComponent(pos, age, ageCurves) {
   return 5;
 }
 
-function availComponent(s24, injuryStatus) {
-  const gp = s24?.gp || 0;
+function availComponent(seasonStats, injuryStatus) {
+  // seasonStats is [sLast, sPrev, ...] ordered most-recent to oldest
+  // Fall back to the most recent season that has game data (handles rookies)
+  const s = Array.isArray(seasonStats)
+    ? seasonStats.find((s) => s?.gp > 0) || null
+    : seasonStats;
+  const gp = s?.gp || 0;
   const base = (gp / 17) * 100;
   const penalty =
     { IR: 20, Out: 10, Doubtful: 5, Questionable: 2, PUP: 15 }[injuryStatus] ||
@@ -300,13 +314,21 @@ function availComponent(s24, injuryStatus) {
 }
 
 function trendComponent(s24, s23) {
-  const gp24 = s24?.gp || 0;
-  const gp23 = s23?.gp || 0;
-  if (gp24 < 4 || gp23 < 4) return 50;
-  const ppg24 = (s24.pts_ppr || 0) / gp24;
-  const ppg23 = (s23.pts_ppr || 0) / gp23;
-  if (ppg23 === 0) return 50;
-  const pct = (ppg24 - ppg23) / ppg23;
+  const gpLast = s24?.gp || 0;
+  const gpPrev = s23?.gp || 0;
+  // Need enough games in last season to say anything meaningful
+  if (gpLast < 4) return 50;
+  const ppgLast = (s24.pts_ppr || 0) / gpLast;
+  // Single-season player (rookie / only 1 year of data): score against a
+  // cross-position baseline of 10 ppg so strong rookies trend up, weak ones down.
+  if (gpPrev < 4) {
+    const baseline = 10;
+    const pct = (ppgLast - baseline) / baseline;
+    return Math.min(100, Math.max(0, 60 + pct * 100));
+  }
+  const ppgPrev = (s23.pts_ppr || 0) / gpPrev;
+  if (ppgPrev === 0) return 50;
+  const pct = (ppgLast - ppgPrev) / ppgPrev;
   return Math.min(100, Math.max(0, 60 + pct * 100));
 }
 
@@ -326,7 +348,7 @@ function calcScore(
   scoringWeights = DEFAULT_SCORING_WEIGHTS,
 ) {
   const age = ageComponent(player.position, player.age, ageCurves);
-  const avail = availComponent(s24, player.injuryStatus);
+  const avail = availComponent([s24, s23], player.injuryStatus);
   const trend = trendComponent(s24, s23);
   const situ = situComponent(player.depthOrder, player.team);
   const w = normalizeScoringWeights(scoringWeights);
@@ -836,6 +858,7 @@ function buildRosterSnapshot(
   leagueContext,
   fantasyCalcContext,
   futureSeasons,
+  lastSeasonYear,
 ) {
   const playerIds = roster.players || [];
   const picks = buildRosterPicks(
@@ -879,7 +902,7 @@ function buildRosterSnapshot(
         depthOrder: p.depth_chart_order || 2,
       };
 
-      const pctiles = playerPctiles(s24, s23, s22, pos, benchmarks);
+      const pctiles = playerPctiles(s24, s23, s22, pos, benchmarks, lastSeasonYear);
       const { score: internalScore, components } = calcScore(
         playerData,
         s24,
@@ -923,11 +946,12 @@ function buildRosterSnapshot(
         injuryStatus: p.injury_status || null,
         ppg,
         gp24,
+        lastSeasonYear,
         peakPctile: pctiles.peak,
         currentPctile: pctiles.current,
-        pctile24: pctiles.p24,
-        pctile23: pctiles.p23,
-        pctile22: pctiles.p22,
+        pctileLast: pctiles.pLast,
+        pctilePrev: pctiles.pPrev,
+        pctileOlder: pctiles.pOlder,
         draftTier: draftTierLabel(draftRound, draftSlot),
       };
 
@@ -1637,6 +1661,10 @@ export function buildRosterAnalysis(
   rosters = [],
   historicalStats = [],
   scoringWeights = DEFAULT_SCORING_WEIGHTS,
+  lastSeasonYear = (() => {
+    const now = new Date();
+    return now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+  })(),
 ) {
   const currentYear = new Date().getFullYear();
   const futureSeasons = [currentYear, currentYear + 1, currentYear + 2];
@@ -1663,6 +1691,7 @@ export function buildRosterAnalysis(
     stats24,
     leagueContext,
     historicalStats,
+    lastSeasonYear,
   );
   const fantasyCalcContext = buildFantasyCalcContext(fantasyCalcValues);
   const sourceRosters = rosters.length ? rosters : [myRoster];
@@ -1682,6 +1711,7 @@ export function buildRosterAnalysis(
       leagueContext,
       fantasyCalcContext,
       futureSeasons,
+      lastSeasonYear,
     ),
   );
 
