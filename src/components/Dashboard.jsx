@@ -4,6 +4,7 @@ import GradeKeyModal from "./dashboard/GradeKeyModal";
 import OverviewTab from "./dashboard/OverviewTab";
 import PicksTab from "./dashboard/PicksTab";
 import RosterTab from "./dashboard/RosterTab";
+import TradeTab from "./dashboard/TradeTab";
 
 export default function Dashboard({
   analysis,
@@ -30,6 +31,12 @@ export default function Dashboard({
     aiAdvice,
     picks,
     proportions,
+    surplusPositions,
+    tradeSuggestions,
+    tradeBlock,
+    leagueContext,
+    tradeMarket,
+    fantasyCalcSource,
   } = analysis;
 
   return (
@@ -88,7 +95,7 @@ export default function Dashboard({
           marginBottom: 32,
         }}
       >
-        {["overview", "roster", "picks"].map((tab) => (
+        {["overview", "roster", "picks", "trades"].map((tab) => (
           <button
             key={tab}
             className="dyn-tab"
@@ -126,6 +133,19 @@ export default function Dashboard({
 
       {activeTab === "picks" && (
         <PicksTab picksByYear={picksByYear} picks={picks} />
+      )}
+
+      {activeTab === "trades" && (
+        <TradeTab
+          tradeSuggestions={tradeSuggestions}
+          weakRooms={weakRooms}
+          surplusPositions={surplusPositions}
+          tradeBlock={tradeBlock}
+          picks={picks}
+          leagueContext={leagueContext}
+          tradeMarket={tradeMarket}
+          fantasyCalcSource={fantasyCalcSource}
+        />
       )}
     </>
   );

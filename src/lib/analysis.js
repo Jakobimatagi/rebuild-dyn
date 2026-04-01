@@ -225,75 +225,325 @@ export function getArchetype(player) {
   return "Replaceable";
 }
 
-export function buildRosterAnalysis(
-  myRoster,
+function getLeagueRulesContext(league) {
+  const scoring = league.scoring_settings || {};
+  const rosterPositions = league.roster_positions || [];
+  const passTd = Number(scoring.pass_td ?? 4);
+  const recBase = Number(scoring.rec ?? 0);
+  const teRec = Number(scoring.rec_te ?? recBase);
+  const wrRec = Number(scoring.rec_wr ?? recBase);
+  const rbRec = Number(scoring.rec_rb ?? recBase);
+  const flexCount = rosterPositions.filter((slot) =>
+    ["FLEX", "REC_FLEX", "WRRB_FLEX", "WRTE_FLEX", "SUPER_FLEX"].includes(slot),
+  ).length;
+  const starterCounts = {
+    QB: rosterPositions.filter((slot) => slot === "QB").length,
+    RB: rosterPositions.filter((slot) => slot === "RB").length,
+    WR: rosterPositions.filter((slot) => slot === "WR").length,
+    TE: rosterPositions.filter((slot) => slot === "TE").length,
+  };
+  const isSuperflex =
+    starterCounts.QB > 1 || rosterPositions.includes("SUPER_FLEX");
+  const tePremium = teRec > Math.max(wrRec, rbRec, recBase);
+
+  return {
+    isSuperflex,
+    tePremium,
+    passTd,
+    ppr: recBase,
+    starterCounts,
+    flexCount,
+    formatLabel: [
+      isSuperflex ? "Superflex" : "1QB",
+      tePremium ? "TE Premium" : null,
+      recBase >= 1 ? "PPR" : recBase > 0 ? "Half PPR" : "Standard-ish",
+      passTd >= 6 ? "6pt Pass TD" : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    positionPremiums: {
+      QB: isSuperflex ? 24 + Math.max(0, starterCounts.QB - 1) * 5 : 0,
+      RB: starterCounts.RB >= 2 ? 2 : 0,
+      WR: starterCounts.WR >= 3 || flexCount >= 2 ? 4 : 0,
+      TE: tePremium ? 10 + Math.max(0, starterCounts.TE - 1) * 3 : 0,
+    },
+  };
+}
+
+function getArchetypePremium(archetype) {
+  return (
+    {
+      Cornerstone: 18,
+      Foundational: 13,
+      Mainstay: 8,
+      "Upside Shot": 10,
+      "Productive Vet": 4,
+      "Short Term League Winner": 6,
+      "Short Term Production": 3,
+      Serviceable: 0,
+      "JAG - Insurance": -6,
+      "JAG - Developmental": 2,
+      Replaceable: -14,
+    }[archetype] || 0
+  );
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function buildFantasyCalcContext(fantasyCalcValues = []) {
+  const bySleeperId = new Map();
+  const maxValue = fantasyCalcValues.reduce(
+    (best, entry) => Math.max(best, Number(entry?.value || 0)),
+    0,
+  );
+  const maxOverallRank = fantasyCalcValues.reduce(
+    (best, entry) => Math.max(best, Number(entry?.overallRank || 0)),
+    0,
+  );
+
+  fantasyCalcValues.forEach((entry) => {
+    const sleeperId = entry?.player?.sleeperId;
+    if (sleeperId) bySleeperId.set(String(sleeperId), entry);
+  });
+
+  return {
+    bySleeperId,
+    maxValue: Math.max(1, maxValue),
+    maxOverallRank: Math.max(1, maxOverallRank),
+    totalPlayers: fantasyCalcValues.length,
+  };
+}
+
+function normalizeFantasyCalcValue(entry, context) {
+  if (!entry) return null;
+
+  const valueRatio = clamp(
+    Math.sqrt(Number(entry.value || 0) / context.maxValue),
+    0,
+    1,
+  );
+  const rankScore = clamp(
+    1 -
+      (Number(entry.overallRank || context.maxOverallRank) - 1) /
+        context.maxOverallRank,
+    0,
+    1,
+  );
+  const trendAdj = clamp(Number(entry.trend30Day || 0) / 1200, -0.08, 0.08);
+
+  return Math.round(
+    clamp((rankScore * 0.6 + valueRatio * 0.4 + trendAdj) * 100, 5, 100),
+  );
+}
+
+function buildPlayerMarketValue(
+  player,
+  leagueContext,
+  fantasyCalcEntry,
+  fantasyCalcContext,
+) {
+  let internalValue =
+    player.score + (leagueContext.positionPremiums[player.position] || 0) * 0.6;
+
+  if (player.age <= 23) internalValue += player.position === "QB" ? 8 : 5;
+  else if (player.age <= 25) internalValue += player.position === "QB" ? 5 : 3;
+  else if (player.age >= 29) internalValue -= player.position === "RB" ? 14 : 7;
+
+  if (player.draftRound === 1) {
+    internalValue += player.draftSlot <= 12 ? 8 : 5;
+  } else if (player.draftRound === 2) {
+    internalValue += 2;
+  }
+
+  internalValue += getArchetypePremium(player.archetype) * 0.55;
+  internalValue += Math.max(0, ((player.currentPctile || 0) - 55) * 0.18);
+  internalValue += Math.max(0, ((player.peakPctile || 0) - 75) * 0.1);
+
+  if (player.gp24 < 4) {
+    internalValue -= player.draftRound === 1 ? 4 : 10;
+  }
+  if (player.yearsExp <= 1 && (player.currentPctile || 0) < 45) {
+    internalValue -= player.draftRound === 1 ? 3 : 8;
+  }
+  if (player.position === "RB" && player.yearsExp <= 1 && player.score < 65) {
+    internalValue -= 7;
+  }
+  if (
+    player.position !== "QB" &&
+    player.archetype === "Upside Shot" &&
+    player.score < 62
+  ) {
+    internalValue -= 5;
+  }
+
+  internalValue = Math.max(10, Math.round(internalValue));
+
+  const fantasyCalcNormalized = normalizeFantasyCalcValue(
+    fantasyCalcEntry,
+    fantasyCalcContext,
+  );
+
+  if (fantasyCalcNormalized == null) {
+    return {
+      marketValue: internalValue,
+      internalValue,
+      fantasyCalcNormalized: null,
+      fantasyCalcValue: null,
+      fantasyCalcRank: null,
+      fantasyCalcTrend: null,
+    };
+  }
+
+  const blended = Math.round(
+    internalValue * 0.42 + fantasyCalcNormalized * 0.58,
+  );
+  return {
+    marketValue: Math.max(10, blended),
+    internalValue,
+    fantasyCalcNormalized,
+    fantasyCalcValue: Number(fantasyCalcEntry.value || 0),
+    fantasyCalcRank: Number(fantasyCalcEntry.overallRank || 0) || null,
+    fantasyCalcTrend: Number(fantasyCalcEntry.trend30Day || 0) || 0,
+  };
+}
+
+function getKeepCount(pos, isSuperflex) {
+  const counts = isSuperflex
+    ? { QB: 3, RB: 4, WR: 5, TE: 2 }
+    : { QB: 2, RB: 4, WR: 5, TE: 2 };
+  return counts[pos] || 2;
+}
+
+function estimatePickValue(pick, leagueContext, tradeMarket = null) {
+  if (!pick?.round) return 12;
+
+  const currentYear = new Date().getFullYear();
+  const yearsOut = Math.max(
+    0,
+    Number(pick.season || currentYear) - currentYear,
+  );
+  const slot = pick.round === 1 ? 16 : 24;
+  let value = draftCapitalScore(pick.round, slot) || 12;
+
+  if (pick.round === 1 && leagueContext.isSuperflex) value += 8;
+  if (pick.round === 1 && leagueContext.tePremium) value += 2;
+  if (yearsOut === 1) value -= 4;
+  if (yearsOut >= 2) value -= 10;
+  if (!pick.isOwn) value += 3;
+
+  const marketMultiplier = tradeMarket?.pickRoundMultipliers?.[pick.round] || 1;
+  return Math.max(8, Math.round(value * marketMultiplier));
+}
+
+function getRosterNeeds(byPos, proportions) {
+  return POSITION_PRIORITY.filter((pos) => {
+    const room = byPos[pos] || [];
+    const roomAvg = room.length
+      ? room.reduce((sum, player) => sum + player.score, 0) / room.length
+      : 0;
+    const premiumCount = room.filter((player) => player.score >= 65).length;
+    return (
+      room.length < 2 ||
+      premiumCount === 0 ||
+      roomAvg < 48 ||
+      (proportions[pos]?.delta ?? 0) <= -5
+    );
+  }).sort(
+    (a, b) => (proportions[a]?.delta ?? 0) - (proportions[b]?.delta ?? 0),
+  );
+}
+
+function getRosterSurplusPositions(byPos, proportions, isSuperflex) {
+  return POSITION_PRIORITY.filter((pos) => {
+    const room = byPos[pos] || [];
+    const keepCount = getKeepCount(pos, isSuperflex);
+    const goodDepth = room.filter((player) => player.score >= 55).length;
+    return (
+      room.length > keepCount ||
+      goodDepth >= keepCount ||
+      (proportions[pos]?.delta ?? 0) >= 5
+    );
+  }).sort(
+    (a, b) => (proportions[b]?.delta ?? 0) - (proportions[a]?.delta ?? 0),
+  );
+}
+
+function buildRosterPicks(
+  rosterId,
+  league,
+  tradedPicks,
+  rosterLabelById,
+  futureSeasons,
+) {
+  const draftRounds = league.settings?.draft_rounds || 5;
+
+  const tradedAway = new Set(
+    tradedPicks
+      .filter(
+        (pick) => pick.roster_id === rosterId && pick.owner_id !== rosterId,
+      )
+      .map((pick) => `${pick.season}_${pick.round}_${pick.roster_id}`),
+  );
+
+  const ownPicks = futureSeasons.flatMap((season) =>
+    Array.from({ length: draftRounds }, (_, index) => index + 1)
+      .filter((round) => !tradedAway.has(`${season}_${round}_${rosterId}`))
+      .map((round) => ({
+        season: String(season),
+        round,
+        isOwn: true,
+        label: `${season} ${round === 1 ? "1st" : round === 2 ? "2nd" : round === 3 ? "3rd" : `${round}th`}`,
+      })),
+  );
+
+  const acquiredPicks = tradedPicks
+    .filter((pick) => pick.owner_id === rosterId && pick.roster_id !== rosterId)
+    .map((pick) => ({
+      season: String(pick.season),
+      round: pick.round,
+      isOwn: false,
+      fromTeam:
+        rosterLabelById.get(pick.roster_id) || `Roster ${pick.roster_id}`,
+      label: `${pick.season} ${pick.round === 1 ? "1st" : pick.round === 2 ? "2nd" : pick.round === 3 ? "3rd" : `${pick.round}th`} via ${rosterLabelById.get(pick.roster_id) || `Roster ${pick.roster_id}`}`,
+    }));
+
+  return [...ownPicks, ...acquiredPicks].sort(
+    (a, b) => a.season.localeCompare(b.season) || a.round - b.round,
+  );
+}
+
+function buildRosterSnapshot(
+  roster,
   players,
   league,
   tradedPicks,
   stats24,
   stats23,
-  stats22 = {},
-  users = [],
-  rosters = [],
+  stats22,
+  benchmarks,
+  rosterLabelById,
+  leagueContext,
+  fantasyCalcContext,
+  futureSeasons,
 ) {
-  const playerIds = myRoster.players || [];
-  const rid = myRoster.roster_id;
-  const draftRounds = league.settings?.draft_rounds || 5;
-  const currentYear = new Date().getFullYear();
-  const futureSeasons = [currentYear, currentYear + 1, currentYear + 2];
-
-  const userById = new Map(
-    users.map((u) => [
-      u.user_id,
-      u.metadata?.team_name || u.team_name || u.display_name,
-    ]),
+  const playerIds = roster.players || [];
+  const picks = buildRosterPicks(
+    roster.roster_id,
+    league,
+    tradedPicks,
+    rosterLabelById,
+    futureSeasons,
   );
-  const rosterLabelById = new Map(
-    rosters.map((r) => [
-      r.roster_id,
-      userById.get(r.owner_id) ||
-        r.settings?.team_name ||
-        `Roster ${r.roster_id}`,
-    ]),
-  );
-
-  const tradedAway = new Set(
-    tradedPicks
-      .filter((p) => p.roster_id === rid && p.owner_id !== rid)
-      .map((p) => `${p.season}_${p.round}_${p.roster_id}`),
-  );
-
-  const ownPicks = futureSeasons.flatMap((season) =>
-    Array.from({ length: draftRounds }, (_, i) => i + 1)
-      .filter((round) => !tradedAway.has(`${season}_${round}_${rid}`))
-      .map((round) => ({ season: String(season), round, isOwn: true })),
-  );
-
-  const acquiredPicks = tradedPicks
-    .filter((p) => p.owner_id === rid && p.roster_id !== rid)
-    .map((p) => ({
-      season: String(p.season),
-      round: p.round,
-      isOwn: false,
-      fromTeam: rosterLabelById.get(p.roster_id) || `Roster ${p.roster_id}`,
-    }));
-
-  const picks = [...ownPicks, ...acquiredPicks].sort(
-    (a, b) => a.season.localeCompare(b.season) || a.round - b.round,
-  );
-
-  const isSuperflex =
-    league.roster_positions?.filter((p) => p === "QB").length > 1 ||
-    league.roster_positions?.includes("SUPER_FLEX");
-
-  const benchmarks = buildBenchmarks(players, stats22, stats23, stats24);
 
   const enriched = playerIds
     .map((id) => {
       const p = players[id];
       if (!p) return null;
       const pos = p.fantasy_positions?.[0] || p.position;
-      if (!["QB", "RB", "WR", "TE"].includes(pos)) return null;
+      if (!POSITION_PRIORITY.includes(pos)) return null;
+
       const s24 = stats24[id] || null;
       const s23 = stats23[id] || null;
       const s22 = stats22[id] || null;
@@ -350,6 +600,19 @@ export function buildRosterAnalysis(
       };
 
       enrichedPlayer.archetype = getArchetype(enrichedPlayer);
+      const fantasyCalcEntry = fantasyCalcContext.bySleeperId.get(String(id));
+      const market = buildPlayerMarketValue(
+        enrichedPlayer,
+        leagueContext,
+        fantasyCalcEntry,
+        fantasyCalcContext,
+      );
+      enrichedPlayer.marketValue = market.marketValue;
+      enrichedPlayer.internalValue = market.internalValue;
+      enrichedPlayer.fantasyCalcNormalized = market.fantasyCalcNormalized;
+      enrichedPlayer.fantasyCalcValue = market.fantasyCalcValue;
+      enrichedPlayer.fantasyCalcRank = market.fantasyCalcRank;
+      enrichedPlayer.fantasyCalcTrend = market.fantasyCalcTrend;
       return enrichedPlayer;
     })
     .filter(Boolean);
@@ -357,14 +620,15 @@ export function buildRosterAnalysis(
   const byPos = {};
   POSITION_PRIORITY.forEach((pos) => {
     byPos[pos] = enriched
-      .filter((p) => p.position === pos)
+      .filter((player) => player.position === pos)
       .sort((a, b) => b.score - a.score);
   });
 
-  const totalScore = enriched.reduce((s, p) => s + p.score, 0) || 1;
+  const totalScore =
+    enriched.reduce((sum, player) => sum + player.score, 0) || 1;
   const proportions = {};
   POSITION_PRIORITY.forEach((pos) => {
-    const posScore = byPos[pos].reduce((s, p) => s + p.score, 0);
+    const posScore = byPos[pos].reduce((sum, player) => sum + player.score, 0);
     const actual = posScore / totalScore;
     const ideal = IDEAL_PROPORTION[pos];
     proportions[pos] = {
@@ -375,34 +639,85 @@ export function buildRosterAnalysis(
   });
 
   const sells = enriched
-    .filter((p) => p.verdict === "sell" || p.verdict === "cut")
+    .filter((player) => player.verdict === "sell" || player.verdict === "cut")
     .sort((a, b) => a.score - b.score);
   const buys = enriched
-    .filter((p) => p.verdict === "buy")
+    .filter((player) => player.verdict === "buy")
     .sort((a, b) => b.score - a.score);
-  const holds = enriched.filter((p) => p.verdict === "hold");
+  const holds = enriched.filter((player) => player.verdict === "hold");
   const avgAge = enriched.length
-    ? (enriched.reduce((s, p) => s + p.age, 0) / enriched.length).toFixed(1)
+    ? (
+        enriched.reduce((sum, player) => sum + player.age, 0) / enriched.length
+      ).toFixed(1)
     : "N/A";
   const avgScore = enriched.length
-    ? Math.round(enriched.reduce((s, p) => s + p.score, 0) / enriched.length)
+    ? Math.round(
+        enriched.reduce((sum, player) => sum + player.score, 0) /
+          enriched.length,
+      )
     : 0;
 
   const picksByYear = {};
   picks.forEach((pick) => {
-    const yr = pick.season || "Unknown";
-    if (!picksByYear[yr]) picksByYear[yr] = [];
-    picksByYear[yr].push(pick);
+    const year = pick.season || "Unknown";
+    if (!picksByYear[year]) picksByYear[year] = [];
+    picksByYear[year].push(pick);
   });
 
   const weakRooms = POSITION_PRIORITY.filter((pos) => {
     const room = byPos[pos];
     return (
-      room.length < 2 || room.filter((p) => p.verdict === "buy").length === 0
+      room.length < 2 ||
+      room.filter((player) => player.verdict === "buy").length === 0
     );
   });
 
+  const needs = getRosterNeeds(byPos, proportions);
+  const surplusPositions = getRosterSurplusPositions(
+    byPos,
+    proportions,
+    leagueContext.isSuperflex,
+  );
+
+  const tradeablePlayers = Array.from(
+    new Map(
+      [
+        ...sells,
+        ...surplusPositions.flatMap((pos) =>
+          byPos[pos].slice(getKeepCount(pos, leagueContext.isSuperflex)),
+        ),
+        ...surplusPositions.flatMap((pos) =>
+          byPos[pos].filter(
+            (player, index) =>
+              index >= 1 &&
+              player.score >= 45 &&
+              player.archetype !== "Cornerstone",
+          ),
+        ),
+      ].map((player) => [player.id, player]),
+    ).values(),
+  ).sort((a, b) => b.score - a.score);
+
+  const targetablePlayers = POSITION_PRIORITY.flatMap((pos) =>
+    byPos[pos].filter((player, index) => {
+      const untouchable =
+        (index === 0 && player.score >= 78) ||
+        player.archetype === "Cornerstone" ||
+        (player.archetype === "Foundational" && player.score >= 75);
+      if (untouchable) return false;
+      return (
+        index >=
+          Math.max(1, getKeepCount(pos, leagueContext.isSuperflex) - 2) ||
+        player.age >= 27
+      );
+    }),
+  ).sort((a, b) => b.score - a.score);
+
   return {
+    rosterId: roster.roster_id,
+    ownerId: roster.owner_id,
+    label:
+      rosterLabelById.get(roster.roster_id) || `Roster ${roster.roster_id}`,
     enriched,
     byPos,
     sells,
@@ -412,8 +727,652 @@ export function buildRosterAnalysis(
     avgScore,
     picksByYear,
     weakRooms,
-    isSuperflex,
     picks,
     proportions,
+    needs,
+    surplusPositions,
+    tradeablePlayers,
+    targetablePlayers,
+  };
+}
+
+function createAssetLabel(asset) {
+  if (asset.type === "pick") return asset.label;
+  return `${asset.name} (${asset.position}, ${asset.score})`;
+}
+
+function isPremiumQuarterbackTarget(target, leagueContext, targetValue) {
+  return (
+    leagueContext.isSuperflex &&
+    target.position === "QB" &&
+    targetValue >= 88 &&
+    (target.age <= 26 || target.draftRound === 1)
+  );
+}
+
+function isMeaningfulAsset(asset, targetValue) {
+  if (asset.type === "pick") {
+    return asset.round <= 2;
+  }
+  return asset.value >= Math.max(58, Math.round(targetValue * 0.6));
+}
+
+function packageHasAnchorAsset(assets, targetValue, target, leagueContext) {
+  return assets.some((asset) => {
+    if (asset.type === "pick") {
+      return (
+        asset.round === 1 ||
+        (asset.round === 2 &&
+          isPremiumQuarterbackTarget(target, leagueContext, targetValue))
+      );
+    }
+    if (asset.position === "QB") return asset.value >= 55;
+    return asset.value >= Math.max(60, Math.round(targetValue * 0.62));
+  });
+}
+
+function getTargetAssetClass(target, leagueContext, targetValue) {
+  if (isPremiumQuarterbackTarget(target, leagueContext, targetValue)) {
+    return "premium_qb";
+  }
+  if (target.position === "WR" && target.age <= 24 && targetValue >= 82) {
+    return "young_premium_wr";
+  }
+  if (
+    target.position === "TE" &&
+    leagueContext.tePremium &&
+    targetValue >= 78
+  ) {
+    return "premium_te";
+  }
+  if (targetValue >= 86) return "elite_asset";
+  if (targetValue >= 72) return "core_asset";
+  return "starter_asset";
+}
+
+function getPackageRules(target, leagueContext, targetValue) {
+  const assetClass = getTargetAssetClass(target, leagueContext, targetValue);
+
+  if (assetClass === "premium_qb") {
+    return {
+      assetClass,
+      minMeaningfulAssets: 2,
+      minPackageSize: 2,
+      requireAnchorAsset: true,
+      allowPickOnly: false,
+      maxOverpay: 6,
+      underpayTolerance: 0,
+      minPlayerValue: Math.max(62, Math.round(targetValue * 0.7)),
+      requireFirstOrEquivalent: true,
+    };
+  }
+
+  if (assetClass === "young_premium_wr") {
+    return {
+      assetClass,
+      minMeaningfulAssets: 2,
+      minPackageSize: 2,
+      requireAnchorAsset: true,
+      allowPickOnly: false,
+      maxOverpay: 8,
+      underpayTolerance: 1,
+      minPlayerValue: Math.max(58, Math.round(targetValue * 0.64)),
+      requireFirstOrEquivalent: false,
+    };
+  }
+
+  if (assetClass === "premium_te") {
+    return {
+      assetClass,
+      minMeaningfulAssets: 2,
+      minPackageSize: 2,
+      requireAnchorAsset: true,
+      allowPickOnly: false,
+      maxOverpay: 8,
+      underpayTolerance: 2,
+      minPlayerValue: Math.max(56, Math.round(targetValue * 0.62)),
+      requireFirstOrEquivalent: false,
+    };
+  }
+
+  if (assetClass === "elite_asset") {
+    return {
+      assetClass,
+      minMeaningfulAssets: 2,
+      minPackageSize: 2,
+      requireAnchorAsset: true,
+      allowPickOnly: false,
+      maxOverpay: 10,
+      underpayTolerance: 2,
+      minPlayerValue: Math.max(54, Math.round(targetValue * 0.58)),
+      requireFirstOrEquivalent: false,
+    };
+  }
+
+  if (assetClass === "core_asset") {
+    return {
+      assetClass,
+      minMeaningfulAssets: 1,
+      minPackageSize: 1,
+      requireAnchorAsset: false,
+      allowPickOnly: false,
+      maxOverpay: 10,
+      underpayTolerance: 2,
+      minPlayerValue: 50,
+      requireFirstOrEquivalent: false,
+    };
+  }
+
+  return {
+    assetClass,
+    minMeaningfulAssets: 1,
+    minPackageSize: 1,
+    requireAnchorAsset: false,
+    allowPickOnly: true,
+    maxOverpay: 8,
+    underpayTolerance: 3,
+    minPlayerValue: 0,
+    requireFirstOrEquivalent: false,
+  };
+}
+
+function packageHasFirstOrEquivalent(assets, targetValue) {
+  return assets.some((asset) => {
+    if (asset.type === "pick") return asset.round === 1;
+    return asset.value >= Math.max(70, Math.round(targetValue * 0.76));
+  });
+}
+
+function isCleanTradeShape(sent, received) {
+  const totalAssets = sent.length + received.length;
+  if (!sent.length || !received.length) return false;
+  if (sent.length > 3 || received.length > 3) return false;
+  if (totalAssets > 4) return false;
+  return true;
+}
+
+function isCleanPlayerComp(received, sent) {
+  const receivedPlayers = received.filter((asset) => asset.type === "player");
+  const sentPlayers = sent.filter((asset) => asset.type === "player");
+  return (
+    isCleanTradeShape(sent, received) &&
+    receivedPlayers.length === 1 &&
+    received.length <= 2 &&
+    sentPlayers.length <= 1
+  );
+}
+
+function getSuggestionTier(targetValue, marketGap, rules) {
+  const gap = Math.abs(marketGap);
+  if (
+    rules.assetClass === "premium_qb" ||
+    rules.assetClass === "young_premium_wr"
+  ) {
+    return gap <= 3 ? "blockbuster" : "aggressive";
+  }
+  if (targetValue >= 80) return gap <= 4 ? "aggressive" : "blockbuster";
+  if (targetValue >= 68) return gap <= 5 ? "balanced" : "aggressive";
+  return "balanced";
+}
+
+function getAssetTradeValue(
+  asset,
+  playerMarketMap,
+  leagueContext,
+  tradeMarket,
+) {
+  if (asset.type === "pick") {
+    return estimatePickValue(asset, leagueContext, tradeMarket);
+  }
+
+  const player = playerMarketMap.get(String(asset.id)) || asset;
+  const multiplier = tradeMarket?.positionMultipliers?.[player.position] || 1;
+  return Math.round((player.marketValue || player.score || 40) * multiplier);
+}
+
+function pushRosterAsset(map, rosterId, asset) {
+  if (rosterId == null) return;
+  const key = String(rosterId);
+  if (!map.has(key)) map.set(key, []);
+  map.get(key).push(asset);
+}
+
+function buildTradeMarket(transactions, leagueTeams, leagueContext) {
+  const playerMarketMap = new Map(
+    leagueTeams.flatMap((team) =>
+      team.enriched.map((player) => [String(player.id), player]),
+    ),
+  );
+  const positionSamples = { QB: [], RB: [], WR: [], TE: [] };
+  const pickSamples = { 1: [], 2: [], 3: [], 4: [] };
+  const recentTrades = [];
+  let cleanTradeCount = 0;
+
+  transactions.forEach((transaction) => {
+    const sentByRoster = new Map();
+    const receivedByRoster = new Map();
+
+    Object.entries(transaction.adds || {}).forEach(([playerId, toRoster]) => {
+      const fromRoster = transaction.drops?.[playerId];
+      const player = playerMarketMap.get(String(playerId));
+      if (!player || fromRoster == null) return;
+
+      const asset = { ...player, type: "player", label: player.name };
+      pushRosterAsset(sentByRoster, fromRoster, asset);
+      pushRosterAsset(receivedByRoster, toRoster, asset);
+    });
+
+    (transaction.draft_picks || []).forEach((pick) => {
+      const asset = {
+        type: "pick",
+        season: String(pick.season),
+        round: pick.round,
+        isOwn: false,
+        label: `${pick.season} ${pick.round === 1 ? "1st" : pick.round === 2 ? "2nd" : pick.round === 3 ? "3rd" : `${pick.round}th`}`,
+      };
+      pushRosterAsset(sentByRoster, pick.previous_owner_id, asset);
+      pushRosterAsset(receivedByRoster, pick.owner_id, asset);
+    });
+
+    Array.from(receivedByRoster.keys()).forEach((rosterId) => {
+      const received = receivedByRoster.get(rosterId) || [];
+      const sent = sentByRoster.get(rosterId) || [];
+      if (!received.length || !sent.length) return;
+
+      const receivedValue = received.reduce(
+        (sum, asset) =>
+          sum + getAssetTradeValue(asset, playerMarketMap, leagueContext, null),
+        0,
+      );
+      const sentValue = sent.reduce(
+        (sum, asset) =>
+          sum + getAssetTradeValue(asset, playerMarketMap, leagueContext, null),
+        0,
+      );
+      if (!receivedValue || !sentValue) return;
+
+      if (!isCleanTradeShape(sent, received)) return;
+
+      cleanTradeCount += 1;
+
+      const ratio = Math.max(0.82, Math.min(1.3, sentValue / receivedValue));
+
+      received.forEach((asset) => {
+        if (asset.type === "player" && positionSamples[asset.position]) {
+          positionSamples[asset.position].push(ratio);
+          if (recentTrades.length < 12 && isCleanPlayerComp(received, sent)) {
+            recentTrades.push({
+              position: asset.position,
+              target: asset.name,
+              cost: sent.map(createAssetLabel).join(" + "),
+              shape: `${sent.length}-for-${received.length}`,
+            });
+          }
+        }
+
+        if (asset.type === "pick" && pickSamples[asset.round]) {
+          pickSamples[asset.round].push(ratio);
+        }
+      });
+    });
+  });
+
+  const avg = (values, fallback = 1) =>
+    values.length
+      ? Number(
+          (
+            values.reduce((sum, value) => sum + value, 0) / values.length
+          ).toFixed(2),
+        )
+      : fallback;
+
+  return {
+    positionMultipliers: {
+      QB: avg(positionSamples.QB, 1),
+      RB: avg(positionSamples.RB, 1),
+      WR: avg(positionSamples.WR, 1),
+      TE: avg(positionSamples.TE, 1),
+    },
+    pickRoundMultipliers: {
+      1: avg(pickSamples[1], 1),
+      2: avg(pickSamples[2], 1),
+      3: avg(pickSamples[3], 1),
+      4: avg(pickSamples[4], 1),
+    },
+    sampleCount: cleanTradeCount,
+    recentTrades,
+  };
+}
+
+function buildOfferPackage(
+  target,
+  myTeam,
+  partner,
+  playerMarketMap,
+  leagueContext,
+  tradeMarket,
+) {
+  const partnerNeeds = new Set(partner.needs);
+  const currentYear = new Date().getFullYear();
+  const targetValue = getAssetTradeValue(
+    { ...target, type: "player" },
+    playerMarketMap,
+    leagueContext,
+    tradeMarket,
+  );
+  const premiumQuarterback = isPremiumQuarterbackTarget(
+    target,
+    leagueContext,
+    targetValue,
+  );
+  const rules = getPackageRules(target, leagueContext, targetValue);
+  const pickAssets = myTeam.picks
+    .filter((pick) => {
+      const season = Number(pick.season);
+      if (season > currentYear + 1) return false;
+      if (premiumQuarterback && pick.round > 2) return false;
+      return pick.round <= 3;
+    })
+    .map((pick) => ({
+      ...pick,
+      type: "pick",
+      value: estimatePickValue(pick, leagueContext, tradeMarket),
+    }))
+    .sort((a, b) => b.value - a.value);
+
+  const playerAssets = myTeam.tradeablePlayers
+    .map((player) => ({
+      ...player,
+      type: "player",
+      value: getAssetTradeValue(
+        { ...player, type: "player" },
+        playerMarketMap,
+        leagueContext,
+        tradeMarket,
+      ),
+      fitBoost: partnerNeeds.has(player.position) ? 10 : 0,
+    }))
+    .sort((a, b) => b.fitBoost + b.value - (a.fitBoost + a.value));
+
+  for (const player of playerAssets) {
+    if (
+      premiumQuarterback &&
+      player.position !== "QB" &&
+      player.value < rules.minPlayerValue
+    ) {
+      continue;
+    }
+
+    if (player.type === "player" && player.value < rules.minPlayerValue) {
+      continue;
+    }
+
+    let packageAssets = [player];
+    let totalValue = player.value;
+
+    if (totalValue < targetValue - rules.underpayTolerance) {
+      for (const pick of pickAssets) {
+        if (
+          packageAssets.some(
+            (asset) =>
+              asset.type === "pick" &&
+              asset.round === pick.round &&
+              asset.season === pick.season,
+          )
+        ) {
+          continue;
+        }
+        packageAssets.push(pick);
+        totalValue += pick.value;
+        if (totalValue >= targetValue - rules.underpayTolerance) break;
+      }
+    }
+
+    const meaningfulAssets = packageAssets.filter((asset) =>
+      isMeaningfulAsset(asset, targetValue),
+    ).length;
+    const hasAnchorAsset = packageHasAnchorAsset(
+      packageAssets,
+      targetValue,
+      target,
+      leagueContext,
+    );
+    const hasFirstEquivalent = packageHasFirstOrEquivalent(
+      packageAssets,
+      targetValue,
+    );
+
+    if (
+      totalValue >= targetValue - rules.underpayTolerance &&
+      totalValue <= targetValue + rules.maxOverpay &&
+      (partnerNeeds.has(player.position) || packageAssets.length > 1) &&
+      packageAssets.length >= rules.minPackageSize &&
+      meaningfulAssets >= rules.minMeaningfulAssets &&
+      (!rules.requireAnchorAsset || hasAnchorAsset) &&
+      (!rules.requireFirstOrEquivalent || hasFirstEquivalent)
+    ) {
+      return {
+        assets: packageAssets,
+        outgoingValue: totalValue,
+        targetValue,
+        rules,
+      };
+    }
+  }
+
+  if (targetValue <= 68 && !premiumQuarterback && rules.allowPickOnly) {
+    let packageAssets = [];
+    let totalValue = 0;
+    for (const pick of pickAssets) {
+      packageAssets.push(pick);
+      totalValue += pick.value;
+      if (totalValue >= targetValue - 3) break;
+    }
+    if (
+      packageAssets.length &&
+      totalValue >= targetValue - rules.underpayTolerance &&
+      totalValue <= targetValue + rules.maxOverpay
+    ) {
+      return {
+        assets: packageAssets,
+        outgoingValue: totalValue,
+        targetValue,
+        rules,
+      };
+    }
+  }
+
+  return null;
+}
+
+function buildTradeSuggestions(
+  myTeam,
+  leagueTeams,
+  leagueContext,
+  tradeMarket,
+) {
+  const suggestions = [];
+  const playerMarketMap = new Map(
+    leagueTeams.flatMap((team) =>
+      team.enriched.map((player) => [String(player.id), player]),
+    ),
+  );
+
+  leagueTeams
+    .filter((team) => team.rosterId !== myTeam.rosterId)
+    .forEach((partner) => {
+      myTeam.needs.slice(0, 3).forEach((needPos) => {
+        if (partner.weakRooms.includes(needPos)) return;
+
+        partner.targetablePlayers
+          .filter((player) => player.position === needPos)
+          .slice(0, 3)
+          .forEach((target) => {
+            const offer = buildOfferPackage(
+              target,
+              myTeam,
+              partner,
+              playerMarketMap,
+              leagueContext,
+              tradeMarket,
+            );
+            if (!offer) return;
+
+            const partnerNeedText = partner.needs.length
+              ? partner.needs.slice(0, 2).join(" / ")
+              : "future pick liquidity";
+            const sendText = offer.assets.map(createAssetLabel);
+            const targetTradeValue = getAssetTradeValue(
+              { ...target, type: "player" },
+              playerMarketMap,
+              leagueContext,
+              tradeMarket,
+            );
+            const marketPremium =
+              tradeMarket.positionMultipliers[target.position] || 1;
+            const recentComp = tradeMarket.recentTrades.find(
+              (trade) => trade.position === target.position,
+            );
+            const tier = getSuggestionTier(
+              targetTradeValue,
+              offer.outgoingValue - targetTradeValue,
+              offer.rules,
+            );
+            const fitScore =
+              targetTradeValue +
+              (partner.needs.some((need) =>
+                offer.assets.some((asset) => asset.position === need),
+              )
+                ? 12
+                : 0) +
+              (myTeam.surplusPositions.includes(needPos) ? -8 : 8) -
+              Math.abs(targetTradeValue - offer.outgoingValue);
+
+            suggestions.push({
+              partnerTeam: partner.label,
+              needPos,
+              targetPlayer: target,
+              tier,
+              marketGap: offer.outgoingValue - targetTradeValue,
+              marketNote: `${target.position} market in this league is running ${marketPremium.toFixed(2)}x baseline across ${tradeMarket.sampleCount} recent trades.`,
+              recentComp,
+              receive: [
+                {
+                  type: "player",
+                  label: `${target.name} (${target.position})`,
+                },
+              ],
+              send: sendText,
+              fitScore,
+              summary: `${partner.label} can spare ${needPos} help, while your outgoing package is sized to both their ${partnerNeedText} needs and your league's recent trade prices.`,
+              rationale: [
+                `You are thin at ${needPos} and ${target.name} carries a ${target.score}/100 dynasty score with an adjusted trade value of ${targetTradeValue}.`,
+                `${partner.label} profiles weak at ${partnerNeedText}.`,
+                `Suggested send: ${sendText.join(" + ")} (${offer.outgoingValue} total market value).`,
+                `${leagueContext.formatLabel} boosts ${target.position} pricing in this room.`,
+                recentComp
+                  ? `Recent clean comp (${recentComp.shape}): ${recentComp.target} was acquired for ${recentComp.cost}.`
+                  : `No exact recent comp found, so this package leans on league-rule pricing instead.`,
+              ],
+            });
+          });
+      });
+    });
+
+  return suggestions
+    .sort((a, b) => b.fitScore - a.fitScore)
+    .filter(
+      (suggestion, index, list) =>
+        list.findIndex(
+          (item) =>
+            item.partnerTeam === suggestion.partnerTeam &&
+            item.targetPlayer.id === suggestion.targetPlayer.id,
+        ) === index,
+    )
+    .slice(0, 6);
+}
+
+export function buildRosterAnalysis(
+  myRoster,
+  players,
+  league,
+  tradedPicks,
+  stats24,
+  stats23,
+  stats22 = {},
+  transactions = [],
+  fantasyCalcValues = [],
+  users = [],
+  rosters = [],
+) {
+  const currentYear = new Date().getFullYear();
+  const futureSeasons = [currentYear, currentYear + 1, currentYear + 2];
+  const userById = new Map(
+    users.map((user) => [
+      user.user_id,
+      user.metadata?.team_name || user.team_name || user.display_name,
+    ]),
+  );
+  const rosterLabelById = new Map(
+    rosters.map((roster) => [
+      roster.roster_id,
+      userById.get(roster.owner_id) ||
+        roster.settings?.team_name ||
+        `Roster ${roster.roster_id}`,
+    ]),
+  );
+
+  const leagueContext = getLeagueRulesContext(league);
+  const benchmarks = buildBenchmarks(players, stats22, stats23, stats24);
+  const fantasyCalcContext = buildFantasyCalcContext(fantasyCalcValues);
+  const sourceRosters = rosters.length ? rosters : [myRoster];
+
+  const leagueTeams = sourceRosters.map((roster) =>
+    buildRosterSnapshot(
+      roster,
+      players,
+      league,
+      tradedPicks,
+      stats24,
+      stats23,
+      stats22,
+      benchmarks,
+      rosterLabelById,
+      leagueContext,
+      fantasyCalcContext,
+      futureSeasons,
+    ),
+  );
+
+  const myTeam =
+    leagueTeams.find((team) => team.rosterId === myRoster.roster_id) ||
+    leagueTeams[0];
+  const tradeMarket = buildTradeMarket(
+    transactions,
+    leagueTeams,
+    leagueContext,
+  );
+  const tradeSuggestions = buildTradeSuggestions(
+    myTeam,
+    leagueTeams,
+    leagueContext,
+    tradeMarket,
+  );
+
+  return {
+    ...myTeam,
+    isSuperflex: leagueContext.isSuperflex,
+    myTeamLabel: myTeam.label,
+    leagueTeams,
+    leagueContext,
+    fantasyCalcSource: {
+      enabled: fantasyCalcContext.totalPlayers > 0,
+      totalPlayers: fantasyCalcContext.totalPlayers,
+      attribution: "FantasyCalc",
+      url: "https://www.fantasycalc.com/",
+    },
+    tradeMarket,
+    tradeSuggestions,
+    tradeBlock: myTeam.tradeablePlayers.slice(0, 8),
   };
 }

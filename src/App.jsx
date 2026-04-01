@@ -5,7 +5,8 @@ import Layout from "./components/Layout";
 import LeaguePickerScreen from "./components/LeaguePickerScreen";
 import { POSITION_PRIORITY } from "./constants";
 import { buildRosterAnalysis } from "./lib/analysis";
-import { fetchSleeper } from "./lib/sleeperApi";
+import { fetchFantasyCalcValues } from "./lib/fantasyCalcApi";
+import { fetchLeagueTransactions, fetchSleeper } from "./lib/sleeperApi";
 
 export default function App() {
   const [step, setStep] = useState("input");
@@ -46,18 +47,29 @@ export default function App() {
     setError("");
 
     try {
-      const [users, rosters, players, tradedPicks, stats24, stats23, stats22] =
-        await Promise.all([
-          fetchSleeper(`/league/${league.league_id}/users`),
-          fetchSleeper(`/league/${league.league_id}/rosters`),
-          fetchSleeper(`/players/nfl`).catch(() => ({})),
-          fetchSleeper(`/league/${league.league_id}/traded_picks`).catch(
-            () => [],
-          ),
-          fetchSleeper(`/stats/nfl/regular/2024`).catch(() => ({})),
-          fetchSleeper(`/stats/nfl/regular/2023`).catch(() => ({})),
-          fetchSleeper(`/stats/nfl/regular/2022`).catch(() => ({})),
-        ]);
+      const [
+        users,
+        rosters,
+        players,
+        tradedPicks,
+        stats24,
+        stats23,
+        stats22,
+        transactions,
+        fantasyCalcValues,
+      ] = await Promise.all([
+        fetchSleeper(`/league/${league.league_id}/users`),
+        fetchSleeper(`/league/${league.league_id}/rosters`),
+        fetchSleeper(`/players/nfl`).catch(() => ({})),
+        fetchSleeper(`/league/${league.league_id}/traded_picks`).catch(
+          () => [],
+        ),
+        fetchSleeper(`/stats/nfl/regular/2024`).catch(() => ({})),
+        fetchSleeper(`/stats/nfl/regular/2023`).catch(() => ({})),
+        fetchSleeper(`/stats/nfl/regular/2022`).catch(() => ({})),
+        fetchLeagueTransactions(league).catch(() => []),
+        fetchFantasyCalcValues(league).catch(() => []),
+      ]);
 
       const userObj = users.find(
         (u) => u.display_name?.toLowerCase() === uname.toLowerCase(),
@@ -76,6 +88,8 @@ export default function App() {
         stats24,
         stats23,
         stats22,
+        transactions,
+        fantasyCalcValues,
         users,
         rosters,
       );
