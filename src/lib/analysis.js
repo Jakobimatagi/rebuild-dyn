@@ -1,5 +1,48 @@
 import { IDEAL_PROPORTION, POSITION_PRIORITY } from "../constants";
 
+export const DEFAULT_SCORING_WEIGHTS = {
+  age: 35,
+  prod: 30,
+  avail: 15,
+  trend: 10,
+  situ: 10,
+};
+
+function normalizeScoringWeights(weights = DEFAULT_SCORING_WEIGHTS) {
+  const safe = {
+    age: Number(weights.age ?? DEFAULT_SCORING_WEIGHTS.age),
+    prod: Number(weights.prod ?? DEFAULT_SCORING_WEIGHTS.prod),
+    avail: Number(weights.avail ?? DEFAULT_SCORING_WEIGHTS.avail),
+    trend: Number(weights.trend ?? DEFAULT_SCORING_WEIGHTS.trend),
+    situ: Number(weights.situ ?? DEFAULT_SCORING_WEIGHTS.situ),
+  };
+  const total = Math.max(
+    1,
+    safe.age + safe.prod + safe.avail + safe.trend + safe.situ,
+  );
+
+  return {
+    age: safe.age / total,
+    prod: safe.prod / total,
+    avail: safe.avail / total,
+    trend: safe.trend / total,
+    situ: safe.situ / total,
+  };
+}
+
+function getWeightDeviationRatio(weights = DEFAULT_SCORING_WEIGHTS) {
+  const base = normalizeScoringWeights(DEFAULT_SCORING_WEIGHTS);
+  const current = normalizeScoringWeights(weights);
+  const distance =
+    Math.abs(current.age - base.age) +
+    Math.abs(current.prod - base.prod) +
+    Math.abs(current.avail - base.avail) +
+    Math.abs(current.trend - base.trend) +
+    Math.abs(current.situ - base.situ);
+
+  return clamp(distance / 1.4, 0, 1);
+}
+
 const AGE_CURVES_FALLBACK = {
   QB: { peak: 27, decline: 32, cliff: 35 },
   RB: { peak: 24, decline: 27, cliff: 30 },
@@ -15,7 +58,9 @@ const MIN_BUCKET_SIZE = 8;
 function buildAgeCurves(players, allStatYears) {
   const currentYear = new Date().getFullYear();
   const buckets = {};
-  POSITION_PRIORITY.forEach((pos) => { buckets[pos] = {}; });
+  POSITION_PRIORITY.forEach((pos) => {
+    buckets[pos] = {};
+  });
 
   allStatYears.forEach(({ year, stats }) => {
     if (!stats || typeof stats !== "object") return;
@@ -54,29 +99,39 @@ function buildAgeCurves(players, allStatYears) {
       return s[Math.floor(s.length / 2)];
     };
     const medians = {};
-    ages.forEach((age) => { medians[age] = median(bucket[age]); });
+    ages.forEach((age) => {
+      medians[age] = median(bucket[age]);
+    });
 
     // Peak: age with highest median (smoothed over a 3-year window to reduce noise)
     const smoothed = {};
     ages.forEach((age) => {
       const window = ages.filter((a) => Math.abs(a - age) <= 1);
-      smoothed[age] = window.reduce((s, a) => s + medians[a], 0) / window.length;
+      smoothed[age] =
+        window.reduce((s, a) => s + medians[a], 0) / window.length;
     });
-    const peakAge = ages.reduce((best, age) =>
-      smoothed[age] > smoothed[best] ? age : best, ages[0]
+    const peakAge = ages.reduce(
+      (best, age) => (smoothed[age] > smoothed[best] ? age : best),
+      ages[0],
     );
     const peakVal = smoothed[peakAge];
 
     // Decline: first post-peak age where smoothed median falls to ≤60% of peak
     let decline = AGE_CURVES_FALLBACK[pos].decline;
     for (const age of ages.filter((a) => a > peakAge)) {
-      if (smoothed[age] <= peakVal * 0.6) { decline = age; break; }
+      if (smoothed[age] <= peakVal * 0.6) {
+        decline = age;
+        break;
+      }
     }
 
     // Cliff: first post-decline age where smoothed median falls to ≤30% of peak
     let cliff = AGE_CURVES_FALLBACK[pos].cliff;
     for (const age of ages.filter((a) => a > decline)) {
-      if (smoothed[age] <= peakVal * 0.3) { cliff = age; break; }
+      if (smoothed[age] <= peakVal * 0.3) {
+        cliff = age;
+        break;
+      }
     }
 
     curves[pos] = {
@@ -89,7 +144,14 @@ function buildAgeCurves(players, allStatYears) {
   return curves;
 }
 
-function buildBenchmarks(players, stats22, stats23, stats24, leagueContext = null, historicalStats = []) {
+function buildBenchmarks(
+  players,
+  stats22,
+  stats23,
+  stats24,
+  leagueContext = null,
+  historicalStats = [],
+) {
   const raw = { QB: {}, RB: {}, WR: {}, TE: {} };
   POSITION_PRIORITY.forEach((pos) => {
     raw[pos] = { 2022: [], 2023: [], 2024: [] };
@@ -130,7 +192,10 @@ function buildBenchmarks(players, stats22, stats23, stats24, leagueContext = nul
     replacementLevel[pos] = {};
     ["2022", "2023", "2024"].forEach((yr) => {
       const sorted = raw[pos][yr];
-      if (!sorted.length) { replacementLevel[pos][yr] = 0; return; }
+      if (!sorted.length) {
+        replacementLevel[pos][yr] = 0;
+        return;
+      }
       // sorted is ascending; replacement player sits just outside starters
       const replIdx = Math.max(0, sorted.length - replCounts[pos]);
       replacementLevel[pos][yr] = sorted[replIdx] || 0;
@@ -170,7 +235,10 @@ function playerPctiles(s24, s23, s22, pos, benchmarks) {
     const pctile = getPctileRank(ppgVal, sorted);
     if (pctile === null) return null;
     if (replPpg > 0 && ppgVal > replPpg) {
-      const parBonus = Math.min(8, Math.round(((ppgVal - replPpg) / replPpg) * 12));
+      const parBonus = Math.min(
+        8,
+        Math.round(((ppgVal - replPpg) / replPpg) * 12),
+      );
       return Math.min(100, pctile + parBonus);
     }
     return pctile;
@@ -211,7 +279,7 @@ export function draftTierLabel(round, slot) {
 
 function ageComponent(pos, age, ageCurves) {
   const fallback = AGE_CURVES_FALLBACK[pos] || AGE_CURVES_FALLBACK.WR;
-  const c = (ageCurves && ageCurves[pos]) ? ageCurves[pos] : fallback;
+  const c = ageCurves && ageCurves[pos] ? ageCurves[pos] : fallback;
   if (age <= c.peak) return 95;
   if (age <= c.decline) {
     return Math.max(30, 95 - ((age - c.peak) / (c.decline - c.peak)) * 65);
@@ -249,11 +317,19 @@ function situComponent(depthOrder, team) {
   return 30;
 }
 
-function calcScore(player, s24, s23, currentPctile, ageCurves) {
+function calcScore(
+  player,
+  s24,
+  s23,
+  currentPctile,
+  ageCurves,
+  scoringWeights = DEFAULT_SCORING_WEIGHTS,
+) {
   const age = ageComponent(player.position, player.age, ageCurves);
   const avail = availComponent(s24, player.injuryStatus);
   const trend = trendComponent(s24, s23);
   const situ = situComponent(player.depthOrder, player.team);
+  const w = normalizeScoringWeights(scoringWeights);
 
   const dc = draftCapitalScore(player.draftRound, player.draftSlot);
   const dcWeight = dc != null ? ([0.6, 0.4, 0.2][player.yearsExp] ?? 0) : 0;
@@ -263,7 +339,11 @@ function calcScore(player, s24, s23, currentPctile, ageCurves) {
   );
 
   const score = Math.round(
-    age * 0.35 + prod * 0.3 + avail * 0.15 + trend * 0.1 + situ * 0.1,
+    age * w.age +
+      prod * w.prod +
+      avail * w.avail +
+      trend * w.trend +
+      situ * w.situ,
   );
   return {
     score,
@@ -350,7 +430,8 @@ export function getArchetype(player) {
   // fall back to FC market consensus to classify young players.
   // Require both FC elite ranking AND confirmed starter status for Foundational —
   // score alone is too easily inflated by age + FC for non-elite prospects.
-  const isFCElite = fantasyCalcNormalized != null && fantasyCalcNormalized >= 80;
+  const isFCElite =
+    fantasyCalcNormalized != null && fantasyCalcNormalized >= 80;
   if (draftRound == null && yearsExp <= 1) {
     if (isFCElite && isStarter) return "Foundational";
     if (isStarter) return "Upside Shot";
@@ -403,11 +484,13 @@ export function getArchetypeTags(player) {
   // Risk tags
   if (situScore < 55) tags.push("Fragile Role");
   if (availScore < 60) tags.push("Injury Risk");
-  if (peakPctile != null && currentPctile != null && peak - current >= 35) tags.push("Volatile Profile");
+  if (peakPctile != null && currentPctile != null && peak - current >= 35)
+    tags.push("Volatile Profile");
 
   // Ceiling tags
   if (peak >= 90) tags.push("Elite Ceiling");
-  if (ageScore >= 75 && yearsExp <= 2 && draftRound === 1 && current < 55) tags.push("Untapped Upside");
+  if (ageScore >= 75 && yearsExp <= 2 && draftRound === 1 && current < 55)
+    tags.push("Untapped Upside");
   if (peak > 0 && peak < 75 && yearsExp >= 4) tags.push("Capped Ceiling");
 
   return tags;
@@ -419,9 +502,7 @@ export function getConfidence(player) {
   const trendScore = player.components?.trend ?? 50;
 
   const raw =
-    (gp24 / 17) * 0.5 +
-    (yearsExp / 5) * 0.3 +
-    (trendScore / 100) * 0.2;
+    (gp24 / 17) * 0.5 + (yearsExp / 5) * 0.3 + (trendScore / 100) * 0.2;
 
   return Math.round(Math.max(0, Math.min(1, raw)) * 100);
 }
@@ -566,18 +647,37 @@ function normalizeFantasyCalcValue(entry, context) {
 // Called early in player enrichment so every downstream grade (verdict, archetype,
 // room quality, trade value) already reflects the FC-informed score.
 // FC weight ranges from 50% (complete rookies with no games) to 65% (4+ yr vets).
-function computeBlendedScore(internalScore, fantasyCalcEntry, fantasyCalcContext, gp24, yearsExp) {
-  const fantasyCalcNormalized = normalizeFantasyCalcValue(fantasyCalcEntry, fantasyCalcContext);
+function computeBlendedScore(
+  internalScore,
+  fantasyCalcEntry,
+  fantasyCalcContext,
+  gp24,
+  yearsExp,
+  scoringWeights = DEFAULT_SCORING_WEIGHTS,
+) {
+  const fantasyCalcNormalized = normalizeFantasyCalcValue(
+    fantasyCalcEntry,
+    fantasyCalcContext,
+  );
   if (fantasyCalcNormalized == null) {
     return { score: internalScore, fantasyCalcNormalized: null };
   }
   const seasonCertainty = Math.min(1, (gp24 || 0) / 14);
   const expCertainty = Math.min(1, (yearsExp || 0) / 4);
   const certainty = seasonCertainty * 0.6 + expCertainty * 0.4;
-  const fcWeight = 0.5 + certainty * 0.15;
-  const score = Math.max(5, Math.round(
-    internalScore * (1 - fcWeight) + fantasyCalcNormalized * fcWeight,
-  ));
+  const customWeightIntensity = getWeightDeviationRatio(scoringWeights);
+  const fcBaseWeight = 0.5 + certainty * 0.15;
+  const fcWeight = clamp(
+    fcBaseWeight - customWeightIntensity * 0.35,
+    0.2,
+    0.65,
+  );
+  const score = Math.max(
+    5,
+    Math.round(
+      internalScore * (1 - fcWeight) + fantasyCalcNormalized * fcWeight,
+    ),
+  );
   return { score, fantasyCalcNormalized };
 }
 
@@ -595,9 +695,16 @@ function buildPlayerMarketValue(player, leagueContext, fantasyCalcEntry) {
     v += Math.max(0, ((player.currentPctile || 0) - 55) * 0.18);
     v += Math.max(0, ((player.peakPctile || 0) - 75) * 0.1);
     if (player.gp24 < 4) v -= player.draftRound === 1 ? 4 : 10;
-    if (player.yearsExp <= 1 && (player.currentPctile || 0) < 45) v -= player.draftRound === 1 ? 3 : 8;
-    if (player.position === "RB" && player.yearsExp <= 1 && player.score < 65) v -= 7;
-    if (player.position !== "QB" && player.archetype === "Upside Shot" && player.score < 62) v -= 5;
+    if (player.yearsExp <= 1 && (player.currentPctile || 0) < 45)
+      v -= player.draftRound === 1 ? 3 : 8;
+    if (player.position === "RB" && player.yearsExp <= 1 && player.score < 65)
+      v -= 7;
+    if (
+      player.position !== "QB" &&
+      player.archetype === "Upside Shot" &&
+      player.score < 62
+    )
+      v -= 5;
     return Math.max(10, Math.round(v));
   };
 
@@ -724,6 +831,7 @@ function buildRosterSnapshot(
   stats23,
   stats22,
   benchmarks,
+  scoringWeights,
   rosterLabelById,
   leagueContext,
   fantasyCalcContext,
@@ -754,8 +862,10 @@ function buildRosterSnapshot(
       // Parse to numbers so all === 1, === 2 comparisons work regardless of source.
       const rawDraftRound = p.draft_round ?? p.metadata?.draft_round;
       const rawDraftSlot = p.draft_slot ?? p.metadata?.draft_slot;
-      const draftRound = rawDraftRound != null ? Number(rawDraftRound) || null : null;
-      const draftSlot = rawDraftSlot != null ? Number(rawDraftSlot) || null : null;
+      const draftRound =
+        rawDraftRound != null ? Number(rawDraftRound) || null : null;
+      const draftSlot =
+        rawDraftSlot != null ? Number(rawDraftSlot) || null : null;
       const draftYear = p.draft_year ?? p.metadata?.draft_year ?? null;
 
       const playerData = {
@@ -776,6 +886,7 @@ function buildRosterSnapshot(
         s23,
         pctiles.current,
         benchmarks.ageCurves,
+        scoringWeights,
       );
       const ppg = s24?.gp > 0 ? ((s24.pts_ppr || 0) / s24.gp).toFixed(1) : null;
       const gp24 = s24?.gp || 0;
@@ -789,6 +900,7 @@ function buildRosterSnapshot(
         fantasyCalcContext,
         gp24,
         yearsExp,
+        scoringWeights,
       );
 
       const verdict = getVerdict(score);
@@ -822,7 +934,11 @@ function buildRosterSnapshot(
       enrichedPlayer.archetype = getArchetype(enrichedPlayer);
       enrichedPlayer.tags = getArchetypeTags(enrichedPlayer);
       enrichedPlayer.confidence = getConfidence(enrichedPlayer);
-      const market = buildPlayerMarketValue(enrichedPlayer, leagueContext, fantasyCalcEntry);
+      const market = buildPlayerMarketValue(
+        enrichedPlayer,
+        leagueContext,
+        fantasyCalcEntry,
+      );
       enrichedPlayer.marketValue = market.marketValue;
       enrichedPlayer.internalValue = market.internalValue;
       enrichedPlayer.fantasyCalcValue = market.fantasyCalcValue;
@@ -1520,6 +1636,7 @@ export function buildRosterAnalysis(
   users = [],
   rosters = [],
   historicalStats = [],
+  scoringWeights = DEFAULT_SCORING_WEIGHTS,
 ) {
   const currentYear = new Date().getFullYear();
   const futureSeasons = [currentYear, currentYear + 1, currentYear + 2];
@@ -1539,7 +1656,14 @@ export function buildRosterAnalysis(
   );
 
   const leagueContext = getLeagueRulesContext(league);
-  const benchmarks = buildBenchmarks(players, stats22, stats23, stats24, leagueContext, historicalStats);
+  const benchmarks = buildBenchmarks(
+    players,
+    stats22,
+    stats23,
+    stats24,
+    leagueContext,
+    historicalStats,
+  );
   const fantasyCalcContext = buildFantasyCalcContext(fantasyCalcValues);
   const sourceRosters = rosters.length ? rosters : [myRoster];
 
@@ -1553,6 +1677,7 @@ export function buildRosterAnalysis(
       stats23,
       stats22,
       benchmarks,
+      scoringWeights,
       rosterLabelById,
       leagueContext,
       fantasyCalcContext,
@@ -1587,6 +1712,7 @@ export function buildRosterAnalysis(
       attribution: "FantasyCalc",
       url: "https://www.fantasycalc.com/",
     },
+    scoringWeights,
     tradeMarket,
     tradeSuggestions,
     tradeBlock: myTeam.tradeablePlayers.slice(0, 8),

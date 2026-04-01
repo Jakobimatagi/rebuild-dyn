@@ -5,6 +5,7 @@ import LeagueTab from "./dashboard/LeagueTab";
 import OverviewTab from "./dashboard/OverviewTab";
 import PicksTab from "./dashboard/PicksTab";
 import RosterTab from "./dashboard/RosterTab";
+import ScoreWeightsModal from "./dashboard/ScoreWeightsModal";
 import TradeTab from "./dashboard/TradeTab";
 
 export default function Dashboard({
@@ -21,6 +22,10 @@ export default function Dashboard({
   onSwitchLeague,
   onGetAIAdvice,
   aiLoading,
+  showScoreWeights,
+  setShowScoreWeights,
+  onConfirmScoreWeights,
+  recalculating,
 }) {
   const {
     byPos,
@@ -52,13 +57,39 @@ export default function Dashboard({
           }}
         >
           <div style={styles.logo}>Dynasty OS — {selectedLeague?.name}</div>
-          <button
-            className="dyn-btn-ghost"
-            style={styles.btnGhost}
-            onClick={onSwitchLeague}
-          >
-            Switch League
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="dyn-btn-ghost"
+              style={styles.btnGhost}
+              onClick={onSwitchLeague}
+            >
+              Switch League
+            </button>
+            <button
+              className="dyn-btn-ghost"
+              style={styles.btnGhost}
+              onClick={() => setShowScoreWeights(true)}
+              disabled={recalculating}
+            >
+              Adjust Weights
+            </button>
+            {recalculating && (
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 10,
+                  letterSpacing: 1.5,
+                  color: "#d9deef",
+                  textTransform: "uppercase",
+                }}
+              >
+                <span className="dyn-spinner" />
+                Recalculating
+              </div>
+            )}
+          </div>
         </div>
         <div
           className="dyn-header-bottom-row"
@@ -72,7 +103,12 @@ export default function Dashboard({
             <h1 style={styles.title}>DynastyDashboard</h1>
             <p style={styles.subtitle}>
               Avg age: {avgAge} · Dynasty score: {avgScore}/100 · {picks.length}{" "}
-              picks · {analysis.isSuperflex ? "Superflex" : "1QB"}
+              picks · {analysis.isSuperflex ? "Superflex" : "1QB"} · Weights A
+              {analysis.scoringWeights?.age ?? 35}/P
+              {analysis.scoringWeights?.prod ?? 30}/V
+              {analysis.scoringWeights?.avail ?? 15}/T
+              {analysis.scoringWeights?.trend ?? 10}/S
+              {analysis.scoringWeights?.situ ?? 10}
             </p>
           </div>
           {/* {!aiAdvice && (
@@ -109,6 +145,14 @@ export default function Dashboard({
       </div>
 
       {showGradeKey && <GradeKeyModal onClose={() => setShowGradeKey(false)} />}
+      {showScoreWeights && (
+        <ScoreWeightsModal
+          initialWeights={analysis.scoringWeights}
+          onClose={() => setShowScoreWeights(false)}
+          onConfirm={onConfirmScoreWeights}
+          isConfirming={recalculating}
+        />
+      )}
 
       {activeTab === "overview" && (
         <OverviewTab
