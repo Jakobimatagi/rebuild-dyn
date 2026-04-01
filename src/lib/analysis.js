@@ -1,13 +1,95 @@
 import { IDEAL_PROPORTION, POSITION_PRIORITY } from "../constants";
 
-const AGE_CURVES = {
+const AGE_CURVES_FALLBACK = {
   QB: { peak: 27, decline: 32, cliff: 35 },
   RB: { peak: 24, decline: 27, cliff: 30 },
   WR: { peak: 26, decline: 30, cliff: 33 },
   TE: { peak: 27, decline: 30, cliff: 33 },
 };
 
-function buildBenchmarks(players, stats22, stats23, stats24) {
+// Derives age-production curves from actual player-season data.
+// Each bucket needs MIN_BUCKET_SIZE samples before we trust it; positions with
+// insufficient data fall back to the hardcoded curves above.
+const MIN_BUCKET_SIZE = 8;
+
+function buildAgeCurves(players, allStatYears) {
+  const currentYear = new Date().getFullYear();
+  const buckets = {};
+  POSITION_PRIORITY.forEach((pos) => { buckets[pos] = {}; });
+
+  allStatYears.forEach(({ year, stats }) => {
+    if (!stats || typeof stats !== "object") return;
+    Object.entries(stats).forEach(([id, s]) => {
+      if (!s?.gp || s.gp < 8) return;
+      const p = players[id];
+      if (!p) return;
+      const pos = p.fantasy_positions?.[0] || p.position;
+      if (!POSITION_PRIORITY.includes(pos)) return;
+      const ppg = (s.pts_ppr || 0) / s.gp;
+      if (ppg <= 0) return;
+      // Approximate the player's age during that season
+      const ageInSeason = (p.age || 26) - (currentYear - year);
+      if (ageInSeason < 20 || ageInSeason > 42) return;
+      if (!buckets[pos][ageInSeason]) buckets[pos][ageInSeason] = [];
+      buckets[pos][ageInSeason].push(ppg);
+    });
+  });
+
+  const curves = {};
+  POSITION_PRIORITY.forEach((pos) => {
+    const bucket = buckets[pos];
+    const ages = Object.keys(bucket)
+      .map(Number)
+      .filter((age) => bucket[age].length >= MIN_BUCKET_SIZE)
+      .sort((a, b) => a - b);
+
+    if (ages.length < 5) {
+      curves[pos] = AGE_CURVES_FALLBACK[pos];
+      return;
+    }
+
+    // Median PPG per age bucket
+    const median = (arr) => {
+      const s = [...arr].sort((a, b) => a - b);
+      return s[Math.floor(s.length / 2)];
+    };
+    const medians = {};
+    ages.forEach((age) => { medians[age] = median(bucket[age]); });
+
+    // Peak: age with highest median (smoothed over a 3-year window to reduce noise)
+    const smoothed = {};
+    ages.forEach((age) => {
+      const window = ages.filter((a) => Math.abs(a - age) <= 1);
+      smoothed[age] = window.reduce((s, a) => s + medians[a], 0) / window.length;
+    });
+    const peakAge = ages.reduce((best, age) =>
+      smoothed[age] > smoothed[best] ? age : best, ages[0]
+    );
+    const peakVal = smoothed[peakAge];
+
+    // Decline: first post-peak age where smoothed median falls to ≤60% of peak
+    let decline = AGE_CURVES_FALLBACK[pos].decline;
+    for (const age of ages.filter((a) => a > peakAge)) {
+      if (smoothed[age] <= peakVal * 0.6) { decline = age; break; }
+    }
+
+    // Cliff: first post-decline age where smoothed median falls to ≤30% of peak
+    let cliff = AGE_CURVES_FALLBACK[pos].cliff;
+    for (const age of ages.filter((a) => a > decline)) {
+      if (smoothed[age] <= peakVal * 0.3) { cliff = age; break; }
+    }
+
+    curves[pos] = {
+      peak: Math.max(peakAge, AGE_CURVES_FALLBACK[pos].peak - 2),
+      decline: Math.max(decline, peakAge + 2),
+      cliff: Math.max(cliff, decline + 2),
+    };
+  });
+
+  return curves;
+}
+
+function buildBenchmarks(players, stats22, stats23, stats24, leagueContext = null, historicalStats = []) {
   const raw = { QB: {}, RB: {}, WR: {}, TE: {} };
   POSITION_PRIORITY.forEach((pos) => {
     raw[pos] = { 2022: [], 2023: [], 2024: [] };
@@ -30,7 +112,42 @@ function buildBenchmarks(players, stats22, stats23, stats24) {
     Object.keys(raw[pos]).forEach((yr) => raw[pos][yr].sort((a, b) => a - b)),
   );
 
-  return raw;
+  // PAR replacement level: PPG of the first player outside projected starting lineups.
+  // Flex spots split roughly 35% RB / 45% WR / 10% TE by typical usage.
+  const numTeams = leagueContext?.numTeams || 12;
+  const sc = leagueContext?.starterCounts || { QB: 1, RB: 2, WR: 3, TE: 1 };
+  const flexCount = leagueContext?.flexCount || 2;
+  const isSuperflex = leagueContext?.isSuperflex || false;
+  const replCounts = {
+    QB: (isSuperflex ? 2 : 1) * numTeams + 1,
+    RB: (sc.RB || 2) * numTeams + Math.round(flexCount * numTeams * 0.35) + 1,
+    WR: (sc.WR || 3) * numTeams + Math.round(flexCount * numTeams * 0.45) + 1,
+    TE: (sc.TE || 1) * numTeams + Math.round(flexCount * numTeams * 0.1) + 1,
+  };
+
+  const replacementLevel = {};
+  POSITION_PRIORITY.forEach((pos) => {
+    replacementLevel[pos] = {};
+    ["2022", "2023", "2024"].forEach((yr) => {
+      const sorted = raw[pos][yr];
+      if (!sorted.length) { replacementLevel[pos][yr] = 0; return; }
+      // sorted is ascending; replacement player sits just outside starters
+      const replIdx = Math.max(0, sorted.length - replCounts[pos]);
+      replacementLevel[pos][yr] = sorted[replIdx] || 0;
+    });
+  });
+
+  // Build empirical age curves from all available seasons (recent 3 + historical).
+  // More seasons → more samples per age bucket → more reliable peak/decline/cliff.
+  const allForAgeCurves = [
+    { year: 2024, stats: stats24 },
+    { year: 2023, stats: stats23 },
+    { year: 2022, stats: stats22 },
+    ...historicalStats,
+  ];
+  const ageCurves = buildAgeCurves(players, allForAgeCurves);
+
+  return { raw, replacementLevel, ageCurves };
 }
 
 function getPctileRank(ppg, sorted) {
@@ -40,11 +157,28 @@ function getPctileRank(ppg, sorted) {
 }
 
 function playerPctiles(s24, s23, s22, pos, benchmarks) {
-  const b = benchmarks[pos] || {};
-  const ppg = (s) => (s?.gp >= 6 ? (s.pts_ppr || 0) / s.gp : 0);
-  const p24 = getPctileRank(ppg(s24), b["2024"]);
-  const p23 = getPctileRank(ppg(s23), b["2023"]);
-  const p22 = getPctileRank(ppg(s22), b["2022"]);
+  // Support both old format (raw arrays) and new format ({ raw, replacementLevel })
+  const raw = benchmarks.raw || benchmarks;
+  const rl = benchmarks.replacementLevel?.[pos] || {};
+  const b = raw[pos] || {};
+
+  const ppgOf = (s) => (s?.gp >= 6 ? (s.pts_ppr || 0) / s.gp : 0);
+
+  // PAR-adjusted percentile: standard rank + small bonus for meaningful production above replacement.
+  // Bonus scales with PAR ratio (capped at +8 pts) so elite producers score higher than pure percentile.
+  const parAdjPctile = (ppgVal, sorted, replPpg) => {
+    const pctile = getPctileRank(ppgVal, sorted);
+    if (pctile === null) return null;
+    if (replPpg > 0 && ppgVal > replPpg) {
+      const parBonus = Math.min(8, Math.round(((ppgVal - replPpg) / replPpg) * 12));
+      return Math.min(100, pctile + parBonus);
+    }
+    return pctile;
+  };
+
+  const p24 = parAdjPctile(ppgOf(s24), b["2024"], rl["2024"] || 0);
+  const p23 = parAdjPctile(ppgOf(s23), b["2023"], rl["2023"] || 0);
+  const p22 = parAdjPctile(ppgOf(s22), b["2022"], rl["2022"] || 0);
   const valid = [p24, p23, p22].filter((v) => v !== null);
   const peak = valid.length > 0 ? Math.max(...valid) : null;
   const current = p24 ?? (peak != null ? Math.round(peak * 0.65) : 40);
@@ -75,8 +209,9 @@ export function draftTierLabel(round, slot) {
   return `${round}th Round`;
 }
 
-function ageComponent(pos, age) {
-  const c = AGE_CURVES[pos] || AGE_CURVES.WR;
+function ageComponent(pos, age, ageCurves) {
+  const fallback = AGE_CURVES_FALLBACK[pos] || AGE_CURVES_FALLBACK.WR;
+  const c = (ageCurves && ageCurves[pos]) ? ageCurves[pos] : fallback;
   if (age <= c.peak) return 95;
   if (age <= c.decline) {
     return Math.max(30, 95 - ((age - c.peak) / (c.decline - c.peak)) * 65);
@@ -114,8 +249,8 @@ function situComponent(depthOrder, team) {
   return 30;
 }
 
-function calcScore(player, s24, s23, currentPctile) {
-  const age = ageComponent(player.position, player.age);
+function calcScore(player, s24, s23, currentPctile, ageCurves) {
+  const age = ageComponent(player.position, player.age, ageCurves);
   const avail = availComponent(s24, player.injuryStatus);
   const trend = trendComponent(s24, s23);
   const situ = situComponent(player.depthOrder, player.team);
@@ -180,6 +315,7 @@ export function getArchetype(player) {
     yearsExp,
     draftRound,
     draftSlot,
+    fantasyCalcNormalized,
   } = player;
   const { age: ageScore, situ: situScore, trend: trendScore } = components;
 
@@ -203,11 +339,20 @@ export function getArchetype(player) {
   const hasRole = situScore >= 52;
   const isDeclining = trendScore < 40;
 
-  if (isEliteDraft && isStarter) return "Foundational";
+  // Elite draft picks (top-15 NFL, years 1-2) with any meaningful role are Foundational.
+  // isStarter was too strict — rookies often sit at WR2/RB2 on depth charts even when
+  // clearly the future focal point. Draft capital + role is enough for this tier.
+  if (isEliteDraft && hasRole) return "Foundational";
   if (isFirstDraft && isStarter) return "Upside Shot";
   if (isFirstDraft && !hasRole) return "JAG - Developmental";
 
+  // When Sleeper has no draft metadata (common for the most recent class),
+  // fall back to FC market consensus to classify young players.
+  // Require both FC elite ranking AND confirmed starter status for Foundational —
+  // score alone is too easily inflated by age + FC for non-elite prospects.
+  const isFCElite = fantasyCalcNormalized != null && fantasyCalcNormalized >= 80;
   if (draftRound == null && yearsExp <= 1) {
+    if (isFCElite && isStarter) return "Foundational";
     if (isStarter) return "Upside Shot";
     if (hasRole) return "JAG - Developmental";
   }
@@ -223,6 +368,62 @@ export function getArchetype(player) {
   if (isModCurrent && score >= 38) return "Serviceable";
   if (score >= 28) return "JAG - Insurance";
   return "Replaceable";
+}
+
+export function getArchetypeTags(player) {
+  const {
+    score = 0,
+    internalScore = 0,
+    fantasyCalcNormalized,
+    components = {},
+    peakPctile,
+    currentPctile,
+    yearsExp = 0,
+    draftRound,
+    gp24 = 0,
+  } = player;
+
+  const ageScore = components.age ?? 0;
+  const situScore = components.situ ?? 0;
+  const trendScore = components.trend ?? 0;
+  const availScore = components.avail ?? 0;
+  const peak = peakPctile ?? 0;
+  const current = currentPctile ?? 0;
+
+  const tags = [];
+
+  // Value tags
+  if (internalScore - score >= 8) tags.push("Undervalued");
+  if (score - internalScore >= 8) tags.push("Overvalued");
+
+  // Trend tags
+  if (trendScore >= 60) tags.push("Ascending");
+  else if (trendScore <= 40) tags.push("Declining");
+
+  // Risk tags
+  if (situScore < 55) tags.push("Fragile Role");
+  if (availScore < 60) tags.push("Injury Risk");
+  if (peakPctile != null && currentPctile != null && peak - current >= 35) tags.push("Volatile Profile");
+
+  // Ceiling tags
+  if (peak >= 90) tags.push("Elite Ceiling");
+  if (ageScore >= 75 && yearsExp <= 2 && draftRound === 1 && current < 55) tags.push("Untapped Upside");
+  if (peak > 0 && peak < 75 && yearsExp >= 4) tags.push("Capped Ceiling");
+
+  return tags;
+}
+
+export function getConfidence(player) {
+  const gp24 = player.gp24 ?? 0;
+  const yearsExp = player.yearsExp ?? 0;
+  const trendScore = player.components?.trend ?? 50;
+
+  const raw =
+    (gp24 / 17) * 0.5 +
+    (yearsExp / 5) * 0.3 +
+    (trendScore / 100) * 0.2;
+
+  return Math.round(Math.max(0, Math.min(1, raw)) * 100);
 }
 
 function getLeagueRulesContext(league) {
@@ -251,6 +452,7 @@ function getLeagueRulesContext(league) {
     tePremium,
     passTd,
     ppr: recBase,
+    numTeams: Number(league.total_rosters || 12),
     starterCounts,
     flexCount,
     formatLabel: [
@@ -303,6 +505,14 @@ function buildFantasyCalcContext(fantasyCalcValues = []) {
     0,
   );
 
+  // Pre-sort all values ascending for O(n) percentile lookup in normalizeFantasyCalcValue.
+  // This replaces the ad-hoc sqrt(value/maxValue) compression with a true percentile rank,
+  // which more accurately reflects where a player sits in the actual market distribution.
+  const allSortedValues = fantasyCalcValues
+    .map((e) => Number(e?.value || 0))
+    .filter((v) => v > 0)
+    .sort((a, b) => a - b);
+
   fantasyCalcValues.forEach((entry) => {
     const sleeperId = entry?.player?.sleeperId;
     if (sleeperId) bySleeperId.set(String(sleeperId), entry);
@@ -310,6 +520,7 @@ function buildFantasyCalcContext(fantasyCalcValues = []) {
 
   return {
     bySleeperId,
+    allSortedValues,
     maxValue: Math.max(1, maxValue),
     maxOverallRank: Math.max(1, maxOverallRank),
     totalPlayers: fantasyCalcValues.length,
@@ -319,11 +530,20 @@ function buildFantasyCalcContext(fantasyCalcValues = []) {
 function normalizeFantasyCalcValue(entry, context) {
   if (!entry) return null;
 
-  const valueRatio = clamp(
-    Math.sqrt(Number(entry.value || 0) / context.maxValue),
-    0,
-    1,
-  );
+  const value = Number(entry.value || 0);
+
+  // Percentile rank within all FC values: more principled than sqrt(value/maxValue),
+  // which assumed a specific distribution shape. Percentile directly reflects market position.
+  let valuePercentile;
+  if (context.allSortedValues?.length > 0) {
+    const below = context.allSortedValues.filter((v) => v < value).length;
+    valuePercentile = below / context.allSortedValues.length;
+  } else {
+    // Fallback for contexts without pre-sorted values
+    valuePercentile = clamp(Math.sqrt(value / context.maxValue), 0, 1);
+  }
+
+  // Rank score: linear inverse rank (1 = #1 overall, 0 = last)
   const rankScore = clamp(
     1 -
       (Number(entry.overallRank || context.maxOverallRank) - 1) /
@@ -331,81 +551,62 @@ function normalizeFantasyCalcValue(entry, context) {
     0,
     1,
   );
-  const trendAdj = clamp(Number(entry.trend30Day || 0) / 1200, -0.08, 0.08);
 
+  // Trend: FC values are on 0-10000 scale; a 30-day swing of ±500 is significant.
+  // Normalize on 1500 so typical hot/cold streaks produce ±5-7 pts of adjustment.
+  const trendAdj = clamp(Number(entry.trend30Day || 0) / 1500, -0.07, 0.07);
+
+  // Rank is the more stable signal; value percentile captures real market spread.
   return Math.round(
-    clamp((rankScore * 0.6 + valueRatio * 0.4 + trendAdj) * 100, 5, 100),
+    clamp((rankScore * 0.55 + valuePercentile * 0.45 + trendAdj) * 100, 5, 100),
   );
 }
 
-function buildPlayerMarketValue(
-  player,
-  leagueContext,
-  fantasyCalcEntry,
-  fantasyCalcContext,
-) {
-  let internalValue =
-    player.score + (leagueContext.positionPremiums[player.position] || 0) * 0.6;
-
-  if (player.age <= 23) internalValue += player.position === "QB" ? 8 : 5;
-  else if (player.age <= 25) internalValue += player.position === "QB" ? 5 : 3;
-  else if (player.age >= 29) internalValue -= player.position === "RB" ? 14 : 7;
-
-  if (player.draftRound === 1) {
-    internalValue += player.draftSlot <= 12 ? 8 : 5;
-  } else if (player.draftRound === 2) {
-    internalValue += 2;
-  }
-
-  internalValue += getArchetypePremium(player.archetype) * 0.55;
-  internalValue += Math.max(0, ((player.currentPctile || 0) - 55) * 0.18);
-  internalValue += Math.max(0, ((player.peakPctile || 0) - 75) * 0.1);
-
-  if (player.gp24 < 4) {
-    internalValue -= player.draftRound === 1 ? 4 : 10;
-  }
-  if (player.yearsExp <= 1 && (player.currentPctile || 0) < 45) {
-    internalValue -= player.draftRound === 1 ? 3 : 8;
-  }
-  if (player.position === "RB" && player.yearsExp <= 1 && player.score < 65) {
-    internalValue -= 7;
-  }
-  if (
-    player.position !== "QB" &&
-    player.archetype === "Upside Shot" &&
-    player.score < 62
-  ) {
-    internalValue -= 5;
-  }
-
-  internalValue = Math.max(10, Math.round(internalValue));
-
-  const fantasyCalcNormalized = normalizeFantasyCalcValue(
-    fantasyCalcEntry,
-    fantasyCalcContext,
-  );
-
+// Blends the internal score with FantasyCalc market data.
+// Called early in player enrichment so every downstream grade (verdict, archetype,
+// room quality, trade value) already reflects the FC-informed score.
+// FC weight ranges from 50% (complete rookies with no games) to 65% (4+ yr vets).
+function computeBlendedScore(internalScore, fantasyCalcEntry, fantasyCalcContext, gp24, yearsExp) {
+  const fantasyCalcNormalized = normalizeFantasyCalcValue(fantasyCalcEntry, fantasyCalcContext);
   if (fantasyCalcNormalized == null) {
-    return {
-      marketValue: internalValue,
-      internalValue,
-      fantasyCalcNormalized: null,
-      fantasyCalcValue: null,
-      fantasyCalcRank: null,
-      fantasyCalcTrend: null,
-    };
+    return { score: internalScore, fantasyCalcNormalized: null };
   }
+  const seasonCertainty = Math.min(1, (gp24 || 0) / 14);
+  const expCertainty = Math.min(1, (yearsExp || 0) / 4);
+  const certainty = seasonCertainty * 0.6 + expCertainty * 0.4;
+  const fcWeight = 0.5 + certainty * 0.15;
+  const score = Math.max(5, Math.round(
+    internalScore * (1 - fcWeight) + fantasyCalcNormalized * fcWeight,
+  ));
+  return { score, fantasyCalcNormalized };
+}
 
-  const blended = Math.round(
-    internalValue * 0.42 + fantasyCalcNormalized * 0.58,
-  );
+function buildPlayerMarketValue(player, leagueContext, fantasyCalcEntry) {
+  // player.score is already FC-blended; build trade-specific market value on top.
+  // Separately track internalValue (from raw internal score) for display/comparison.
+  const applyPremiums = (base) => {
+    let v = base + (leagueContext.positionPremiums[player.position] || 0) * 0.6;
+    if (player.age <= 23) v += player.position === "QB" ? 8 : 5;
+    else if (player.age <= 25) v += player.position === "QB" ? 5 : 3;
+    else if (player.age >= 29) v -= player.position === "RB" ? 14 : 7;
+    if (player.draftRound === 1) v += player.draftSlot <= 12 ? 8 : 5;
+    else if (player.draftRound === 2) v += 2;
+    v += getArchetypePremium(player.archetype) * 0.55;
+    v += Math.max(0, ((player.currentPctile || 0) - 55) * 0.18);
+    v += Math.max(0, ((player.peakPctile || 0) - 75) * 0.1);
+    if (player.gp24 < 4) v -= player.draftRound === 1 ? 4 : 10;
+    if (player.yearsExp <= 1 && (player.currentPctile || 0) < 45) v -= player.draftRound === 1 ? 3 : 8;
+    if (player.position === "RB" && player.yearsExp <= 1 && player.score < 65) v -= 7;
+    if (player.position !== "QB" && player.archetype === "Upside Shot" && player.score < 62) v -= 5;
+    return Math.max(10, Math.round(v));
+  };
+
   return {
-    marketValue: Math.max(10, blended),
-    internalValue,
-    fantasyCalcNormalized,
-    fantasyCalcValue: Number(fantasyCalcEntry.value || 0),
-    fantasyCalcRank: Number(fantasyCalcEntry.overallRank || 0) || null,
-    fantasyCalcTrend: Number(fantasyCalcEntry.trend30Day || 0) || 0,
+    marketValue: applyPremiums(player.score),
+    internalValue: applyPremiums(player.internalScore),
+    fantasyCalcValue: Number(fantasyCalcEntry?.value || 0) || null,
+    fantasyCalcRank: Number(fantasyCalcEntry?.overallRank || 0) || null,
+    fantasyCalcTrend: Number(fantasyCalcEntry?.trend30Day || 0) || 0,
   };
 }
 
@@ -549,8 +750,12 @@ function buildRosterSnapshot(
       const s22 = stats22[id] || null;
       const age = p.age || 26;
       const yearsExp = p.years_exp ?? 0;
-      const draftRound = p.draft_round ?? p.metadata?.draft_round ?? null;
-      const draftSlot = p.draft_slot ?? p.metadata?.draft_slot ?? null;
+      // Sleeper stores draft info on p directly (number) or in metadata (string).
+      // Parse to numbers so all === 1, === 2 comparisons work regardless of source.
+      const rawDraftRound = p.draft_round ?? p.metadata?.draft_round;
+      const rawDraftSlot = p.draft_slot ?? p.metadata?.draft_slot;
+      const draftRound = rawDraftRound != null ? Number(rawDraftRound) || null : null;
+      const draftSlot = rawDraftSlot != null ? Number(rawDraftSlot) || null : null;
       const draftYear = p.draft_year ?? p.metadata?.draft_year ?? null;
 
       const playerData = {
@@ -565,19 +770,34 @@ function buildRosterSnapshot(
       };
 
       const pctiles = playerPctiles(s24, s23, s22, pos, benchmarks);
-      const { score, components } = calcScore(
+      const { score: internalScore, components } = calcScore(
         playerData,
         s24,
         s23,
         pctiles.current,
+        benchmarks.ageCurves,
       );
-      const verdict = getVerdict(score);
       const ppg = s24?.gp > 0 ? ((s24.pts_ppr || 0) / s24.gp).toFixed(1) : null;
       const gp24 = s24?.gp || 0;
+
+      // Blend internal score with FC market data NOW so every downstream grade
+      // (verdict, archetype, room quality, trade value) uses the FC-informed score.
+      const fantasyCalcEntry = fantasyCalcContext.bySleeperId.get(String(id));
+      const { score, fantasyCalcNormalized } = computeBlendedScore(
+        internalScore,
+        fantasyCalcEntry,
+        fantasyCalcContext,
+        gp24,
+        yearsExp,
+      );
+
+      const verdict = getVerdict(score);
 
       const enrichedPlayer = {
         id,
         score,
+        internalScore,
+        fantasyCalcNormalized,
         components,
         verdict,
         name: `${p.first_name} ${p.last_name}`,
@@ -600,16 +820,11 @@ function buildRosterSnapshot(
       };
 
       enrichedPlayer.archetype = getArchetype(enrichedPlayer);
-      const fantasyCalcEntry = fantasyCalcContext.bySleeperId.get(String(id));
-      const market = buildPlayerMarketValue(
-        enrichedPlayer,
-        leagueContext,
-        fantasyCalcEntry,
-        fantasyCalcContext,
-      );
+      enrichedPlayer.tags = getArchetypeTags(enrichedPlayer);
+      enrichedPlayer.confidence = getConfidence(enrichedPlayer);
+      const market = buildPlayerMarketValue(enrichedPlayer, leagueContext, fantasyCalcEntry);
       enrichedPlayer.marketValue = market.marketValue;
       enrichedPlayer.internalValue = market.internalValue;
-      enrichedPlayer.fantasyCalcNormalized = market.fantasyCalcNormalized;
       enrichedPlayer.fantasyCalcValue = market.fantasyCalcValue;
       enrichedPlayer.fantasyCalcRank = market.fantasyCalcRank;
       enrichedPlayer.fantasyCalcTrend = market.fantasyCalcTrend;
@@ -1304,6 +1519,7 @@ export function buildRosterAnalysis(
   fantasyCalcValues = [],
   users = [],
   rosters = [],
+  historicalStats = [],
 ) {
   const currentYear = new Date().getFullYear();
   const futureSeasons = [currentYear, currentYear + 1, currentYear + 2];
@@ -1323,7 +1539,7 @@ export function buildRosterAnalysis(
   );
 
   const leagueContext = getLeagueRulesContext(league);
-  const benchmarks = buildBenchmarks(players, stats22, stats23, stats24);
+  const benchmarks = buildBenchmarks(players, stats22, stats23, stats24, leagueContext, historicalStats);
   const fantasyCalcContext = buildFantasyCalcContext(fantasyCalcValues);
   const sourceRosters = rosters.length ? rosters : [myRoster];
 

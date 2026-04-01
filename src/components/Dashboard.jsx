@@ -1,6 +1,7 @@
 import { POSITION_PRIORITY } from "../constants";
 import { styles } from "../styles";
 import GradeKeyModal from "./dashboard/GradeKeyModal";
+import LeagueTab from "./dashboard/LeagueTab";
 import OverviewTab from "./dashboard/OverviewTab";
 import PicksTab from "./dashboard/PicksTab";
 import RosterTab from "./dashboard/RosterTab";
@@ -74,7 +75,7 @@ export default function Dashboard({
               picks · {analysis.isSuperflex ? "Superflex" : "1QB"}
             </p>
           </div>
-          {!aiAdvice && (
+          {/* {!aiAdvice && (
             <button
               className="dyn-btn"
               style={styles.btn}
@@ -83,7 +84,7 @@ export default function Dashboard({
             >
               {aiLoading ? "Analyzing..." : "⚡ AI Analysis"}
             </button>
-          )}
+          )} */}
         </div>
       </div>
 
@@ -95,7 +96,7 @@ export default function Dashboard({
           marginBottom: 32,
         }}
       >
-        {["overview", "roster", "picks", "trades"].map((tab) => (
+        {["overview", "roster", "picks", "trades", "league"].map((tab) => (
           <button
             key={tab}
             className="dyn-tab"
@@ -145,6 +146,13 @@ export default function Dashboard({
           leagueContext={leagueContext}
           tradeMarket={tradeMarket}
           fantasyCalcSource={fantasyCalcSource}
+        />
+      )}
+
+      {activeTab === "league" && (
+        <LeagueTab
+          leagueTeams={analysis.leagueTeams}
+          myTeamLabel={analysis.myTeamLabel}
         />
       )}
     </>
