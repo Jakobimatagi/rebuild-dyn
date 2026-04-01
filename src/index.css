@@ -142,6 +142,25 @@ input:focus {
   transform: translateY(0);
 }
 
+.dyn-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 2px solid rgba(0, 245, 160, 0.25);
+  border-top-color: #00f5a0;
+  display: inline-block;
+  animation: dyn-spin 0.9s linear infinite;
+}
+
+@keyframes dyn-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .dyn-card-player {
   transition: border-color 0.15s;
 }

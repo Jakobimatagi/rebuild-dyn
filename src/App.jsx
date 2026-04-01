@@ -4,9 +4,13 @@ import InputScreen from "./components/InputScreen";
 import Layout from "./components/Layout";
 import LeaguePickerScreen from "./components/LeaguePickerScreen";
 import { POSITION_PRIORITY } from "./constants";
-import { buildRosterAnalysis } from "./lib/analysis";
+import { buildRosterAnalysis, DEFAULT_SCORING_WEIGHTS } from "./lib/analysis";
 import { fetchFantasyCalcValues } from "./lib/fantasyCalcApi";
-import { fetchHistoricalStats, fetchLeagueTransactions, fetchSleeper } from "./lib/sleeperApi";
+import {
+  fetchHistoricalStats,
+  fetchLeagueTransactions,
+  fetchSleeper,
+} from "./lib/sleeperApi";
 
 export default function App() {
   const [step, setStep] = useState("input");
@@ -21,8 +25,30 @@ export default function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const [showGradeKey, setShowGradeKey] = useState(false);
+  const [showScoreWeights, setShowScoreWeights] = useState(false);
+  const [scoringWeights, setScoringWeights] = useState(DEFAULT_SCORING_WEIGHTS);
+  const [recalculating, setRecalculating] = useState(false);
+  const [analysisPayload, setAnalysisPayload] = useState(null);
   const [collapsedRooms, setCollapsedRooms] = useState({});
   const [expandedBars, setExpandedBars] = useState({});
+
+  function computeAnalysis(payload, nextWeights = scoringWeights) {
+    return buildRosterAnalysis(
+      payload.myRoster,
+      payload.players,
+      payload.league,
+      payload.tradedPicks,
+      payload.stats24,
+      payload.stats23,
+      payload.stats22,
+      payload.transactions,
+      payload.fantasyCalcValues,
+      payload.users,
+      payload.rosters,
+      payload.historicalStats,
+      nextWeights,
+    );
+  }
 
   function toggleRoom(pos) {
     setCollapsedRooms((prev) => ({ ...prev, [pos]: !prev[pos] }));
@@ -65,7 +91,9 @@ export default function App() {
         fetchSleeper(`/league/${league.league_id}/users`),
         fetchSleeper(`/league/${league.league_id}/rosters`),
         fetchSleeper(`/players/nfl`).catch(() => ({})),
-        fetchSleeper(`/league/${league.league_id}/traded_picks`).catch(() => []),
+        fetchSleeper(`/league/${league.league_id}/traded_picks`).catch(
+          () => [],
+        ),
         fetchSleeper(`/stats/nfl/regular/2024`).catch(() => ({})),
         fetchSleeper(`/stats/nfl/regular/2023`).catch(() => ({})),
         fetchSleeper(`/stats/nfl/regular/2022`).catch(() => ({})),
@@ -87,7 +115,7 @@ export default function App() {
       const myRoster = rosters.find((r) => r.owner_id === userObj.user_id);
       if (!myRoster) throw new Error("Roster not found.");
 
-      const nextAnalysis = buildRosterAnalysis(
+      const payload = {
         myRoster,
         players,
         league,
@@ -99,13 +127,16 @@ export default function App() {
         fantasyCalcValues,
         users,
         rosters,
-        [
+        historicalStats: [
           { year: 2021, stats: stats21 },
           { year: 2020, stats: stats20 },
           { year: 2019, stats: stats19 },
           { year: 2018, stats: stats18 },
         ],
-      );
+      };
+
+      setAnalysisPayload(payload);
+      const nextAnalysis = computeAnalysis(payload, scoringWeights);
       setAnalysis(nextAnalysis);
       setStep("dashboard");
     } catch (e) {
@@ -115,6 +146,21 @@ export default function App() {
     }
 
     setLoading(false);
+  }
+
+  async function handleConfirmScoreWeights(nextWeights) {
+    setRecalculating(true);
+    setScoringWeights(nextWeights);
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    if (analysisPayload) {
+      const nextAnalysis = computeAnalysis(analysisPayload, nextWeights);
+      setAnalysis(nextAnalysis);
+    }
+
+    setRecalculating(false);
+    setShowScoreWeights(false);
   }
 
   async function handleUsernameSubmit() {
@@ -274,6 +320,10 @@ Give advice in this EXACT JSON format (no markdown, no backticks):
           }}
           onGetAIAdvice={getAIAdvice}
           aiLoading={aiLoading}
+          showScoreWeights={showScoreWeights}
+          setShowScoreWeights={setShowScoreWeights}
+          onConfirmScoreWeights={handleConfirmScoreWeights}
+          recalculating={recalculating}
         />
       </Layout>
     );
