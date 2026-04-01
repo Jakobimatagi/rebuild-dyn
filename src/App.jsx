@@ -47,6 +47,7 @@ export default function App() {
       payload.rosters,
       payload.historicalStats,
       nextWeights,
+      payload.lastSeason,
     );
   }
 
@@ -73,6 +74,10 @@ export default function App() {
     setError("");
 
     try {
+      const now = new Date();
+      const lastSeason =
+        now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+
       const [
         users,
         rosters,
@@ -94,9 +99,9 @@ export default function App() {
         fetchSleeper(`/league/${league.league_id}/traded_picks`).catch(
           () => [],
         ),
-        fetchSleeper(`/stats/nfl/regular/2024`).catch(() => ({})),
-        fetchSleeper(`/stats/nfl/regular/2023`).catch(() => ({})),
-        fetchSleeper(`/stats/nfl/regular/2022`).catch(() => ({})),
+        fetchSleeper(`/stats/nfl/regular/${lastSeason}`).catch(() => ({})),
+        fetchSleeper(`/stats/nfl/regular/${lastSeason - 1}`).catch(() => ({})),
+        fetchSleeper(`/stats/nfl/regular/${lastSeason - 2}`).catch(() => ({})),
         fetchLeagueTransactions(league).catch(() => []),
         fetchFantasyCalcValues(league).catch(() => []),
         // Historical seasons: cached 7 days, fetched in parallel so no extra wall-clock time
@@ -127,6 +132,7 @@ export default function App() {
         fantasyCalcValues,
         users,
         rosters,
+        lastSeason,
         historicalStats: [
           { year: 2021, stats: stats21 },
           { year: 2020, stats: stats20 },

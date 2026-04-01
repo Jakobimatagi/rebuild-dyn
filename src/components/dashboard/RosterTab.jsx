@@ -149,30 +149,30 @@ export default function RosterTab({
                                   ? `${p.peakPctile}th`
                                   : "—"}
                               </span>
-                              {p.pctile22 != null && (
+                              {p.pctileOlder != null && (
                                 <span>
                                   {" "}
                                   ·{" "}
                                   <span style={{ color: "#d1d7ea" }}>
-                                    '22: {p.pctile22}th
+                                    '{String(p.lastSeasonYear - 2).slice(2)}: {p.pctileOlder}th
                                   </span>
                                 </span>
                               )}
-                              {p.pctile23 != null && (
+                              {p.pctilePrev != null && (
                                 <span>
                                   {" "}
                                   ·{" "}
                                   <span style={{ color: "#d1d7ea" }}>
-                                    '23: {p.pctile23}th
+                                    '{String(p.lastSeasonYear - 1).slice(2)}: {p.pctilePrev}th
                                   </span>
                                 </span>
                               )}
-                              {p.pctile24 != null && (
+                              {p.pctileLast != null && (
                                 <span>
                                   {" "}
                                   ·{" "}
                                   <span style={{ color: "#e0e5f7" }}>
-                                    '24: {p.pctile24}th
+                                    '{String(p.lastSeasonYear).slice(2)}: {p.pctileLast}th
                                   </span>
                                 </span>
                               )}
