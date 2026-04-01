@@ -6,7 +6,7 @@ import LeaguePickerScreen from "./components/LeaguePickerScreen";
 import { POSITION_PRIORITY } from "./constants";
 import { buildRosterAnalysis } from "./lib/analysis";
 import { fetchFantasyCalcValues } from "./lib/fantasyCalcApi";
-import { fetchLeagueTransactions, fetchSleeper } from "./lib/sleeperApi";
+import { fetchHistoricalStats, fetchLeagueTransactions, fetchSleeper } from "./lib/sleeperApi";
 
 export default function App() {
   const [step, setStep] = useState("input");
@@ -57,18 +57,25 @@ export default function App() {
         stats22,
         transactions,
         fantasyCalcValues,
+        stats21,
+        stats20,
+        stats19,
+        stats18,
       ] = await Promise.all([
         fetchSleeper(`/league/${league.league_id}/users`),
         fetchSleeper(`/league/${league.league_id}/rosters`),
         fetchSleeper(`/players/nfl`).catch(() => ({})),
-        fetchSleeper(`/league/${league.league_id}/traded_picks`).catch(
-          () => [],
-        ),
+        fetchSleeper(`/league/${league.league_id}/traded_picks`).catch(() => []),
         fetchSleeper(`/stats/nfl/regular/2024`).catch(() => ({})),
         fetchSleeper(`/stats/nfl/regular/2023`).catch(() => ({})),
         fetchSleeper(`/stats/nfl/regular/2022`).catch(() => ({})),
         fetchLeagueTransactions(league).catch(() => []),
         fetchFantasyCalcValues(league).catch(() => []),
+        // Historical seasons: cached 7 days, fetched in parallel so no extra wall-clock time
+        fetchHistoricalStats(2021),
+        fetchHistoricalStats(2020),
+        fetchHistoricalStats(2019),
+        fetchHistoricalStats(2018),
       ]);
 
       const userObj = users.find(
@@ -92,6 +99,12 @@ export default function App() {
         fantasyCalcValues,
         users,
         rosters,
+        [
+          { year: 2021, stats: stats21 },
+          { year: 2020, stats: stats20 },
+          { year: 2019, stats: stats19 },
+          { year: 2018, stats: stats18 },
+        ],
       );
       setAnalysis(nextAnalysis);
       setStep("dashboard");

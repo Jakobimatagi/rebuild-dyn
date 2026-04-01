@@ -8,6 +8,33 @@ export async function fetchSleeper(path) {
   return res.json();
 }
 
+// Historical season stats never change after the season ends, so we cache them
+// for 7 days instead of the standard 24h used for current-season data.
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+export async function fetchHistoricalStats(year) {
+  const cacheKey = `sleeper_stats_${year}`;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const { timestamp, data } = JSON.parse(cached);
+      if (Date.now() - timestamp < SEVEN_DAYS_MS) return data;
+    }
+  } catch {
+    // ignore cache read issues
+  }
+
+  const data = await fetchSleeper(`/stats/nfl/regular/${year}`).catch(() => ({}));
+
+  try {
+    localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data }));
+  } catch {
+    // ignore cache write issues (quota exceeded etc.)
+  }
+
+  return data;
+}
+
 async function fetchLeagueTransactionsForSeason(leagueId, maxWeek = 18) {
   const weeks = Array.from({ length: maxWeek }, (_, index) => index + 1);
   const responses = await Promise.all(
