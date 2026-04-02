@@ -12,6 +12,9 @@ export async function fetchSleeper(path) {
 // for 7 days instead of the standard 24h used for current-season data.
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Seasons from before 2018 are fully settled — cache 30 days to minimize API calls.
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
 export async function fetchHistoricalStats(year) {
   const cacheKey = `sleeper_stats_${year}`;
   try {
@@ -19,6 +22,33 @@ export async function fetchHistoricalStats(year) {
     if (cached) {
       const { timestamp, data } = JSON.parse(cached);
       if (Date.now() - timestamp < SEVEN_DAYS_MS) return data;
+    }
+  } catch {
+    // ignore cache read issues
+  }
+
+  const data = await fetchSleeper(`/stats/nfl/regular/${year}`).catch(() => ({}));
+
+  try {
+    localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data }));
+  } catch {
+    // ignore cache write issues (quota exceeded etc.)
+  }
+
+  return data;
+}
+
+/**
+ * Fetch deep historical seasons (pre-2018) for building empirical age curves
+ * and comp databases. These seasons are fully immutable so we cache aggressively.
+ */
+export async function fetchDeepHistoricalStats(year) {
+  const cacheKey = `sleeper_stats_deep_${year}`;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const { timestamp, data } = JSON.parse(cached);
+      if (Date.now() - timestamp < THIRTY_DAYS_MS) return data;
     }
   } catch {
     // ignore cache read issues

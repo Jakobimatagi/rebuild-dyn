@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { ARCHETYPE_META, POSITION_PRIORITY } from "../../constants";
-import { getColor } from "../../lib/analysis";
+import { getColor, getVerdict } from "../../lib/analysis";
 import { styles } from "../../styles";
+import PlayerDeepDiveModal from "./PlayerDeepDiveModal";
 import ScoreBar from "./ScoreBar";
 
 export default function RosterTab({
@@ -9,9 +11,20 @@ export default function RosterTab({
   expandedBars,
   onToggleRoom,
   onToggleBars,
+  scoringWeights,
 }) {
+  const [deepDivePlayer, setDeepDivePlayer] = useState(null);
+
   return (
     <div>
+      {deepDivePlayer && (
+        <PlayerDeepDiveModal
+          player={deepDivePlayer}
+          scoringWeights={scoringWeights}
+          onClose={() => setDeepDivePlayer(null)}
+        />
+      )}
+
       {POSITION_PRIORITY.map((pos) => {
         const isRoomCollapsed = !!collapsedRooms[pos];
         return (
@@ -197,6 +210,23 @@ export default function RosterTab({
                             justifyContent: "flex-end",
                           }}
                         >
+                          {p.prediction?.trajectory && (
+                            <span
+                              style={{
+                                fontSize: 9,
+                                color: p.prediction.trajectory.color,
+                                background: `${p.prediction.trajectory.color}18`,
+                                border: `1px solid ${p.prediction.trajectory.color}44`,
+                                borderRadius: 3,
+                                padding: "2px 6px",
+                                letterSpacing: 0.3,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {p.prediction.trajectory.icon}{" "}
+                              {p.prediction.trajectory.label}
+                            </span>
+                          )}
                           <span
                             style={{
                               ...styles.tag(
@@ -208,6 +238,24 @@ export default function RosterTab({
                             {p.archetype}
                           </span>
                           <span style={styles.tag(col)}>{p.verdict}</span>
+                          <button
+                            onClick={() => setDeepDivePlayer(p)}
+                            title="Deep dive — full grade breakdown"
+                            className="dyn-expand-btn"
+                            style={{
+                              background: "rgba(0,245,160,0.07)",
+                              border: "1px solid rgba(0,245,160,0.25)",
+                              borderRadius: 2,
+                              color: "#00f5a0",
+                              fontSize: 9,
+                              padding: "3px 8px",
+                              letterSpacing: 1,
+                              cursor: "pointer",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Deep Dive
+                          </button>
                           <button
                             onClick={() => onToggleBars(p.id)}
                             title={
@@ -230,39 +278,269 @@ export default function RosterTab({
                       </div>
 
                       {barsOpen && (
-                        <div
-                          style={{
-                            marginTop: 14,
-                            display: "grid",
-                            gridTemplateColumns: "1fr 1fr 1fr",
-                            gap: "4px 20px",
-                          }}
-                        >
-                          <ScoreBar
-                            label="Age"
-                            value={p.components.age}
-                            color="#7b8cff"
-                          />
-                          <ScoreBar
-                            label="Production"
-                            value={p.components.prod}
-                            color="#00f5a0"
-                          />
-                          <ScoreBar
-                            label="Avail"
-                            value={p.components.avail}
-                            color="#ffd84d"
-                          />
-                          <ScoreBar
-                            label="Trend"
-                            value={p.components.trend}
-                            color="#ff6b35"
-                          />
-                          <ScoreBar
-                            label="Situation"
-                            value={p.components.situ}
-                            color="#c084fc"
-                          />
+                        <div style={{ marginTop: 14 }}>
+                          {/* Score component bars */}
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "1fr 1fr 1fr",
+                              gap: "4px 20px",
+                            }}
+                          >
+                            <ScoreBar
+                              label="Age"
+                              value={p.components.age}
+                              color="#7b8cff"
+                            />
+                            <ScoreBar
+                              label="Production"
+                              value={p.components.prod}
+                              color="#00f5a0"
+                            />
+                            <ScoreBar
+                              label="Avail"
+                              value={p.components.avail}
+                              color="#ffd84d"
+                            />
+                            <ScoreBar
+                              label="Trend"
+                              value={p.components.trend}
+                              color="#ff6b35"
+                            />
+                            <ScoreBar
+                              label="Situation"
+                              value={p.components.situ}
+                              color="#c084fc"
+                            />
+                          </div>
+
+                          {/* Predictive model section */}
+                          {p.prediction && (
+                            <div
+                              style={{
+                                marginTop: 14,
+                                paddingTop: 12,
+                                borderTop: "1px solid rgba(255,255,255,0.07)",
+                              }}
+                            >
+                              {/* Dynasty outlook + probabilities */}
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  marginBottom: 10,
+                                  flexWrap: "wrap",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontSize: 9,
+                                    color: "#a0a8c0",
+                                    letterSpacing: 1,
+                                    textTransform: "uppercase",
+                                    marginRight: 4,
+                                  }}
+                                >
+                                  Dynasty Outlook
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: 9,
+                                    color: p.prediction.dynastyOutlook.color,
+                                    background: `${p.prediction.dynastyOutlook.color}18`,
+                                    border: `1px solid ${p.prediction.dynastyOutlook.color}44`,
+                                    borderRadius: 3,
+                                    padding: "2px 7px",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {p.prediction.dynastyOutlook.label}
+                                </span>
+                                {p.prediction.breakoutProb > 15 && (
+                                  <span
+                                    style={{
+                                      fontSize: 9,
+                                      color: "#00f5a0",
+                                      background: "#00f5a018",
+                                      border: "1px solid #00f5a044",
+                                      borderRadius: 3,
+                                      padding: "2px 6px",
+                                    }}
+                                  >
+                                    ⚡ {p.prediction.breakoutProb}% breakout
+                                  </span>
+                                )}
+                                {p.prediction.bustRisk > 20 && (
+                                  <span
+                                    style={{
+                                      fontSize: 9,
+                                      color: "#ff6b35",
+                                      background: "#ff6b3518",
+                                      border: "1px solid #ff6b3544",
+                                      borderRadius: 3,
+                                      padding: "2px 6px",
+                                    }}
+                                  >
+                                    ⚠ {p.prediction.bustRisk}% cliff risk
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* 3-year score projection */}
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: 6,
+                                  marginBottom: 10,
+                                  alignItems: "flex-end",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontSize: 9,
+                                    color: "#a0a8c0",
+                                    letterSpacing: 1,
+                                    textTransform: "uppercase",
+                                    marginRight: 4,
+                                    alignSelf: "center",
+                                  }}
+                                >
+                                  3-Yr Projection
+                                </span>
+                                {p.prediction.projections.map((proj) => {
+                                  const projCol = getColor(
+                                    getVerdict(proj.score),
+                                  );
+                                  return (
+                                    <div
+                                      key={proj.yearsAhead}
+                                      style={{
+                                        textAlign: "center",
+                                        background: "rgba(255,255,255,0.04)",
+                                        border: `1px solid ${projCol}44`,
+                                        borderRadius: 4,
+                                        padding: "4px 8px",
+                                        minWidth: 46,
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          fontSize: 8,
+                                          color: "#808898",
+                                          marginBottom: 2,
+                                        }}
+                                      >
+                                        +{proj.yearsAhead}yr
+                                      </div>
+                                      <div
+                                        style={{
+                                          fontSize: 14,
+                                          fontWeight: 700,
+                                          color: projCol,
+                                          lineHeight: 1,
+                                        }}
+                                      >
+                                        {proj.score}
+                                      </div>
+                                      <div
+                                        style={{
+                                          fontSize: 8,
+                                          color: "#606878",
+                                          marginTop: 2,
+                                        }}
+                                      >
+                                        age {proj.age}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {/* Key insights */}
+                              {p.prediction.keyInsights.length > 0 && (
+                                <div style={{ marginBottom: 10 }}>
+                                  {p.prediction.keyInsights.map(
+                                    (insight, i) => (
+                                      <div
+                                        key={i}
+                                        style={{
+                                          fontSize: 10,
+                                          color: "#b0b8d0",
+                                          marginBottom: 3,
+                                          paddingLeft: 2,
+                                        }}
+                                      >
+                                        · {insight}
+                                      </div>
+                                    ),
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Historical comps */}
+                              {p.prediction.comps.length > 0 && (
+                                <div>
+                                  <div
+                                    style={{
+                                      fontSize: 9,
+                                      color: "#a0a8c0",
+                                      letterSpacing: 1,
+                                      textTransform: "uppercase",
+                                      marginBottom: 5,
+                                    }}
+                                  >
+                                    Historical Comps
+                                  </div>
+                                  {p.prediction.comps.slice(0, 3).map(
+                                    (comp, i) => {
+                                      const delta1 =
+                                        comp.future1 !== undefined
+                                          ? comp.future1 - comp.ppgPctile
+                                          : null;
+                                      return (
+                                        <div
+                                          key={i}
+                                          style={{
+                                            fontSize: 10,
+                                            color: "#808898",
+                                            marginBottom: 3,
+                                            display: "flex",
+                                            gap: 6,
+                                            alignItems: "center",
+                                          }}
+                                        >
+                                          <span style={{ color: "#c8cfe3" }}>
+                                            {comp.name}
+                                          </span>
+                                          <span>
+                                            ({comp.year}, age {comp.age},{" "}
+                                            {comp.ppgPctile}th pctile)
+                                          </span>
+                                          {delta1 !== null && (
+                                            <span
+                                              style={{
+                                                color:
+                                                  delta1 >= 10
+                                                    ? "#00f5a0"
+                                                    : delta1 <= -10
+                                                      ? "#ff6b35"
+                                                      : "#ffd84d",
+                                              }}
+                                            >
+                                              Y+1:{" "}
+                                              {delta1 > 0 ? "+" : ""}
+                                              {delta1}
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    },
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

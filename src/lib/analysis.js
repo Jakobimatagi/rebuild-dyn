@@ -3,6 +3,7 @@ import { buildFantasyCalcContext } from './fantasyCalcBlend';
 import { buildRosterSnapshot } from './rosterBuilder';
 import { getLeagueRulesContext } from './marketValue';
 import { buildTradeMarket, buildTradeSuggestions } from './tradeEngine';
+import { buildPredictionContext } from './predictionEngine';
 
 // Re-exports — consumers that import from 'analysis' still work unchanged.
 export { DEFAULT_SCORING_WEIGHTS, draftTierLabel } from './scoringEngine';
@@ -62,6 +63,21 @@ export function buildRosterAnalysis(
     lastSeasonYear,
   );
   const fantasyCalcContext = buildFantasyCalcContext(fantasyCalcValues);
+
+  // Build prediction context from all available seasons (recent 3 + all historical).
+  // This builds empirical age curves and the historical snapshot DB for comp matching.
+  const allStatYears = [
+    { year: lastSeasonYear, stats: stats24 },
+    { year: lastSeasonYear - 1, stats: stats23 },
+    { year: lastSeasonYear - 2, stats: stats22 },
+    ...historicalStats,
+  ];
+  const predictionContext = buildPredictionContext(
+    allStatYears,
+    players,
+    benchmarks.ageCurves,
+  );
+
   const sourceRosters = rosters.length ? rosters : [myRoster];
 
   const leagueTeams = sourceRosters.map((roster) =>
@@ -80,6 +96,7 @@ export function buildRosterAnalysis(
       fantasyCalcContext,
       futureSeasons,
       lastSeasonYear,
+      predictionContext,
     ),
   );
 

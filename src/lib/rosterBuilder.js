@@ -17,6 +17,7 @@ import {
   getKeepCount,
   estimatePickValue,
 } from "./marketValue";
+import { buildPlayerPrediction } from "./predictionEngine";
 
 // ---------------------------------------------------------------------------
 // Own/acquired draft picks for a roster
@@ -122,6 +123,7 @@ export function buildRosterSnapshot(
   fantasyCalcContext,
   futureSeasons,
   lastSeasonYear,
+  predictionContext = null,
 ) {
   const playerIds = roster.players || [];
   const picks = buildRosterPicks(
@@ -238,6 +240,11 @@ export function buildRosterSnapshot(
       enrichedPlayer.fantasyCalcValue = market.fantasyCalcValue;
       enrichedPlayer.fantasyCalcRank = market.fantasyCalcRank;
       enrichedPlayer.fantasyCalcTrend = market.fantasyCalcTrend;
+
+      if (predictionContext) {
+        enrichedPlayer.prediction = buildPlayerPrediction(enrichedPlayer, predictionContext);
+      }
+
       return enrichedPlayer;
     })
     .filter(Boolean);
