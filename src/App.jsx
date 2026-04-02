@@ -14,7 +14,11 @@ import {
 } from "./lib/sleeperApi";
 
 export default function App() {
-  const [step, setStep] = useState("input");
+  const [step, setStep] = useState(() => {
+    const savedUsername = localStorage.getItem("sleeper_username");
+    const savedLeague = localStorage.getItem("sleeper_league");
+    return savedUsername && savedLeague ? "loading" : "input";
+  });
   const [username, setUsername] = useState(
     () => localStorage.getItem("sleeper_username") || "",
   );
@@ -229,6 +233,18 @@ export default function App() {
     await loadDashboard(league, username);
   }
 
+  function handleLogout() {
+    localStorage.removeItem("sleeper_username");
+    localStorage.removeItem("sleeper_league");
+    setUsername("");
+    setLeagues([]);
+    setSelectedLeague(null);
+    setAnalysis(null);
+    setAnalysisPayload(null);
+    setError("");
+    setStep("input");
+  }
+
   async function getAIAdvice() {
     if (!analysis) return;
     setAiLoading(true);
@@ -340,6 +356,7 @@ Give advice in this EXACT JSON format (no markdown, no backticks):
             localStorage.removeItem("sleeper_league");
             setStep("leagues");
           }}
+          onLogout={handleLogout}
           onGetAIAdvice={getAIAdvice}
           aiLoading={aiLoading}
           showScoreWeights={showScoreWeights}

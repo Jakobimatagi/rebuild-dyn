@@ -20,6 +20,7 @@ export default function Dashboard({
   onToggleRoom,
   onToggleBars,
   onSwitchLeague,
+  onLogout,
   onGetAIAdvice,
   aiLoading,
   showScoreWeights,
@@ -65,6 +66,7 @@ export default function Dashboard({
             >
               Switch League
             </button>
+            
             <button
               className="dyn-btn-ghost"
               style={styles.btnGhost}
@@ -72,6 +74,13 @@ export default function Dashboard({
               disabled={recalculating}
             >
               Adjust Weights
+            </button>
+            <button
+              className="dyn-btn-ghost"
+              style={styles.btnGhost}
+              onClick={onLogout}
+            >
+              Log out
             </button>
             {recalculating && (
               <div
