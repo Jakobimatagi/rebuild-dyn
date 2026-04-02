@@ -173,6 +173,7 @@ export default function Dashboard({
           onToggleRoom={onToggleRoom}
           onToggleBars={onToggleBars}
           positionPriority={POSITION_PRIORITY}
+          scoringWeights={analysis.scoringWeights}
         />
       )}
 

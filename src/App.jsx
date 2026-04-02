@@ -7,6 +7,7 @@ import { POSITION_PRIORITY } from "./constants";
 import { buildRosterAnalysis, DEFAULT_SCORING_WEIGHTS } from "./lib/analysis";
 import { fetchFantasyCalcValues } from "./lib/fantasyCalcApi";
 import {
+  fetchDeepHistoricalStats,
   fetchHistoricalStats,
   fetchLeagueTransactions,
   fetchSleeper,
@@ -92,6 +93,12 @@ export default function App() {
         stats20,
         stats19,
         stats18,
+        // Deep historical seasons (2014-2017) for richer age curves and comp matching.
+        // Cached 30 days — these seasons never change.
+        stats17,
+        stats16,
+        stats15,
+        stats14,
       ] = await Promise.all([
         fetchSleeper(`/league/${league.league_id}/users`),
         fetchSleeper(`/league/${league.league_id}/rosters`),
@@ -104,11 +111,16 @@ export default function App() {
         fetchSleeper(`/stats/nfl/regular/${lastSeason - 2}`).catch(() => ({})),
         fetchLeagueTransactions(league).catch(() => []),
         fetchFantasyCalcValues(league).catch(() => []),
-        // Historical seasons: cached 7 days, fetched in parallel so no extra wall-clock time
+        // Recent historical seasons: 7-day cache
         fetchHistoricalStats(2021),
         fetchHistoricalStats(2020),
         fetchHistoricalStats(2019),
         fetchHistoricalStats(2018),
+        // Deep historical seasons: 30-day cache
+        fetchDeepHistoricalStats(2017),
+        fetchDeepHistoricalStats(2016),
+        fetchDeepHistoricalStats(2015),
+        fetchDeepHistoricalStats(2014),
       ]);
 
       const userObj = users.find(
@@ -138,6 +150,10 @@ export default function App() {
           { year: 2020, stats: stats20 },
           { year: 2019, stats: stats19 },
           { year: 2018, stats: stats18 },
+          { year: 2017, stats: stats17 },
+          { year: 2016, stats: stats16 },
+          { year: 2015, stats: stats15 },
+          { year: 2014, stats: stats14 },
         ],
       };
 
