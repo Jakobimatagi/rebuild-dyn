@@ -100,7 +100,7 @@ export default function Dashboard({
           }}
         >
           <div>
-            <h1 style={styles.title}>DynastyDashboard</h1>
+            <h1 style={styles.title}>Dynasty Dashboard</h1>
             <p style={styles.subtitle}>
               Avg age: {avgAge} · Dynasty score: {avgScore}/100 · {picks.length}{" "}
               picks · {analysis.isSuperflex ? "Superflex" : "1QB"} · Weights A
