@@ -124,15 +124,6 @@ export default function PrivacyPolicy({ onBack }) {
           </p>
         </section>
 
-        <div style={{ marginTop: 40 }}>
-          <button
-            className="dyn-btn"
-            style={styles.btn}
-            onClick={onBack}
-          >
-            ← Back
-          </button>
-        </div>
       </div>
     </>
   );
