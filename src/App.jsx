@@ -3,7 +3,6 @@ import Dashboard from "./components/Dashboard";
 import InputScreen from "./components/InputScreen";
 import Layout from "./components/Layout";
 import LeaguePickerScreen from "./components/LeaguePickerScreen";
-import PrivacyPolicy from "./components/PrivacyPolicy";
 import { POSITION_PRIORITY } from "./constants";
 import { buildRosterAnalysis, DEFAULT_SCORING_WEIGHTS } from "./lib/analysis";
 import { fetchFantasyCalcValues } from "./lib/fantasyCalcApi";
@@ -16,7 +15,6 @@ import {
 
 export default function App() {
   const [step, setStep] = useState(() => {
-    if (window.location.hash === "#privacy") return "privacy";
     const savedUsername = localStorage.getItem("sleeper_username");
     const savedLeague = localStorage.getItem("sleeper_league");
     return savedUsername && savedLeague ? "loading" : "input";
@@ -310,19 +308,6 @@ Give advice in this EXACT JSON format (no markdown, no backticks):
     }
 
     setAiLoading(false);
-  }
-
-  if (step === "privacy") {
-    return (
-      <Layout>
-        <PrivacyPolicy
-          onBack={() => {
-            window.location.hash = "";
-            setStep("input");
-          }}
-        />
-      </Layout>
-    );
   }
 
   if (step === "input") {
