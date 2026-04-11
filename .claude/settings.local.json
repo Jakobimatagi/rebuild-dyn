@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npm create:*)",
       "Bash(npm install:*)",
-      "Bash(git -C /Users/kobimatagi/Desktop/projects/rebuild-dyn log --oneline -10)"
+      "Bash(git -C /Users/kobimatagi/Desktop/projects/rebuild-dyn log --oneline -10)",
+      "Bash(npx vite:*)"
     ]
   }
 }

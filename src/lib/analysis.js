@@ -115,7 +115,7 @@ export function buildRosterAnalysis(
     leagueContext,
     tradeMarket,
   );
-  const leagueActivity = buildLeagueActivity(transactions, sourceRosters, users, lastSeasonYear);
+  const leagueActivity = buildLeagueActivity(transactions, sourceRosters, users, lastSeasonYear, players);
 
   return {
     ...myTeam,

@@ -28,7 +28,7 @@ function piecewiseScale(ratio) {
 }
 
 // Derive how many distinct seasons are represented in the transaction history.
-// Trades are already pre-filtered to year <= lastSeasonYear before this is called.
+// Derive how many distinct seasons are represented in the transaction history.
 function countEffectiveSeasons(trades) {
   const years = new Set(trades.map((t) => new Date(t.created).getFullYear()));
   return Math.max(1, Math.min(years.size, 8));
@@ -138,15 +138,176 @@ function calcConsistencyScore(trades, effectiveSeasons) {
   return Math.round((1 - hhiNorm) * 100);
 }
 
+// --- Transaction feed ---
+
+function pickLabel(pick) {
+  const ordinal = pick.round === 1 ? '1st' : pick.round === 2 ? '2nd' : pick.round === 3 ? '3rd' : `${pick.round}th`;
+  return `${pick.season} ${ordinal}`;
+}
+
+// Build a human-readable feed entry for a single transaction from a team's perspective.
+function formatTransaction(t, rosterId, players, rosterLabels) {
+  const rid = String(rosterId);
+  const date = new Date(t.created);
+  const year = date.getFullYear();
+  const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const pName = (id) => players[id]?.full_name || players[id]?.first_name && `${players[id].first_name} ${players[id].last_name}` || `Player ${id}`;
+
+  if (t.type === 'trade') {
+    const resolveLabel = (id) => rosterLabels.get(Number(id)) || rosterLabels.get(id) || `Roster ${id}`;
+
+    // Build per-partner legs: group sent/received assets by which partner
+    // they went to / came from. This makes 3+ team trades readable.
+    const legMap = {}; // partnerId → { sent: [], received: [] }
+    const allSent = [];
+    const allReceived = [];
+
+    // Players: adds[pid] = toRosterId, drops[pid] = fromRosterId
+    if (t.adds && t.drops) {
+      for (const [pid, toRid] of Object.entries(t.adds)) {
+        const fromRid = t.drops[pid];
+        if (String(toRid) === rid && fromRid != null) {
+          // We received this player — came from fromRid
+          const partner = String(fromRid);
+          if (!legMap[partner]) legMap[partner] = { sent: [], received: [] };
+          legMap[partner].received.push(pName(pid));
+          allReceived.push(pName(pid));
+        }
+        if (fromRid != null && String(fromRid) === rid) {
+          // We sent this player — went to toRid
+          const partner = String(toRid);
+          if (!legMap[partner]) legMap[partner] = { sent: [], received: [] };
+          legMap[partner].sent.push(pName(pid));
+          allSent.push(pName(pid));
+        }
+      }
+    }
+    // Picks
+    if (t.draft_picks) {
+      for (const pick of t.draft_picks) {
+        if (String(pick.owner_id) === rid) {
+          const partner = String(pick.previous_owner_id);
+          if (!legMap[partner]) legMap[partner] = { sent: [], received: [] };
+          legMap[partner].received.push(pickLabel(pick));
+          allReceived.push(pickLabel(pick));
+        }
+        if (String(pick.previous_owner_id) === rid) {
+          const partner = String(pick.owner_id);
+          if (!legMap[partner]) legMap[partner] = { sent: [], received: [] };
+          legMap[partner].sent.push(pickLabel(pick));
+          allSent.push(pickLabel(pick));
+        }
+      }
+    }
+
+    const legs = Object.entries(legMap).map(([partnerId, assets]) => ({
+      partnerId,
+      partnerLabel: resolveLabel(partnerId),
+      sent: assets.sent,
+      received: assets.received,
+    }));
+    const isMultiTeam = legs.length > 1;
+
+    return {
+      id: t.transaction_id || t.created,
+      type: 'trade',
+      typeLabel: isMultiTeam ? `${legs.length}-Team Trade` : 'Trade',
+      color: '#c084fc',
+      year,
+      week: t.week || 0,
+      date: dateStr,
+      sent: allSent,
+      received: allReceived,
+      legs,
+      isMultiTeam,
+      partner: legs.map((l) => l.partnerLabel).join(', '),
+      description: `Sent ${allSent.join(', ') || '—'} → Received ${allReceived.join(', ') || '—'}`,
+    };
+  }
+
+  // FA / Waiver
+  const added = [];
+  const dropped = [];
+  if (t.adds) for (const [pid, toRid] of Object.entries(t.adds)) {
+    if (String(toRid) === rid) added.push(pName(pid));
+  }
+  if (t.drops) for (const [pid, fromRid] of Object.entries(t.drops)) {
+    if (String(fromRid) === rid) dropped.push(pName(pid));
+  }
+  const isWaiver = t.type === 'waiver';
+  const parts = [];
+  if (added.length) parts.push(`Added ${added.join(', ')}`);
+  if (dropped.length) parts.push(`Dropped ${dropped.join(', ')}`);
+
+  return {
+    id: t.transaction_id || t.created,
+    type: t.type,
+    typeLabel: isWaiver ? 'Waiver' : 'FA',
+    color: isWaiver ? '#64b5f6' : '#7a819c',
+    year,
+    week: t.week || 0,
+    date: dateStr,
+    sent: dropped,
+    received: added,
+    partner: null,
+    description: parts.join(' · ') || 'Roster move',
+  };
+}
+
+// Build a per-team feed of all their transactions, most recent first.
+function buildTeamTransactionFeeds(trades, moves, rosters, players, rosterLabels) {
+  const allTransactions = [...trades, ...moves].sort(
+    (a, b) => Number(b.created || 0) - Number(a.created || 0)
+  );
+
+  const feeds = {};
+  const years = new Set();
+
+  for (const r of rosters) {
+    feeds[String(r.roster_id)] = [];
+  }
+
+  for (const t of allTransactions) {
+    // Determine which rosters are involved
+    const involved = new Set();
+    if (t.adds) for (const rid of Object.values(t.adds)) involved.add(String(rid));
+    if (t.drops) for (const rid of Object.values(t.drops)) involved.add(String(rid));
+    if (t.draft_picks) for (const p of t.draft_picks) {
+      if (p.owner_id != null) involved.add(String(p.owner_id));
+      if (p.previous_owner_id != null) involved.add(String(p.previous_owner_id));
+    }
+
+    for (const rid of involved) {
+      if (!feeds[rid]) continue;
+      const entry = formatTransaction(t, rid, players, rosterLabels);
+      feeds[rid].push(entry);
+      years.add(entry.year);
+    }
+  }
+
+  return { feeds, years: [...years].sort((a, b) => b - a) };
+}
+
 // --- Per-team data ---
 
-function buildTeamActivityData(transactions, moves, rosters, users, effectiveSeasons) {
+function buildTeamActivityData(transactions, moves, rosters, users, effectiveSeasons, players) {
   const userById = new Map(
     users.map((u) => [u.user_id, u.metadata?.team_name || u.team_name || u.display_name])
   );
 
   const claimedRosters = rosters.filter((r) => r.owner_id != null);
   const numTeams = claimedRosters.length;
+
+  const rosterLabels = new Map(
+    claimedRosters.map((r) => [
+      r.roster_id,
+      userById.get(r.owner_id) || r.settings?.team_name || `Roster ${r.roster_id}`,
+    ])
+  );
+
+  const { feeds, years: feedYears } = buildTeamTransactionFeeds(
+    transactions, moves, claimedRosters, players || {}, rosterLabels
+  );
 
   // Per-team stats
   const stats = {};
@@ -264,6 +425,8 @@ function buildTeamActivityData(transactions, moves, rosters, users, effectiveSea
         pickRate: pickRateScore,
         diversity: diversityScore,
       },
+      transactions: feeds[String(s.rosterId)] || [],
+      feedYears,
     };
   });
 }
@@ -293,22 +456,15 @@ function buildSummaryText(overallScore, stats) {
 
 // --- Main export ---
 
-export function buildLeagueActivity(transactions, rosters, users, lastSeasonYear) {
-  // Resolve lastSeasonYear: NFL season is "current year" from September onward.
-  const now = new Date();
-  const seasonYear =
-    lastSeasonYear ?? (now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1);
-
-  // Exclude transactions timestamped after the current dynasty season started.
-  // This prevents a newly-created league year (0 trades, early calendar year) from
-  // inflating effectiveSeasons and dragging down per-season averages.
-  const inSeason = transactions.filter(
-    (t) => new Date(t.created).getFullYear() <= seasonYear
-  );
-
-  const trades = inSeason.filter((t) => t.type === 'trade');
+export function buildLeagueActivity(transactions, rosters, users, lastSeasonYear, players) {
+  // Include all transactions up to the current calendar year. Offseason trades
+  // (e.g. Jan–Aug 2026 before the 2026 NFL season starts) are legitimate dynasty
+  // activity and should be visible and scored. countEffectiveSeasons only counts
+  // years that actually have transactions, so an empty year can't inflate the
+  // denominator.
+  const trades = transactions.filter((t) => t.type === 'trade');
   // FA adds and waiver claims — used for the roster management score.
-  const moves = inSeason.filter(
+  const moves = transactions.filter(
     (t) => (t.type === 'free_agent' || t.type === 'waiver') && t.adds && Object.keys(t.adds).length > 0
   );
 
@@ -360,7 +516,7 @@ export function buildLeagueActivity(transactions, rosters, users, lastSeasonYear
     activeTraderCount,
   };
 
-  const teams = buildTeamActivityData(trades, moves, claimedRosters, users, effectiveSeasons)
+  const teams = buildTeamActivityData(trades, moves, claimedRosters, users, effectiveSeasons, players)
     .sort((a, b) => b.teamActivityScore - a.teamActivityScore);
 
   return {
