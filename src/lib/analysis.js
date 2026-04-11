@@ -4,6 +4,7 @@ import { buildRosterSnapshot } from './rosterBuilder';
 import { getLeagueRulesContext } from './marketValue';
 import { buildTradeMarket, buildTradeSuggestions } from './tradeEngine';
 import { buildPredictionContext } from './predictionEngine';
+import { buildLeagueActivity } from './activityEngine';
 
 // Re-exports — consumers that import from 'analysis' still work unchanged.
 export { DEFAULT_SCORING_WEIGHTS, draftTierLabel } from './scoringEngine';
@@ -114,6 +115,7 @@ export function buildRosterAnalysis(
     leagueContext,
     tradeMarket,
   );
+  const leagueActivity = buildLeagueActivity(transactions, sourceRosters, users, lastSeasonYear);
 
   return {
     ...myTeam,
@@ -131,5 +133,6 @@ export function buildRosterAnalysis(
     tradeMarket,
     tradeSuggestions,
     tradeBlock: myTeam.tradeablePlayers.slice(0, 8),
+    leagueActivity,
   };
 }

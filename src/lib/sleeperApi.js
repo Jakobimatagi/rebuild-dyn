@@ -75,10 +75,7 @@ async function fetchLeagueTransactionsForSeason(leagueId, maxWeek = 18) {
 
   return responses
     .flat()
-    .filter(
-      (transaction) =>
-        transaction?.type === "trade" && transaction?.status === "complete",
-    );
+    .filter((transaction) => transaction?.status === "complete");
 }
 
 export async function fetchLeagueTransactions(
