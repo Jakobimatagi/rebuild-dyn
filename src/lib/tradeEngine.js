@@ -225,7 +225,7 @@ export function buildTradeMarket(transactions, leagueTeams, leagueContext) {
   const recentTrades = [];
   let cleanTradeCount = 0;
 
-  transactions.forEach((transaction) => {
+  transactions.filter((t) => t.type === "trade").forEach((transaction) => {
     const sentByRoster = new Map();
     const receivedByRoster = new Map();
 

@@ -7,6 +7,7 @@ import PicksTab from "./dashboard/PicksTab";
 import RosterTab from "./dashboard/RosterTab";
 import ScoreWeightsModal from "./dashboard/ScoreWeightsModal";
 import TradeTab from "./dashboard/TradeTab";
+import LeagueActivityTab from "./dashboard/LeagueActivityTab";
 
 export default function Dashboard({
   analysis,
@@ -141,7 +142,7 @@ export default function Dashboard({
           marginBottom: 32,
         }}
       >
-        {["overview", "roster", "picks", "trades", "league"].map((tab) => (
+        {["overview", "roster", "picks", "trades", "league", "activity"].map((tab) => (
           <button
             key={tab}
             className="dyn-tab"
@@ -206,6 +207,13 @@ export default function Dashboard({
       {activeTab === "league" && (
         <LeagueTab
           leagueTeams={analysis.leagueTeams}
+          myTeamLabel={analysis.myTeamLabel}
+        />
+      )}
+
+      {activeTab === "activity" && (
+        <LeagueActivityTab
+          leagueActivity={analysis.leagueActivity}
           myTeamLabel={analysis.myTeamLabel}
         />
       )}
