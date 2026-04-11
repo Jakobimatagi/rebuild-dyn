@@ -467,6 +467,205 @@ function buildOfferPackage(
 }
 
 // ---------------------------------------------------------------------------
+// Trade calculator — evaluate any proposed trade
+// ---------------------------------------------------------------------------
+
+function phaseAdjustment(assets, phase) {
+  let adj = 0;
+  for (const asset of assets) {
+    if (asset.type === "pick") {
+      adj += phase === "rebuild" ? 8 : phase === "retool" ? 3 : -3;
+    } else {
+      if (
+        asset.archetype === "Short Term League Winner" ||
+        asset.archetype === "Productive Vet"
+      ) {
+        adj += phase === "contender" ? 6 : phase === "rebuild" ? -5 : 0;
+      }
+      if (asset.age <= 23) {
+        adj += phase === "rebuild" ? 5 : phase === "contender" ? -2 : 2;
+      }
+      if (
+        asset.archetype === "Cornerstone" ||
+        asset.archetype === "Foundational"
+      ) {
+        adj += phase === "rebuild" ? 4 : 0;
+      }
+    }
+  }
+  return adj;
+}
+
+export function evaluateTrade(
+  sideA,
+  sideB,
+  teamAPhase,
+  teamBPhase,
+  playerMarketMap,
+  leagueContext,
+  tradeMarket,
+) {
+  const valueA = sideA.reduce(
+    (sum, asset) =>
+      sum + getAssetTradeValue(asset, playerMarketMap, leagueContext, tradeMarket),
+    0,
+  );
+  const valueB = sideB.reduce(
+    (sum, asset) =>
+      sum + getAssetTradeValue(asset, playerMarketMap, leagueContext, tradeMarket),
+    0,
+  );
+
+  const teamAPhaseAdj = phaseAdjustment(sideB, teamAPhase);
+  const teamBPhaseAdj = phaseAdjustment(sideA, teamBPhase);
+
+  // Team A sends sideA, receives sideB
+  const teamANet = valueB + teamAPhaseAdj - valueA;
+  // Team B sends sideB, receives sideA
+  const teamBNet = valueA + teamBPhaseAdj - valueB;
+
+  const rawGap = Math.abs(valueA - valueB);
+  let fairnessLabel;
+  if (rawGap <= 5) fairnessLabel = "Fair";
+  else if (rawGap <= 12) fairnessLabel = "Slight edge";
+  else if (rawGap <= 20) fairnessLabel = "Uneven";
+  else fairnessLabel = "Lopsided";
+
+  return {
+    sideAValue: valueA,
+    sideBValue: valueB,
+    rawGap,
+    fairnessLabel,
+    teamA: {
+      netValue: teamANet,
+      phaseAdj: teamAPhaseAdj,
+      verdict: teamANet >= -3 ? "good" : "overpay",
+    },
+    teamB: {
+      netValue: teamBNet,
+      phaseAdj: teamBPhaseAdj,
+      verdict: teamBNet >= -3 ? "good" : "overpay",
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Sell suggestions for rebuilders
+// ---------------------------------------------------------------------------
+
+function buildSellSuggestions(
+  myTeam,
+  leagueTeams,
+  playerMarketMap,
+  leagueContext,
+  tradeMarket,
+) {
+  const suggestions = [];
+
+  const sellCandidates = myTeam.enriched.filter(
+    (p) =>
+      (p.archetype === "Short Term League Winner" ||
+        p.archetype === "Productive Vet" ||
+        (p.age >= 28 && p.score >= 55)) &&
+      p.archetype !== "Cornerstone",
+  );
+
+  const contenderPartners = leagueTeams.filter(
+    (t) =>
+      t.rosterId !== myTeam.rosterId &&
+      t.teamPhase?.phase === "contender",
+  );
+
+  for (const candidate of sellCandidates.slice(0, 5)) {
+    for (const partner of contenderPartners) {
+      if (!partner.needs.includes(candidate.position)) continue;
+
+      // Build a reverse offer: what the partner could send us
+      const candidateValue = getAssetTradeValue(
+        { ...candidate, type: "player" },
+        playerMarketMap,
+        leagueContext,
+        tradeMarket,
+      );
+
+      // Look for young players or picks the partner could send
+      const partnerAssets = [
+        ...partner.tradeablePlayers
+          .filter((p) => p.age <= 25 || p.archetype === "Upside Shot")
+          .slice(0, 3)
+          .map((p) => ({
+            ...p,
+            type: "player",
+            value: getAssetTradeValue(
+              { ...p, type: "player" },
+              playerMarketMap,
+              leagueContext,
+              tradeMarket,
+            ),
+          })),
+        ...partner.picks
+          .filter((p) => p.round <= 2)
+          .slice(0, 3)
+          .map((p) => ({
+            ...p,
+            type: "pick",
+            value: estimatePickValue(p, leagueContext, tradeMarket),
+          })),
+      ].sort((a, b) => b.value - a.value);
+
+      // Build a package from partner's assets that matches candidate value
+      let packageAssets = [];
+      let totalValue = 0;
+      for (const asset of partnerAssets) {
+        if (totalValue >= candidateValue - 3) break;
+        packageAssets.push(asset);
+        totalValue += asset.value;
+      }
+
+      if (
+        packageAssets.length === 0 ||
+        totalValue < candidateValue - 8 ||
+        totalValue > candidateValue + 12
+      )
+        continue;
+
+      const receiveText = packageAssets.map(createAssetLabel);
+      const fitScore =
+        candidateValue +
+        (packageAssets.some((a) => a.type === "pick") ? 10 : 0) +
+        (packageAssets.some((a) => a.age <= 24) ? 6 : 0) -
+        Math.abs(totalValue - candidateValue);
+
+      suggestions.push({
+        partnerTeam: partner.label,
+        needPos: candidate.position,
+        targetPlayer: candidate,
+        direction: "sell",
+        tier: candidateValue >= 80 ? "blockbuster" : candidateValue >= 65 ? "aggressive" : "balanced",
+        marketGap: totalValue - candidateValue,
+        marketNote: `Selling ${candidate.position} to a contender who needs the position.`,
+        recentComp: tradeMarket.recentTrades.find(
+          (t) => t.position === candidate.position,
+        ),
+        receive: receiveText.map((label) => ({ type: "asset", label })),
+        send: [createAssetLabel({ ...candidate, type: "player" })],
+        fitScore,
+        summary: `${partner.label} is contending and needs ${candidate.position} help. Sell ${candidate.name} for youth/picks to fuel your rebuild.`,
+        rationale: [
+          `${candidate.name} (${candidate.age}yo, ${candidate.archetype}) has peak value now but limited dynasty upside for a rebuilding team.`,
+          `${partner.label} is a contender weak at ${candidate.position}.`,
+          `Suggested return: ${receiveText.join(" + ")} (${totalValue} total market value).`,
+          `Getting younger assets accelerates your rebuild timeline.`,
+        ],
+      });
+      break; // one suggestion per candidate
+    }
+  }
+
+  return suggestions;
+}
+
+// ---------------------------------------------------------------------------
 // Trade suggestions
 // ---------------------------------------------------------------------------
 
@@ -523,7 +722,10 @@ export function buildTradeSuggestions(
               offer.outgoingValue - targetTradeValue,
               offer.rules,
             );
-            const fitScore =
+            const myPhase = myTeam.teamPhase?.phase;
+            const partnerPhase = partner.teamPhase?.phase;
+
+            let fitScore =
               targetTradeValue +
               (partner.needs.some((need) =>
                 offer.assets.some((asset) => asset.position === need),
@@ -532,6 +734,29 @@ export function buildTradeSuggestions(
                 : 0) +
               (myTeam.surplusPositions.includes(needPos) ? -8 : 8) -
               Math.abs(targetTradeValue - offer.outgoingValue);
+
+            // Phase alignment: rebuilder↔contender trades are more likely to happen
+            if (
+              (myPhase === "contender" && partnerPhase === "rebuild") ||
+              (myPhase === "rebuild" && partnerPhase === "contender")
+            )
+              fitScore += 8;
+
+            // Contenders prefer proven producers
+            if (
+              myPhase === "contender" &&
+              (target.archetype === "Short Term League Winner" ||
+                target.archetype === "Productive Vet")
+            )
+              fitScore += 6;
+
+            // Rebuilders prefer young upside
+            if (
+              myPhase === "rebuild" &&
+              target.age <= 24 &&
+              target.archetype !== "Replaceable"
+            )
+              fitScore += 6;
 
             suggestions.push({
               partnerTeam: partner.label,
@@ -564,6 +789,19 @@ export function buildTradeSuggestions(
       });
     });
 
+  // Merge sell suggestions for rebuilding teams
+  const myPhaseGlobal = myTeam.teamPhase?.phase;
+  if (myPhaseGlobal === "rebuild" || myPhaseGlobal === "retool") {
+    const sellSuggestions = buildSellSuggestions(
+      myTeam,
+      leagueTeams,
+      playerMarketMap,
+      leagueContext,
+      tradeMarket,
+    );
+    suggestions.push(...sellSuggestions);
+  }
+
   return suggestions
     .sort((a, b) => b.fitScore - a.fitScore)
     .filter(
@@ -574,5 +812,5 @@ export function buildTradeSuggestions(
             item.targetPlayer.id === suggestion.targetPlayer.id,
         ) === index,
     )
-    .slice(0, 6);
+    .slice(0, 8);
 }

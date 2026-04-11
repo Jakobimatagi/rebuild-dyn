@@ -1,4 +1,314 @@
+import { useState, useMemo, useCallback } from "react";
+import { evaluateTrade } from "../../lib/tradeEngine";
+import { estimatePickValue } from "../../lib/marketValue";
 import { styles } from "../../styles";
+
+// ---------------------------------------------------------------------------
+// Trade Calculator component
+// ---------------------------------------------------------------------------
+
+function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase }) {
+  const [teamAId, setTeamAId] = useState("");
+  const [teamBId, setTeamBId] = useState("");
+  const [sideA, setSideA] = useState([]);
+  const [sideB, setSideB] = useState([]);
+
+  const playerMarketMap = useMemo(
+    () =>
+      new Map(
+        (leagueTeams || []).flatMap((t) =>
+          t.enriched.map((p) => [String(p.id), p]),
+        ),
+      ),
+    [leagueTeams],
+  );
+
+  const teamA = useMemo(
+    () => leagueTeams?.find((t) => String(t.rosterId) === teamAId),
+    [leagueTeams, teamAId],
+  );
+  const teamB = useMemo(
+    () => leagueTeams?.find((t) => String(t.rosterId) === teamBId),
+    [leagueTeams, teamBId],
+  );
+
+  const addAsset = useCallback(
+    (side, asset) => {
+      const setter = side === "A" ? setSideA : setSideB;
+      setter((prev) => {
+        const key = asset.type === "pick" ? asset.label : asset.id;
+        if (prev.some((a) => (a.type === "pick" ? a.label : a.id) === key))
+          return prev;
+        return [...prev, asset];
+      });
+    },
+    [],
+  );
+
+  const removeAsset = useCallback((side, index) => {
+    const setter = side === "A" ? setSideA : setSideB;
+    setter((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const result = useMemo(() => {
+    if (!sideA.length || !sideB.length) return null;
+    return evaluateTrade(
+      sideA,
+      sideB,
+      teamA?.teamPhase?.phase || teamPhase?.phase || "retool",
+      teamB?.teamPhase?.phase || "retool",
+      playerMarketMap,
+      leagueContext,
+      tradeMarket,
+    );
+  }, [sideA, sideB, teamA, teamB, teamPhase, playerMarketMap, leagueContext, tradeMarket]);
+
+  if (!leagueTeams?.length) return null;
+
+  const selectStyle = {
+    background: "rgba(0,245,160,0.04)",
+    border: "1px solid rgba(0,245,160,0.18)",
+    color: "#e8e8f0",
+    padding: "8px 12px",
+    fontSize: 12,
+    borderRadius: 3,
+    width: "100%",
+  };
+
+  const chipStyle = (color = "#d9deef") => ({
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "4px 10px",
+    borderRadius: 3,
+    fontSize: 11,
+    background: `${color}15`,
+    color,
+    border: `1px solid ${color}30`,
+    marginRight: 6,
+    marginBottom: 6,
+  });
+
+  const renderTeamSide = (label, team, side, assets) => (
+    <div style={{ flex: 1 }}>
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: 2,
+          color: side === "A" ? "#ffd84d" : "#00f5a0",
+          marginBottom: 8,
+        }}
+      >
+        {label} SENDS
+        {team?.teamPhase && (
+          <span style={{ marginLeft: 8, opacity: 0.7, letterSpacing: 1 }}>
+            ({team.teamPhase.phase})
+          </span>
+        )}
+      </div>
+      <select
+        style={{ ...selectStyle, marginBottom: 8 }}
+        value=""
+        onChange={(e) => {
+          if (!e.target.value) return;
+          const [type, key] = e.target.value.split("|");
+          if (type === "player") {
+            const p = team.enriched.find((p) => String(p.id) === key);
+            if (p) addAsset(side, { ...p, type: "player" });
+          } else {
+            const pick = team.picks.find((p) => p.label === key);
+            if (pick)
+              addAsset(side, {
+                ...pick,
+                type: "pick",
+                value: estimatePickValue(pick, leagueContext, tradeMarket),
+              });
+          }
+        }}
+      >
+        <option value="">+ Add player or pick...</option>
+        <optgroup label="Players">
+          {(team?.enriched || [])
+            .sort((a, b) => b.score - a.score)
+            .map((p) => (
+              <option key={p.id} value={`player|${p.id}`}>
+                {p.name} ({p.position}, {p.score})
+              </option>
+            ))}
+        </optgroup>
+        <optgroup label="Picks">
+          {(team?.picks || [])
+            .filter((p) => p.round <= 4)
+            .map((p) => (
+              <option key={p.label} value={`pick|${p.label}`}>
+                {p.label}
+              </option>
+            ))}
+        </optgroup>
+      </select>
+
+      <div style={{ minHeight: 32 }}>
+        {assets.map((asset, i) => (
+          <span
+            key={asset.type === "pick" ? asset.label : asset.id}
+            style={chipStyle(side === "A" ? "#ffd84d" : "#00f5a0")}
+          >
+            {asset.type === "pick" ? asset.label : `${asset.name} (${asset.position})`}
+            <button
+              type="button"
+              onClick={() => removeAsset(side, i)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#ff6b35",
+                fontSize: 12,
+                padding: 0,
+                cursor: "pointer",
+                lineHeight: 1,
+              }}
+            >
+              x
+            </button>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+
+  const fairnessColor = {
+    Fair: "#00f5a0",
+    "Slight edge": "#ffd84d",
+    Uneven: "#ff6b35",
+    Lopsided: "#ff2d55",
+  };
+
+  return (
+    <div style={{ ...styles.card, borderColor: "rgba(0,245,160,0.22)", marginBottom: 24 }}>
+      <div style={styles.sectionLabel}>Trade Calculator</div>
+
+      <div
+        className="dyn-grid-2"
+        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}
+      >
+        <div>
+          <div style={{ fontSize: 10, color: "#c8cfe3", marginBottom: 4, letterSpacing: 1 }}>
+            TEAM A
+          </div>
+          <select
+            style={selectStyle}
+            value={teamAId}
+            onChange={(e) => {
+              setTeamAId(e.target.value);
+              setSideA([]);
+            }}
+          >
+            <option value="">Select team...</option>
+            {leagueTeams.map((t) => (
+              <option key={t.rosterId} value={String(t.rosterId)}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: "#c8cfe3", marginBottom: 4, letterSpacing: 1 }}>
+            TEAM B
+          </div>
+          <select
+            style={selectStyle}
+            value={teamBId}
+            onChange={(e) => {
+              setTeamBId(e.target.value);
+              setSideB([]);
+            }}
+          >
+            <option value="">Select team...</option>
+            {leagueTeams
+              .filter((t) => String(t.rosterId) !== teamAId)
+              .map((t) => (
+                <option key={t.rosterId} value={String(t.rosterId)}>
+                  {t.label}
+                </option>
+              ))}
+          </select>
+        </div>
+      </div>
+
+      {teamA && teamB && (
+        <div
+          className="dyn-grid-2"
+          style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}
+        >
+          {renderTeamSide(teamA.label, teamA, "A", sideA)}
+          {renderTeamSide(teamB.label, teamB, "B", sideB)}
+        </div>
+      )}
+
+      {result && (
+        <div
+          style={{
+            background: "rgba(0,245,160,0.04)",
+            border: "1px solid rgba(0,245,160,0.15)",
+            borderRadius: 4,
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ fontSize: 13, color: "#fff", fontWeight: 600 }}>
+              Verdict
+            </div>
+            <span style={styles.tag(fairnessColor[result.fairnessLabel] || "#d9deef")}>
+              {result.fairnessLabel}
+            </span>
+          </div>
+
+          <div
+            className="dyn-grid-2"
+            style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}
+          >
+            <div>
+              <div style={{ fontSize: 11, color: "#ffd84d", marginBottom: 4 }}>
+                {teamA.label} sends {result.sideAValue} pts
+              </div>
+              <div style={{ fontSize: 11, color: "#d9deef" }}>
+                Net value (phase-adjusted):{" "}
+                <span style={{ color: result.teamA.netValue >= 0 ? "#00f5a0" : "#ff6b35" }}>
+                  {result.teamA.netValue >= 0 ? "+" : ""}
+                  {result.teamA.netValue}
+                </span>
+              </div>
+              <div style={{ fontSize: 10, color: "#c8cfe3", marginTop: 4 }}>
+                Phase bonus: {result.teamA.phaseAdj >= 0 ? "+" : ""}{result.teamA.phaseAdj} ({teamA.teamPhase?.phase})
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#00f5a0", marginBottom: 4 }}>
+                {teamB.label} sends {result.sideBValue} pts
+              </div>
+              <div style={{ fontSize: 11, color: "#d9deef" }}>
+                Net value (phase-adjusted):{" "}
+                <span style={{ color: result.teamB.netValue >= 0 ? "#00f5a0" : "#ff6b35" }}>
+                  {result.teamB.netValue >= 0 ? "+" : ""}
+                  {result.teamB.netValue}
+                </span>
+              </div>
+              <div style={{ fontSize: 10, color: "#c8cfe3", marginTop: 4 }}>
+                Phase bonus: {result.teamB.phaseAdj >= 0 ? "+" : ""}{result.teamB.phaseAdj} ({teamB.teamPhase?.phase})
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function TradeCalcKey() {
   return (
@@ -122,9 +432,17 @@ export default function TradeTab({
   leagueContext,
   tradeMarket,
   fantasyCalcSource,
+  leagueTeams,
+  teamPhase,
 }) {
   return (
     <div>
+      <TradeCalculator
+        leagueTeams={leagueTeams}
+        leagueContext={leagueContext}
+        tradeMarket={tradeMarket}
+        teamPhase={teamPhase}
+      />
       <div
         style={{
           ...styles.card,

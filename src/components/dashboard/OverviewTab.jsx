@@ -8,6 +8,7 @@ export default function OverviewTab({
   weakRooms,
   proportions,
   aiAdvice,
+  teamPhase,
   onOpenGradeKey,
 }) {
   return (
@@ -251,6 +252,82 @@ export default function OverviewTab({
           })}
         </div>
       </div>
+
+      {teamPhase && (
+        <div
+          style={{
+            ...styles.card,
+            borderColor:
+              teamPhase.phase === "contender"
+                ? "rgba(0,245,160,0.3)"
+                : teamPhase.phase === "retool"
+                  ? "rgba(255,216,77,0.3)"
+                  : "rgba(255,107,53,0.3)",
+            marginBottom: 16,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 10,
+            }}
+          >
+            <div>
+              <div style={styles.sectionLabel}>Team Phase</div>
+              <div
+                style={{
+                  fontSize: 18,
+                  fontWeight: 700,
+                  color:
+                    teamPhase.phase === "contender"
+                      ? "#00f5a0"
+                      : teamPhase.phase === "retool"
+                        ? "#ffd84d"
+                        : "#ff6b35",
+                  textTransform: "uppercase",
+                  letterSpacing: 2,
+                }}
+              >
+                {teamPhase.phase}
+              </div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div
+                style={{
+                  fontSize: 32,
+                  fontWeight: 700,
+                  color:
+                    teamPhase.phase === "contender"
+                      ? "#00f5a0"
+                      : teamPhase.phase === "retool"
+                        ? "#ffd84d"
+                        : "#ff6b35",
+                }}
+              >
+                {teamPhase.score}
+              </div>
+              <div style={{ fontSize: 10, color: "#d1d7ea", letterSpacing: 2 }}>
+                / 100
+              </div>
+            </div>
+          </div>
+          {teamPhase.signals.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              {teamPhase.signals.map((signal) => (
+                <div
+                  key={signal}
+                  style={{ fontSize: 11, color: "#d9deef", marginBottom: 4 }}
+                >
+                  <span style={{ color: "#c8cfe3" }}>▸ </span>
+                  {signal}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {aiAdvice && (
         <div

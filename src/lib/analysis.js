@@ -2,12 +2,14 @@ import { DEFAULT_SCORING_WEIGHTS, buildBenchmarks } from './scoringEngine';
 import { buildFantasyCalcContext } from './fantasyCalcBlend';
 import { buildRosterSnapshot } from './rosterBuilder';
 import { getLeagueRulesContext } from './marketValue';
-import { buildTradeMarket, buildTradeSuggestions } from './tradeEngine';
+import { buildTradeMarket, buildTradeSuggestions, evaluateTrade } from './tradeEngine';
 import { buildPredictionContext } from './predictionEngine';
 import { buildLeagueActivity } from './activityEngine';
 
 // Re-exports — consumers that import from 'analysis' still work unchanged.
 export { DEFAULT_SCORING_WEIGHTS, draftTierLabel } from './scoringEngine';
+export { getTeamPhase } from './rosterBuilder';
+export { evaluateTrade } from './tradeEngine';
 export {
   getVerdict,
   getColor,

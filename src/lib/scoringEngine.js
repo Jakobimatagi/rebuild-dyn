@@ -65,10 +65,10 @@ export function getWeightDeviationRatio(weights = DEFAULT_SCORING_WEIGHTS) {
 // ---------------------------------------------------------------------------
 
 export const AGE_CURVES_FALLBACK = {
-  QB: { peak: 27, decline: 32, cliff: 35 },
+  QB: { peak: 27, decline: 33, cliff: 38 },
   RB: { peak: 24, decline: 27, cliff: 30 },
   WR: { peak: 26, decline: 30, cliff: 33 },
-  TE: { peak: 27, decline: 30, cliff: 33 },
+  TE: { peak: 27, decline: 31, cliff: 34 },
 };
 
 // Derives age-production curves from actual player-season data.
@@ -329,7 +329,7 @@ export function ageComponent(pos, age, ageCurves) {
   if (age <= c.cliff) {
     return Math.max(10, 30 - ((age - c.decline) / (c.cliff - c.decline)) * 20);
   }
-  return 5;
+  return 12;
 }
 
 export function availComponent(seasonStats, injuryStatus) {
@@ -391,7 +391,7 @@ export function calcScore(
   const w = normalizeScoringWeights(scoringWeights);
 
   const dc = draftCapitalScore(player.draftRound, player.draftSlot);
-  const dcWeight = dc != null ? ([0.6, 0.4, 0.2][player.yearsExp] ?? 0) : 0;
+  const dcWeight = dc != null ? ([0.6, 0.45, 0.3, 0.15][player.yearsExp] ?? 0) : 0;
   const rawProd = currentPctile ?? 40;
   const prod = Math.round(
     rawProd * (1 - dcWeight) + (dc ?? rawProd) * dcWeight,

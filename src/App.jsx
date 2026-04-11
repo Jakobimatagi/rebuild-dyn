@@ -274,6 +274,8 @@ ${POSITION_PRIORITY.map(
 DRAFT PICKS: ${analysis.picks.length} picks across ${Object.keys(analysis.picksByYear).join(", ")}
 WEAK ROOMS: ${analysis.weakRooms.join(", ") || "None"}
 AVG ROSTER AGE: ${analysis.avgAge} · AVG DYNASTY SCORE: ${analysis.avgScore}/100
+TEAM PHASE: ${analysis.teamPhase?.phase || "unknown"} (score: ${analysis.teamPhase?.score || "N/A"}/100)
+PHASE SIGNALS: ${analysis.teamPhase?.signals?.join(", ") || "none"}
 FORMAT: ${analysis.isSuperflex ? "Superflex" : "1QB"}
 
 Give advice in this EXACT JSON format (no markdown, no backticks):

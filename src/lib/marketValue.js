@@ -90,12 +90,16 @@ export function buildPlayerMarketValue(
   // Separately track internalValue (from raw internal score) for display/comparison.
   const applyPremiums = (base) => {
     let v = base + (leagueContext.positionPremiums[player.position] || 0) * 0.6;
-    if (player.age <= 23) v += player.position === "QB" ? 8 : 5;
-    else if (player.age <= 25) v += player.position === "QB" ? 5 : 3;
-    else if (player.age >= 29) v -= player.position === "RB" ? 14 : 7;
+    // Smooth youth premium curve: age 20 = +10/+8, decays linearly to 0 at 27, penalty at 29+
+    if (player.age >= 29) {
+      v -= player.position === "RB" ? 14 : 7;
+    } else if (player.age < 27) {
+      const maxBonus = player.position === "QB" ? 10 : 8;
+      v += Math.round(maxBonus * Math.max(0, (27 - player.age) / 7));
+    }
     if (player.draftRound === 1) v += player.draftSlot <= 12 ? 8 : 5;
     else if (player.draftRound === 2) v += 2;
-    v += getArchetypePremium(player.archetype) * 0.55;
+    v += getArchetypePremium(player.archetype) * 0.70;
     v += Math.max(0, ((player.currentPctile || 0) - 55) * 0.18);
     v += Math.max(0, ((player.peakPctile || 0) - 75) * 0.1);
     if (player.gp24 < 4) v -= player.draftRound === 1 ? 4 : 10;
