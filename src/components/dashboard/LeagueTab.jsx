@@ -111,7 +111,16 @@ function TeamRoster({ byPos }) {
 export default function LeagueTab({ leagueTeams, myTeamLabel }) {
   const [expandedTeam, setExpandedTeam] = useState(null);
 
-  const sorted = [...leagueTeams].sort((a, b) => b.avgScore - a.avgScore);
+  const sorted = [...leagueTeams].sort(
+    (a, b) => (b.teamPhase?.score || 0) - (a.teamPhase?.score || 0),
+  );
+
+  const phaseColor = (phase) =>
+    phase === "contender"
+      ? "#00f5a0"
+      : phase === "retool"
+        ? "#ffd84d"
+        : "#ff6b35";
 
   return (
     <div>
@@ -213,17 +222,36 @@ export default function LeagueTab({ leagueTeams, myTeamLabel }) {
               <div
                 style={{
                   display: "flex",
-                  gap: 16,
+                  gap: 12,
                   marginTop: 8,
                   fontSize: 11,
                   color: "#6b7390",
+                  alignItems: "center",
+                  flexWrap: "wrap",
                 }}
               >
+                {team.teamPhase && (
+                  <span
+                    style={{
+                      ...styles.tag(phaseColor(team.teamPhase.phase)),
+                      fontSize: 8,
+                      padding: "2px 7px",
+                    }}
+                  >
+                    {team.teamPhase.phase}
+                  </span>
+                )}
+                {(team.wins > 0 || team.losses > 0) && (
+                  <span>{team.wins}-{team.losses}{team.ties ? `-${team.ties}` : ""}</span>
+                )}
+                {team.pointsFor > 0 && (
+                  <span>PF: {team.pointsFor.toFixed(1)}</span>
+                )}
+                {team.teamPhase?.starterPPG > 0 && (
+                  <span>Starter PPG: {team.teamPhase.starterPPG}</span>
+                )}
                 <span>Avg age: {team.avgAge}</span>
                 <span>{team.picks?.length ?? 0} picks</span>
-                <span>
-                  {team.enriched?.filter((p) => p.verdict === "buy").length ?? 0} buys
-                </span>
               </div>
             </button>
 

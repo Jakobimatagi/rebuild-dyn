@@ -274,6 +274,8 @@ ${POSITION_PRIORITY.map(
 DRAFT PICKS: ${analysis.picks.length} picks across ${Object.keys(analysis.picksByYear).join(", ")}
 WEAK ROOMS: ${analysis.weakRooms.join(", ") || "None"}
 AVG ROSTER AGE: ${analysis.avgAge} · AVG DYNASTY SCORE: ${analysis.avgScore}/100
+RECORD: ${analysis.wins || 0}-${analysis.losses || 0} · POINTS FOR: ${analysis.pointsFor?.toFixed(1) || "N/A"}
+PROJECTED STARTER PPG: ${analysis.teamPhase?.starterPPG || "N/A"}
 TEAM PHASE: ${analysis.teamPhase?.phase || "unknown"} (score: ${analysis.teamPhase?.score || "N/A"}/100)
 PHASE SIGNALS: ${analysis.teamPhase?.signals?.join(", ") || "none"}
 FORMAT: ${analysis.isSuperflex ? "Superflex" : "1QB"}

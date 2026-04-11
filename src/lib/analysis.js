@@ -1,6 +1,6 @@
 import { DEFAULT_SCORING_WEIGHTS, buildBenchmarks } from './scoringEngine';
 import { buildFantasyCalcContext } from './fantasyCalcBlend';
-import { buildRosterSnapshot } from './rosterBuilder';
+import { buildRosterSnapshot, classifyLeagueTeams } from './rosterBuilder';
 import { getLeagueRulesContext } from './marketValue';
 import { buildTradeMarket, buildTradeSuggestions, evaluateTrade } from './tradeEngine';
 import { buildPredictionContext } from './predictionEngine';
@@ -8,7 +8,7 @@ import { buildLeagueActivity } from './activityEngine';
 
 // Re-exports — consumers that import from 'analysis' still work unchanged.
 export { DEFAULT_SCORING_WEIGHTS, draftTierLabel } from './scoringEngine';
-export { getTeamPhase } from './rosterBuilder';
+export { classifyLeagueTeams } from './rosterBuilder';
 export { evaluateTrade } from './tradeEngine';
 export {
   getVerdict,
@@ -102,6 +102,9 @@ export function buildRosterAnalysis(
       predictionContext,
     ),
   );
+
+  // Classify all teams relative to each other (contender / retool / rebuild)
+  classifyLeagueTeams(leagueTeams, leagueContext);
 
   const myTeam =
     leagueTeams.find((team) => team.rosterId === myRoster.roster_id) ||

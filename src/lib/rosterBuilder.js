@@ -4,8 +4,7 @@
  * needs/surplus analysis, and tradeable/targetable player lists.
  */
 import { POSITION_PRIORITY, IDEAL_PROPORTION } from "../constants";
-import { clamp } from "./scoringEngine";
-import { playerPctiles, calcScore, draftTierLabel } from "./scoringEngine";
+import { clamp, playerPctiles, calcScore, draftTierLabel } from "./scoringEngine";
 import {
   getVerdict,
   getArchetype,
@@ -106,70 +105,226 @@ export function getRosterSurplusPositions(byPos, proportions, isSuperflex) {
 }
 
 // ---------------------------------------------------------------------------
-// Team phase classification
+// Projected starting lineup PPG
 // ---------------------------------------------------------------------------
 
-export function getTeamPhase(enriched, byPos, weakRooms, picks, avgScore, avgAge) {
-  const signals = [];
-  let score = 0;
+/**
+ * Simulates the optimal starting lineup using league roster slot rules.
+ * Returns total projected weekly PPG for the team's best possible starters.
+ */
+export function calcStarterPPG(enriched, leagueContext) {
+  const { starterCounts, flexCount, isSuperflex } = leagueContext;
+  const used = new Set();
 
-  // 1. Average dynasty score (0-25)
-  const numAvgScore = typeof avgScore === "string" ? parseFloat(avgScore) : avgScore;
-  const avgScoreSignal = clamp(((numAvgScore - 35) / (65 - 35)) * 25, 0, 25);
-  score += avgScoreSignal;
+  // Pool of available players sorted by PPG (highest first)
+  const pool = enriched
+    .filter((p) => p.ppg != null && parseFloat(p.ppg) > 0)
+    .sort((a, b) => parseFloat(b.ppg) - parseFloat(a.ppg));
 
-  // 2. Elite archetype count (0-20)
-  const eliteCount = enriched.filter(
-    (p) => p.archetype === "Cornerstone" || p.archetype === "Foundational",
-  ).length;
-  const eliteSignal = clamp((eliteCount / 4) * 20, 0, 20);
-  score += eliteSignal;
-  if (eliteCount >= 3) signals.push(`${eliteCount} elite-tier players`);
-  if (eliteCount === 0) signals.push("No Cornerstone/Foundational players");
+  let totalPPG = 0;
 
-  // 3. Weak rooms — fewer = more competitive (0-15)
-  const weakSignal = clamp(((4 - weakRooms.length) / 3) * 15, 0, 15);
-  score += weakSignal;
-  if (weakRooms.length >= 3) signals.push(`${weakRooms.length} weak position rooms`);
-  if (weakRooms.length === 0) signals.push("No weak position rooms");
+  // Fill required position slots first (QB, RB, WR, TE)
+  for (const pos of POSITION_PRIORITY) {
+    const needed = starterCounts[pos] || 0;
+    let filled = 0;
+    for (const p of pool) {
+      if (filled >= needed) break;
+      if (used.has(p.id) || p.position !== pos) continue;
+      totalPPG += parseFloat(p.ppg);
+      used.add(p.id);
+      filled++;
+    }
+  }
 
-  // 4. Starter coverage — positions with a score-55+ player (0-15)
-  const coveredPositions = POSITION_PRIORITY.filter((pos) => {
-    const room = byPos[pos] || [];
-    return room.length > 0 && room[0].score >= 55;
-  }).length;
-  score += (coveredPositions / 4) * 15;
-  if (coveredPositions <= 2) signals.push("Missing quality starters at multiple positions");
-  if (coveredPositions === 4) signals.push("Quality starter at every position");
+  // Fill FLEX slots with best remaining non-QB (or QB for superflex)
+  let flexFilled = 0;
+  const superflexSlots = isSuperflex ? 1 : 0;
+  const regularFlexSlots = flexCount - superflexSlots;
 
-  // 5. Buy verdict ratio (0-10)
-  const buyRatio =
-    enriched.filter((p) => p.verdict === "buy").length /
-    Math.max(1, enriched.length);
-  score += clamp((buyRatio / 0.4) * 10, 0, 10);
+  // Regular FLEX (RB/WR/TE)
+  for (const p of pool) {
+    if (flexFilled >= regularFlexSlots) break;
+    if (used.has(p.id) || p.position === "QB") continue;
+    totalPPG += parseFloat(p.ppg);
+    used.add(p.id);
+    flexFilled++;
+  }
 
-  // 6. Age window fit (0-10)
-  const ageNum = typeof avgAge === "string" ? parseFloat(avgAge) : avgAge;
-  const ageIdeal =
-    ageNum >= 24 && ageNum <= 28 ? 10 : ageNum >= 22 && ageNum <= 30 ? 6 : 2;
-  score += ageIdeal;
-  if (ageNum < 23) signals.push("Very young roster — developing");
-  if (ageNum > 29) signals.push("Aging roster — window closing");
+  // SUPER_FLEX (any position)
+  let sfFilled = 0;
+  for (const p of pool) {
+    if (sfFilled >= superflexSlots) break;
+    if (used.has(p.id)) continue;
+    totalPPG += parseFloat(p.ppg);
+    used.add(p.id);
+    sfFilled++;
+  }
 
-  // 7. Pick capital — fewer early picks = contender (spent capital) (0-5)
-  const earlyPicks = picks.filter((p) => p.round <= 2).length;
-  const pickSignal = clamp(((6 - earlyPicks) / 6) * 5, 0, 5);
-  score += pickSignal;
-  if (earlyPicks >= 5) signals.push("Rich in early draft capital");
+  return Math.round(totalPPG * 10) / 10;
+}
 
-  score = Math.round(clamp(score, 0, 100));
+// ---------------------------------------------------------------------------
+// Team phase classification (league-relative)
+// ---------------------------------------------------------------------------
 
-  let phase;
-  if (score >= 62) phase = "contender";
-  else if (score >= 40) phase = "retool";
-  else phase = "rebuild";
+/**
+ * Classify all teams in the league relative to each other.
+ * Must be called AFTER all individual snapshots are built.
+ *
+ * Uses: points for (actual), projected starter PPG, dynasty score,
+ * roster construction, and league-relative percentiles.
+ */
+export function classifyLeagueTeams(leagueTeams, leagueContext) {
+  if (!leagueTeams.length) return;
 
-  return { phase, score, signals };
+  const numTeams = leagueTeams.length;
+
+  // Compute per-team competitive metrics
+  const metrics = leagueTeams.map((team) => {
+    const starterPPG = calcStarterPPG(team.enriched, leagueContext);
+
+    // Actual points for from Sleeper (season total)
+    const pointsFor = team.pointsFor || 0;
+
+    // Roster construction scores (absolute, not relative)
+    const eliteCount = team.enriched.filter(
+      (p) => p.archetype === "Cornerstone" || p.archetype === "Foundational",
+    ).length;
+    const avgScore =
+      typeof team.avgScore === "string"
+        ? parseFloat(team.avgScore)
+        : team.avgScore || 0;
+    const avgAge =
+      typeof team.avgAge === "string"
+        ? parseFloat(team.avgAge)
+        : team.avgAge || 26;
+    const earlyPicks = team.picks.filter((p) => p.round <= 2).length;
+
+    return {
+      rosterId: team.rosterId,
+      starterPPG,
+      pointsFor,
+      eliteCount,
+      avgScore,
+      avgAge,
+      weakRooms: team.weakRooms.length,
+      wins: team.wins || 0,
+      losses: team.losses || 0,
+      earlyPicks,
+    };
+  });
+
+  // Build league-relative percentiles (0-100) for key metrics
+  const percentile = (arr, value) => {
+    const below = arr.filter((v) => v < value).length;
+    return Math.round((below / Math.max(1, arr.length - 1)) * 100);
+  };
+
+  const allStarterPPG = metrics.map((m) => m.starterPPG);
+  const allPointsFor = metrics.map((m) => m.pointsFor);
+  const allAvgScore = metrics.map((m) => m.avgScore);
+  const allElite = metrics.map((m) => m.eliteCount);
+  const allWins = metrics.map((m) => m.wins);
+  const hasPointsFor = allPointsFor.some((pf) => pf > 0);
+  const hasRecord = allWins.some((w) => w > 0);
+
+  for (let i = 0; i < leagueTeams.length; i++) {
+    const m = metrics[i];
+    const signals = [];
+    let score = 0;
+
+    // 1. Projected starter PPG — league percentile (0-25, most important)
+    //    This is the best predictor of "can this team win games NOW"
+    const ppgPctile = percentile(allStarterPPG, m.starterPPG);
+    score += (ppgPctile / 100) * 25;
+    const ppgRank = allStarterPPG.filter((v) => v > m.starterPPG).length + 1;
+    signals.push(
+      `Projected starter PPG: ${m.starterPPG} (${ppgRank}${ordinal(ppgRank)} of ${numTeams})`,
+    );
+
+    // 2. Actual points for — league percentile (0-20)
+    //    Real results from the season validate the projection
+    if (hasPointsFor) {
+      const pfPctile = percentile(allPointsFor, m.pointsFor);
+      score += (pfPctile / 100) * 20;
+      const pfRank =
+        allPointsFor.filter((v) => v > m.pointsFor).length + 1;
+      signals.push(
+        `Points for: ${m.pointsFor.toFixed(1)} (${pfRank}${ordinal(pfRank)} of ${numTeams})`,
+      );
+    } else {
+      // No PF data — redistribute weight to starter PPG
+      score += (ppgPctile / 100) * 10;
+    }
+
+    // 3. Win/loss record (0-10)
+    if (hasRecord) {
+      const totalGames = m.wins + m.losses;
+      const winPct = totalGames > 0 ? m.wins / totalGames : 0.5;
+      score += winPct * 10;
+      signals.push(`Record: ${m.wins}-${m.losses}`);
+    }
+
+    // 4. Dynasty score — league percentile (0-15)
+    //    Measures overall roster quality for sustained contention
+    const scorePctile = percentile(allAvgScore, m.avgScore);
+    score += (scorePctile / 100) * 15;
+
+    // 5. Elite player count — league percentile (0-10)
+    const elitePctile = percentile(allElite, m.eliteCount);
+    score += (elitePctile / 100) * 10;
+    if (m.eliteCount >= 3) signals.push(`${m.eliteCount} elite-tier players`);
+    if (m.eliteCount === 0) signals.push("No Cornerstone/Foundational players");
+
+    // 6. Roster completeness — weak rooms penalty (0-10)
+    const weakPenalty = clamp(((4 - m.weakRooms) / 3) * 10, 0, 10);
+    score += weakPenalty;
+    if (m.weakRooms >= 3) signals.push(`${m.weakRooms} weak position rooms`);
+    if (m.weakRooms === 0) signals.push("No weak position rooms");
+
+    // 7. Age window & future outlook (0-10)
+    //    Young + strong = dynasty asset; old + weak = time to sell
+    const ageIdeal =
+      m.avgAge >= 24 && m.avgAge <= 28
+        ? 8
+        : m.avgAge >= 22 && m.avgAge <= 30
+          ? 5
+          : 2;
+    // Bonus if young AND strong — the future is bright
+    const futureBonus =
+      m.avgAge < 26 && scorePctile >= 60 ? 2 : 0;
+    score += ageIdeal + futureBonus;
+    if (m.avgAge < 23) signals.push("Very young roster — developing");
+    if (m.avgAge > 29) signals.push("Aging roster — window closing");
+
+    score = Math.round(clamp(score, 0, 100));
+
+    // Phase thresholds
+    let phase;
+    if (score >= 60) phase = "contender";
+    else if (score >= 38) phase = "retool";
+    else phase = "rebuild";
+
+    // Override: if your starter PPG is bottom 25% of the league, you can't be a contender
+    if (phase === "contender" && ppgPctile < 25) {
+      phase = "retool";
+      signals.push("Starter PPG too low to contend despite strong roster value");
+    }
+
+    // Override: if your starter PPG is top 3 in the league, you're at least retooling
+    if (phase === "rebuild" && ppgRank <= 3) {
+      phase = "retool";
+      signals.push("Strong starting lineup keeps you in the retool window");
+    }
+
+    leagueTeams[i].teamPhase = { phase, score, signals, starterPPG: m.starterPPG };
+  }
+}
+
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return s[(v - 20) % 10] || s[v] || s[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -413,8 +568,20 @@ export function buildRosterSnapshot(
     }),
   ).sort((a, b) => b.score - a.score);
 
-  const teamPhase = getTeamPhase(enriched, byPos, weakRooms, picks, avgScore, avgAge);
+  // Extract season record & points for from Sleeper roster settings
+  const rosterSettings = roster.settings || {};
+  const wins = Number(rosterSettings.wins ?? 0);
+  const losses = Number(rosterSettings.losses ?? 0);
+  const ties = Number(rosterSettings.ties ?? 0);
+  // Sleeper stores fpts as integer + fpts_decimal separately (e.g. 1842 + 56 = 1842.56)
+  const pointsFor =
+    Number(rosterSettings.fpts ?? 0) +
+    Number(rosterSettings.fpts_decimal ?? 0) / 100;
+  const pointsAgainst =
+    Number(rosterSettings.fpts_against ?? 0) +
+    Number(rosterSettings.fpts_against_decimal ?? 0) / 100;
 
+  // teamPhase will be set by classifyLeagueTeams() after all snapshots are built
   return {
     rosterId: roster.roster_id,
     ownerId: roster.owner_id,
@@ -435,6 +602,11 @@ export function buildRosterSnapshot(
     surplusPositions,
     tradeablePlayers,
     targetablePlayers,
-    teamPhase,
+    wins,
+    losses,
+    ties,
+    pointsFor,
+    pointsAgainst,
+    teamPhase: null, // populated by classifyLeagueTeams
   };
 }
