@@ -22,7 +22,7 @@ const MIN_BUCKET_SIZE = 5;    // Minimum player-seasons per age bucket to trust 
 
 // Position-specific career arc knowledge (used as fallback / guard rails)
 export const POS_CAREER = {
-  QB: { peak: 27, decline: 33, cliff: 37, breakoutStart: 22, breakoutEnd: 26 },
+  QB: { peak: 27, decline: 33, cliff: 38, breakoutStart: 22, breakoutEnd: 26 },
   RB: { peak: 24, decline: 27, cliff: 30, breakoutStart: 21, breakoutEnd: 23 },
   WR: { peak: 26, decline: 30, cliff: 33, breakoutStart: 22, breakoutEnd: 25 },
   TE: { peak: 27, decline: 31, cliff: 34, breakoutStart: 23, breakoutEnd: 26 },

@@ -4,6 +4,7 @@
  * needs/surplus analysis, and tradeable/targetable player lists.
  */
 import { POSITION_PRIORITY, IDEAL_PROPORTION } from "../constants";
+import { clamp } from "./scoringEngine";
 import { playerPctiles, calcScore, draftTierLabel } from "./scoringEngine";
 import {
   getVerdict,
@@ -102,6 +103,73 @@ export function getRosterSurplusPositions(byPos, proportions, isSuperflex) {
   }).sort(
     (a, b) => (proportions[b]?.delta ?? 0) - (proportions[a]?.delta ?? 0),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Team phase classification
+// ---------------------------------------------------------------------------
+
+export function getTeamPhase(enriched, byPos, weakRooms, picks, avgScore, avgAge) {
+  const signals = [];
+  let score = 0;
+
+  // 1. Average dynasty score (0-25)
+  const numAvgScore = typeof avgScore === "string" ? parseFloat(avgScore) : avgScore;
+  const avgScoreSignal = clamp(((numAvgScore - 35) / (65 - 35)) * 25, 0, 25);
+  score += avgScoreSignal;
+
+  // 2. Elite archetype count (0-20)
+  const eliteCount = enriched.filter(
+    (p) => p.archetype === "Cornerstone" || p.archetype === "Foundational",
+  ).length;
+  const eliteSignal = clamp((eliteCount / 4) * 20, 0, 20);
+  score += eliteSignal;
+  if (eliteCount >= 3) signals.push(`${eliteCount} elite-tier players`);
+  if (eliteCount === 0) signals.push("No Cornerstone/Foundational players");
+
+  // 3. Weak rooms — fewer = more competitive (0-15)
+  const weakSignal = clamp(((4 - weakRooms.length) / 3) * 15, 0, 15);
+  score += weakSignal;
+  if (weakRooms.length >= 3) signals.push(`${weakRooms.length} weak position rooms`);
+  if (weakRooms.length === 0) signals.push("No weak position rooms");
+
+  // 4. Starter coverage — positions with a score-55+ player (0-15)
+  const coveredPositions = POSITION_PRIORITY.filter((pos) => {
+    const room = byPos[pos] || [];
+    return room.length > 0 && room[0].score >= 55;
+  }).length;
+  score += (coveredPositions / 4) * 15;
+  if (coveredPositions <= 2) signals.push("Missing quality starters at multiple positions");
+  if (coveredPositions === 4) signals.push("Quality starter at every position");
+
+  // 5. Buy verdict ratio (0-10)
+  const buyRatio =
+    enriched.filter((p) => p.verdict === "buy").length /
+    Math.max(1, enriched.length);
+  score += clamp((buyRatio / 0.4) * 10, 0, 10);
+
+  // 6. Age window fit (0-10)
+  const ageNum = typeof avgAge === "string" ? parseFloat(avgAge) : avgAge;
+  const ageIdeal =
+    ageNum >= 24 && ageNum <= 28 ? 10 : ageNum >= 22 && ageNum <= 30 ? 6 : 2;
+  score += ageIdeal;
+  if (ageNum < 23) signals.push("Very young roster — developing");
+  if (ageNum > 29) signals.push("Aging roster — window closing");
+
+  // 7. Pick capital — fewer early picks = contender (spent capital) (0-5)
+  const earlyPicks = picks.filter((p) => p.round <= 2).length;
+  const pickSignal = clamp(((6 - earlyPicks) / 6) * 5, 0, 5);
+  score += pickSignal;
+  if (earlyPicks >= 5) signals.push("Rich in early draft capital");
+
+  score = Math.round(clamp(score, 0, 100));
+
+  let phase;
+  if (score >= 62) phase = "contender";
+  else if (score >= 40) phase = "retool";
+  else phase = "rebuild";
+
+  return { phase, score, signals };
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +413,8 @@ export function buildRosterSnapshot(
     }),
   ).sort((a, b) => b.score - a.score);
 
+  const teamPhase = getTeamPhase(enriched, byPos, weakRooms, picks, avgScore, avgAge);
+
   return {
     rosterId: roster.roster_id,
     ownerId: roster.owner_id,
@@ -365,5 +435,6 @@ export function buildRosterSnapshot(
     surplusPositions,
     tradeablePlayers,
     targetablePlayers,
+    teamPhase,
   };
 }

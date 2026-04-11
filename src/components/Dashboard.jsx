@@ -171,6 +171,7 @@ export default function Dashboard({
           weakRooms={weakRooms}
           proportions={proportions}
           aiAdvice={aiAdvice}
+          teamPhase={analysis.teamPhase}
           onOpenGradeKey={() => setShowGradeKey(true)}
         />
       )}
@@ -201,6 +202,8 @@ export default function Dashboard({
           leagueContext={leagueContext}
           tradeMarket={tradeMarket}
           fantasyCalcSource={fantasyCalcSource}
+          leagueTeams={analysis.leagueTeams}
+          teamPhase={analysis.teamPhase}
         />
       )}
 
