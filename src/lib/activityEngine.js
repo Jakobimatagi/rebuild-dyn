@@ -28,7 +28,6 @@ function piecewiseScale(ratio) {
 }
 
 // Derive how many distinct seasons are represented in the transaction history.
-// Derive how many distinct seasons are represented in the transaction history.
 function countEffectiveSeasons(trades) {
   const years = new Set(trades.map((t) => new Date(t.created).getFullYear()));
   return Math.max(1, Math.min(years.size, 8));
@@ -432,8 +431,12 @@ function buildTeamActivityData(transactions, moves, rosters, users, effectiveSea
 }
 
 function buildSummaryText(overallScore, stats) {
-  if (stats.totalTrades === 0) {
+  const totalAdds = stats.totalAdds ?? 0;
+  if (stats.totalTrades === 0 && totalAdds === 0) {
     return 'No trade history found — this league has no recorded activity.';
+  }
+  if (stats.totalTrades === 0) {
+    return 'No trade history found, but managers are still active on waivers and free agency.';
   }
   const tpt = stats.tradesPerTeamPerSeason.toFixed(1);
   const pickPct = Math.round(stats.pickTradeRate * 100);
@@ -456,7 +459,7 @@ function buildSummaryText(overallScore, stats) {
 
 // --- Main export ---
 
-export function buildLeagueActivity(transactions, rosters, users, lastSeasonYear, players) {
+export function buildLeagueActivity(transactions, rosters, users, players) {
   // Include all transactions up to the current calendar year. Offseason trades
   // (e.g. Jan–Aug 2026 before the 2026 NFL season starts) are legitimate dynasty
   // activity and should be visible and scored. countEffectiveSeasons only counts
@@ -509,6 +512,7 @@ export function buildLeagueActivity(transactions, rosters, users, lastSeasonYear
 
   const stats = {
     totalTrades,
+    totalAdds,
     effectiveSeasons,
     numTeams,
     tradesPerTeamPerSeason: Math.round(tradesPerTeamPerSeason * 10) / 10,

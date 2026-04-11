@@ -96,16 +96,16 @@ export async function fetchLeagueTransactions(
       fallbackMaxWeek,
       Number(currentLeague.settings?.playoff_week_start || 15) + 2,
     );
-    const trades = await fetchLeagueTransactionsForSeason(
+    const txs = await fetchLeagueTransactionsForSeason(
       currentLeague.league_id,
       maxWeek,
     ).catch(() => []);
 
-    trades.forEach((trade) => {
+    txs.forEach((tx) => {
       const key =
-        trade.transaction_id ||
-        `${trade.leg || "trade"}-${trade.created || Math.random()}`;
-      if (!transactionMap.has(key)) transactionMap.set(key, trade);
+        tx.transaction_id ||
+        `${tx.leg || "trade"}-${tx.created || Math.random()}`;
+      if (!transactionMap.has(key)) transactionMap.set(key, tx);
     });
 
     seasonsFetched += 1;
