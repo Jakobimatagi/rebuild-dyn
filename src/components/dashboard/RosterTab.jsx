@@ -32,6 +32,8 @@ export default function RosterTab({
             <button
               onClick={() => onToggleRoom(pos)}
               className="dyn-room-toggle"
+              aria-expanded={!isRoomCollapsed}
+              aria-label={`${isRoomCollapsed ? "Expand" : "Collapse"} ${pos} room`}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -241,6 +243,7 @@ export default function RosterTab({
                           <button
                             onClick={() => setDeepDivePlayer(p)}
                             title="Deep dive — full grade breakdown"
+                            aria-label={`Deep dive for ${p.name}`}
                             className="dyn-expand-btn"
                             style={{
                               background: "rgba(0,245,160,0.07)",
@@ -261,6 +264,8 @@ export default function RosterTab({
                             title={
                               barsOpen ? "Hide breakdown" : "Show breakdown"
                             }
+                            aria-expanded={barsOpen}
+                            aria-label={`${barsOpen ? "Hide" : "Show"} score breakdown for ${p.name}`}
                             className="dyn-expand-btn"
                             style={{
                               background: "transparent",

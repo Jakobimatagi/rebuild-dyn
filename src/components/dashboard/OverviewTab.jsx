@@ -27,6 +27,7 @@ export default function OverviewTab({
         <button
           onClick={onOpenGradeKey}
           title="Grade key"
+          aria-label="Open grade key"
           className="dyn-grade-help"
           style={{
             width: 17,

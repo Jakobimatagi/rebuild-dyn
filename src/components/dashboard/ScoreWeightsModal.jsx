@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_SCORING_WEIGHTS } from "../../lib/analysis";
 
 const FIELDS = [
@@ -15,6 +15,12 @@ export default function ScoreWeightsModal({
   onConfirm,
   isConfirming = false,
 }) {
+  useEffect(() => {
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
   const [draft, setDraft] = useState({
     age: Number(initialWeights.age ?? DEFAULT_SCORING_WEIGHTS.age),
     prod: Number(initialWeights.prod ?? DEFAULT_SCORING_WEIGHTS.prod),
@@ -47,6 +53,8 @@ export default function ScoreWeightsModal({
     <div
       onClick={() => !isConfirming && onClose()}
       className="dyn-modal-backdrop"
+      role="dialog"
+      aria-label="Adjust scoring weights"
       style={{
         position: "fixed",
         inset: 0,
@@ -75,6 +83,7 @@ export default function ScoreWeightsModal({
         <button
           onClick={onClose}
           disabled={isConfirming}
+          aria-label="Close scoring weights"
           style={{
             position: "absolute",
             top: 14,
