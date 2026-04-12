@@ -28,7 +28,13 @@ export default function LeaguePickerScreen({
           <span style={{ color: "#00f5a0" }}>▸ </span>
           {league.name}
           <span style={{ color: "#d1d7ea", marginLeft: 12, fontSize: 11 }}>
-            {league.total_rosters} teams · {league.season}
+            {league.total_rosters ? `${league.total_rosters} teams · ` : ""}
+            {league.season}
+            {league._ff_team_name && (
+              <span style={{ color: "#9aa0b8" }}>
+                {" "}· Your team: {league._ff_team_name}
+              </span>
+            )}
           </span>
           {loading && selectedLeague?.league_id === league.league_id && (
             <span style={{ color: "#00f5a0", marginLeft: 8 }}>Loading...</span>

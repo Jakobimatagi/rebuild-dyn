@@ -6,25 +6,61 @@ export default function InputScreen({
   onSubmit,
   loading,
   error,
+  platform,
+  onSetPlatform,
+  ffEmail,
+  setFfEmail,
 }) {
+  const isSleeper = platform === "sleeper";
+
   return (
     <>
       <div style={styles.header}>
         <div style={styles.logo}>Dynasty OS</div>
         <h1 style={styles.title}>Dynasty Advisor</h1>
         <p style={styles.subtitle}>
-          AI-powered dynasty fantasy football analysis for Sleeper leagues.
+          AI-powered dynasty fantasy football analysis for Sleeper &amp; Fleaflicker leagues.
         </p>
       </div>
 
       <div style={{ maxWidth: 480, marginBottom: 56 }}>
-        <div style={styles.sectionLabel}>Your Sleeper Username</div>
+        {/* Platform toggle */}
+        <div style={{ display: "flex", gap: 0, marginBottom: 20 }}>
+          <button
+            style={{
+              ...platformTabBase,
+              ...(isSleeper ? platformTabActive : platformTabInactive),
+              borderRadius: "4px 0 0 4px",
+            }}
+            onClick={() => onSetPlatform("sleeper")}
+          >
+            Sleeper
+          </button>
+          <button
+            style={{
+              ...platformTabBase,
+              ...(!isSleeper ? platformTabActive : platformTabInactive),
+              borderRadius: "0 4px 4px 0",
+            }}
+            onClick={() => onSetPlatform("fleaflicker")}
+          >
+            Fleaflicker
+          </button>
+        </div>
+
+        <div style={styles.sectionLabel}>
+          {isSleeper ? "Your Sleeper Username" : "Your Fleaflicker Email"}
+        </div>
         <input
           style={styles.input}
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
+          value={isSleeper ? username : ffEmail}
+          onChange={(e) =>
+            isSleeper
+              ? setUsername(e.target.value)
+              : setFfEmail(e.target.value)
+          }
           onKeyDown={(e) => e.key === "Enter" && onSubmit()}
-          placeholder="e.g. UserName"
+          placeholder={isSleeper ? "e.g. UserName" : "e.g. user@email.com"}
         />
         {error && (
           <div style={{ color: "#ff6b35", fontSize: 12, marginTop: 8, letterSpacing: 1 }}>
@@ -36,7 +72,7 @@ export default function InputScreen({
             className="dyn-btn"
             style={styles.btn}
             onClick={onSubmit}
-            disabled={loading || !username}
+            disabled={loading || (isSleeper ? !username : !ffEmail)}
           >
             {loading ? "Loading..." : "Connect →"}
           </button>
@@ -87,7 +123,7 @@ export default function InputScreen({
       <div style={sectionHeadStyle}>ABOUT</div>
       <p style={{ ...cardBodyStyle, maxWidth: 640, marginBottom: 48, lineHeight: 1.8 }}>
         Dynasty Advisor is a free tool built for dynasty fantasy football managers
-        on the Sleeper platform. Dynasty leagues differ from redraft leagues in that
+        on the Sleeper and Fleaflicker platforms. Dynasty leagues differ from redraft leagues in that
         players stay on your roster year after year, making long-term roster
         construction and age management critical. Dynasty Advisor helps you
         understand your roster's strengths and weaknesses, identify trade
@@ -126,8 +162,8 @@ const features = [
 
 const steps = [
   {
-    title: "Enter your Sleeper username",
-    body: "Type in the username you use on the Sleeper app. Sleeper is a free fantasy football platform and no password is required — all data is read from Sleeper's public API.",
+    title: "Enter your username or email",
+    body: "Choose your platform — Sleeper or Fleaflicker — then enter your Sleeper username or Fleaflicker email. No password is required — all data is read from public APIs.",
   },
   {
     title: "Select your dynasty league",
@@ -149,8 +185,8 @@ const faq = [
     a: "Yes, completely free. There is no account required beyond your existing Sleeper username.",
   },
   {
-    q: "Does it work for all Sleeper dynasty leagues?",
-    a: "It works for any dynasty or keeper league on Sleeper, including 1QB and Superflex formats. PPR, half-PPR, and standard scoring are all supported.",
+    q: "Does it work for all dynasty leagues?",
+    a: "It works for any dynasty or keeper league on Sleeper or Fleaflicker, including 1QB and Superflex formats. PPR, half-PPR, and standard scoring are all supported.",
   },
   {
     q: "How often is the data updated?",
@@ -158,7 +194,7 @@ const faq = [
   },
   {
     q: "Does Dynasty Advisor store my data?",
-    a: "No. Your Sleeper username is saved in your browser's local storage so you don't have to retype it. All roster and player data is fetched directly from Sleeper's API and never sent to our servers.",
+    a: "No. Your username or email is saved in your browser's local storage so you don't have to retype it. All roster and player data is fetched directly from public APIs and never sent to our servers.",
   },
   {
     q: "What is a dynasty fantasy football league?",
@@ -228,4 +264,28 @@ const stepNumStyle = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+};
+
+const platformTabBase = {
+  padding: "8px 20px",
+  fontSize: 11,
+  letterSpacing: 1.5,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  border: "1px solid rgba(0,245,160,0.25)",
+  cursor: "pointer",
+  transition: "all 0.15s",
+  fontFamily: "inherit",
+};
+
+const platformTabActive = {
+  background: "rgba(0,245,160,0.12)",
+  color: "#00f5a0",
+  borderColor: "#00f5a0",
+};
+
+const platformTabInactive = {
+  background: "transparent",
+  color: "#9aa0b8",
+  borderColor: "rgba(0,245,160,0.15)",
 };
