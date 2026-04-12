@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { ARCHETYPE_DESC, ARCHETYPE_META } from "../../constants";
 import { getColor, getVerdict } from "../../lib/analysis";
 import { styles } from "../../styles";
@@ -459,6 +460,12 @@ function PredictionSection({ prediction }) {
 // ---------------------------------------------------------------------------
 
 export default function PlayerDeepDiveModal({ player, scoringWeights, onClose }) {
+  useEffect(() => {
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
   if (!player) return null;
 
   const {
@@ -483,6 +490,8 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, onClose })
   return (
     <div
       onClick={onClose}
+      role="dialog"
+      aria-label="Player deep dive"
       style={{
         position: "fixed",
         inset: 0,
@@ -510,6 +519,7 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, onClose })
         {/* Close */}
         <button
           onClick={onClose}
+          aria-label="Close player deep dive"
           style={{
             position: "absolute",
             top: 16,

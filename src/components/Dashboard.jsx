@@ -22,8 +22,6 @@ export default function Dashboard({
   onToggleBars,
   onSwitchLeague,
   onLogout,
-  onGetAIAdvice,
-  aiLoading,
   showScoreWeights,
   setShowScoreWeights,
   onConfirmScoreWeights,
@@ -121,21 +119,14 @@ export default function Dashboard({
               {analysis.scoringWeights?.situ ?? 10}
             </p>
           </div>
-          {/* {!aiAdvice && (
-            <button
-              className="dyn-btn"
-              style={styles.btn}
-              onClick={onGetAIAdvice}
-              disabled={aiLoading}
-            >
-              {aiLoading ? "Analyzing..." : "⚡ AI Analysis"}
-            </button>
-          )} */}
+
         </div>
       </div>
 
       <div
         className="dyn-tabs-row"
+        role="tablist"
+        aria-label="Dashboard sections"
         style={{
           display: "flex",
           borderBottom: "1px solid rgba(255,255,255,0.08)",
@@ -146,6 +137,9 @@ export default function Dashboard({
           <button
             key={tab}
             className="dyn-tab"
+            role="tab"
+            aria-selected={activeTab === tab}
+            aria-label={`${tab} tab`}
             style={styles.tab(activeTab === tab)}
             onClick={() => setActiveTab(tab)}
           >

@@ -3,7 +3,6 @@ import Dashboard from "./components/Dashboard";
 import InputScreen from "./components/InputScreen";
 import Layout from "./components/Layout";
 import LeaguePickerScreen from "./components/LeaguePickerScreen";
-import { POSITION_PRIORITY } from "./constants";
 import { buildRosterAnalysis, DEFAULT_SCORING_WEIGHTS } from "./lib/analysis";
 import { fetchFantasyCalcValues } from "./lib/fantasyCalcApi";
 import {
@@ -27,7 +26,6 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [analysis, setAnalysis] = useState(null);
-  const [aiLoading, setAiLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const [showGradeKey, setShowGradeKey] = useState(false);
   const [showScoreWeights, setShowScoreWeights] = useState(false);
@@ -245,74 +243,7 @@ export default function App() {
     setStep("input");
   }
 
-  async function getAIAdvice() {
-    if (!analysis) return;
-    setAiLoading(true);
 
-    try {
-      const prompt = `You are an expert dynasty fantasy football advisor. Analyze this roster and give sharp, actionable Dynastyadvice.
-
-ROSTER SUMMARY (score 0-100, archetype, ppg = 2024 PPR pts/game):
-${POSITION_PRIORITY.map(
-  (pos) =>
-    `${pos}: ${
-      analysis.byPos[pos]
-        .map(
-          (p) =>
-            `${p.name} (${p.age}yo, score ${p.score}, ${p.archetype}, ${p.ppg ? `${p.ppg}ppg/${p.gp24}g` : "no stats"})`,
-        )
-        .join(" | ") || "EMPTY"
-    }`,
-).join("\n")}
-
-POSITION VALUE BALANCE (actual% vs ideal%):
-${POSITION_PRIORITY.map(
-  (pos) =>
-    `${pos}: ${analysis.proportions[pos].actual}% actual vs ${analysis.proportions[pos].ideal}% ideal (${analysis.proportions[pos].delta > 0 ? "+" : ""}${analysis.proportions[pos].delta}%)`,
-).join(" · ")}
-
-DRAFT PICKS: ${analysis.picks.length} picks across ${Object.keys(analysis.picksByYear).join(", ")}
-WEAK ROOMS: ${analysis.weakRooms.join(", ") || "None"}
-AVG ROSTER AGE: ${analysis.avgAge} · AVG DYNASTY SCORE: ${analysis.avgScore}/100
-RECORD: ${analysis.wins || 0}-${analysis.losses || 0} · POINTS FOR: ${analysis.pointsFor?.toFixed(1) || "N/A"}
-PROJECTED STARTER PPG: ${analysis.teamPhase?.starterPPG || "N/A"}
-TEAM PHASE: ${analysis.teamPhase?.phase || "unknown"} (score: ${analysis.teamPhase?.score || "N/A"}/100)
-PHASE SIGNALS: ${analysis.teamPhase?.signals?.join(", ") || "none"}
-FORMAT: ${analysis.isSuperflex ? "Superflex" : "1QB"}
-
-Give advice in this EXACT JSON format (no markdown, no backticks):
-{
-  "overallVerdict": "one sentence on Dynastystatus",
-  "rebuildScore": 1-10,
-  "topSells": [{"name": "player name", "reason": "why sell now"}],
-  "topBuys": [{"position": "pos", "target": "type of player to target", "why": "reason"}],
-  "pickStrategy": "one paragraph on pick strategy",
-  "timelineToContend": "realistic timeline estimate",
-  "winNowMoves": ["move 1", "move 2"],
-  "strengths": ["strength 1", "strength 2"],
-  "warnings": ["warning 1", "warning 2"]
-}`;
-
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-
-      const data = await res.json();
-      const text = data.content?.map((c) => c.text || "").join("") || "";
-      const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
-      setAnalysis((prev) => ({ ...prev, aiAdvice: parsed }));
-    } catch (e) {
-      console.error("AI error:", e);
-    }
-
-    setAiLoading(false);
-  }
 
   if (step === "input") {
     return (
@@ -361,8 +292,7 @@ Give advice in this EXACT JSON format (no markdown, no backticks):
             setStep("leagues");
           }}
           onLogout={handleLogout}
-          onGetAIAdvice={getAIAdvice}
-          aiLoading={aiLoading}
+
           showScoreWeights={showScoreWeights}
           setShowScoreWeights={setShowScoreWeights}
           onConfirmScoreWeights={handleConfirmScoreWeights}

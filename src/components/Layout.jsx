@@ -26,7 +26,7 @@ export default function Layout({ children }) {
       {showPrivacy && (
         <div style={overlayStyle} onClick={() => setShowPrivacy(false)}>
           <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
-            <button style={closeStyle} onClick={() => setShowPrivacy(false)}>✕</button>
+            <button style={closeStyle} onClick={() => setShowPrivacy(false)} aria-label="Close privacy policy">✕</button>
             <PrivacyPolicy onBack={() => setShowPrivacy(false)} />
           </div>
         </div>
