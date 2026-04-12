@@ -10,6 +10,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/sleeper/, ''),
       },
+      '/fleaflicker': {
+        target: 'https://www.fleaflicker.com/api',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/fleaflicker/, ''),
+      },
     },
   },
 })

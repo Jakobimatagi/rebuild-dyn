@@ -6,6 +6,10 @@ import LeaguePickerScreen from "./components/LeaguePickerScreen";
 import { buildRosterAnalysis, DEFAULT_SCORING_WEIGHTS } from "./lib/analysis";
 import { fetchFantasyCalcValues } from "./lib/fantasyCalcApi";
 import {
+  fetchFFUserLeagues,
+  loadFleaflickerLeague,
+} from "./lib/fleaflickerApi";
+import {
   fetchDeepHistoricalStats,
   fetchHistoricalStats,
   fetchLeagueTransactions,
@@ -13,13 +17,26 @@ import {
 } from "./lib/sleeperApi";
 
 export default function App() {
+  const [platform, setPlatform] = useState(
+    () => localStorage.getItem("dynasty_os_platform") || "sleeper",
+  );
   const [step, setStep] = useState(() => {
+    const savedPlatform = localStorage.getItem("dynasty_os_platform");
+    if (savedPlatform === "fleaflicker") {
+      return localStorage.getItem("ff_email") &&
+        localStorage.getItem("ff_league")
+        ? "loading"
+        : "input";
+    }
     const savedUsername = localStorage.getItem("sleeper_username");
     const savedLeague = localStorage.getItem("sleeper_league");
     return savedUsername && savedLeague ? "loading" : "input";
   });
   const [username, setUsername] = useState(
     () => localStorage.getItem("sleeper_username") || "",
+  );
+  const [ffEmail, setFfEmail] = useState(
+    () => localStorage.getItem("ff_email") || "",
   );
   const [leagues, setLeagues] = useState([]);
   const [selectedLeague, setSelectedLeague] = useState(null);
@@ -63,11 +80,23 @@ export default function App() {
   }
 
   useEffect(() => {
-    const savedUsername = localStorage.getItem("sleeper_username");
-    const savedLeague = localStorage.getItem("sleeper_league");
-    if (savedUsername && savedLeague) {
-      setUsername(savedUsername);
-      loadDashboard(JSON.parse(savedLeague), savedUsername);
+    const savedPlatform = localStorage.getItem("dynasty_os_platform");
+
+    if (savedPlatform === "fleaflicker") {
+      const savedEmail = localStorage.getItem("ff_email");
+      const savedLeague = localStorage.getItem("ff_league");
+      if (savedEmail && savedLeague) {
+        setFfEmail(savedEmail);
+        setPlatform("fleaflicker");
+        loadFleaflickerDashboard(JSON.parse(savedLeague));
+      }
+    } else {
+      const savedUsername = localStorage.getItem("sleeper_username");
+      const savedLeague = localStorage.getItem("sleeper_league");
+      if (savedUsername && savedLeague) {
+        setUsername(savedUsername);
+        loadDashboard(JSON.parse(savedLeague), savedUsername);
+      }
     }
   }, []);
 
@@ -172,6 +201,95 @@ export default function App() {
     setLoading(false);
   }
 
+  async function loadFleaflickerDashboard(league) {
+    setSelectedLeague(league);
+    setLoading(true);
+    setError("");
+
+    try {
+      const now = new Date();
+      const lastSeason =
+        now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+
+      // Phase 1: Fetch Sleeper player DB + historical stats in parallel
+      const [
+        players,
+        stats24,
+        stats23,
+        stats22,
+        stats21,
+        stats20,
+        stats19,
+        stats18,
+        stats17,
+        stats16,
+        stats15,
+        stats14,
+      ] = await Promise.all([
+        fetchSleeper("/players/nfl").catch(() => ({})),
+        fetchSleeper(`/stats/nfl/regular/${lastSeason}`).catch(() => ({})),
+        fetchSleeper(`/stats/nfl/regular/${lastSeason - 1}`).catch(() => ({})),
+        fetchSleeper(`/stats/nfl/regular/${lastSeason - 2}`).catch(() => ({})),
+        fetchHistoricalStats(2021),
+        fetchHistoricalStats(2020),
+        fetchHistoricalStats(2019),
+        fetchHistoricalStats(2018),
+        fetchDeepHistoricalStats(2017),
+        fetchDeepHistoricalStats(2016),
+        fetchDeepHistoricalStats(2015),
+        fetchDeepHistoricalStats(2014),
+      ]);
+
+      // Phase 2: Normalize Fleaflicker data (mutates players with synthetic entries)
+      const ffData = await loadFleaflickerLeague(
+        league._ff_league_id,
+        league._ff_team_id,
+        players,
+      );
+
+      // Phase 3: Fetch FantasyCalc values using normalized league settings
+      const fantasyCalcValues = await fetchFantasyCalcValues(
+        ffData.league,
+      ).catch(() => []);
+
+      const payload = {
+        myRoster: ffData.myRoster,
+        players,
+        league: ffData.league,
+        tradedPicks: ffData.tradedPicks,
+        stats24,
+        stats23,
+        stats22,
+        transactions: ffData.transactions,
+        fantasyCalcValues,
+        users: ffData.users,
+        rosters: ffData.rosters,
+        lastSeason,
+        historicalStats: [
+          { year: 2021, stats: stats21 },
+          { year: 2020, stats: stats20 },
+          { year: 2019, stats: stats19 },
+          { year: 2018, stats: stats18 },
+          { year: 2017, stats: stats17 },
+          { year: 2016, stats: stats16 },
+          { year: 2015, stats: stats15 },
+          { year: 2014, stats: stats14 },
+        ],
+      };
+
+      setAnalysisPayload(payload);
+      const nextAnalysis = computeAnalysis(payload, scoringWeights);
+      setAnalysis(nextAnalysis);
+      setStep("dashboard");
+    } catch (e) {
+      localStorage.removeItem("ff_league");
+      setError(e.message || "Failed to load Fleaflicker dashboard.");
+      setStep("input");
+    }
+
+    setLoading(false);
+  }
+
   async function handleConfirmScoreWeights(nextWeights) {
     setRecalculating(true);
     setScoringWeights(nextWeights);
@@ -195,6 +313,7 @@ export default function App() {
       const user = await fetchSleeper(`/user/${username}`);
       if (!user?.user_id) throw new Error("User not found");
 
+      localStorage.setItem("dynasty_os_platform", "sleeper");
       localStorage.setItem("sleeper_username", username);
       const now = new Date();
       const currentSeason = now.getFullYear();
@@ -226,15 +345,65 @@ export default function App() {
     setLoading(false);
   }
 
+  async function handleFleaflickerSubmit() {
+    setLoading(true);
+    setError("");
+
+    try {
+      const data = await fetchFFUserLeagues(ffEmail);
+      if (!data.leagues?.length)
+        throw new Error("No NFL leagues found for this email.");
+
+      localStorage.setItem("dynasty_os_platform", "fleaflicker");
+      localStorage.setItem("ff_email", ffEmail);
+
+      const normalizedLeagues = data.leagues
+        .filter((lg) => lg.sport === "NFL")
+        .map((lg) => ({
+          league_id: `ff_${lg.id}`,
+          name: lg.name,
+          total_rosters: null,
+          season: String(data.season || new Date().getFullYear()),
+          _platform: "fleaflicker",
+          _ff_league_id: lg.id,
+          _ff_team_id: lg.owned_team?.id,
+          _ff_team_name: lg.owned_team?.name,
+        }));
+
+      if (!normalizedLeagues.length)
+        throw new Error("No NFL leagues found for this email.");
+
+      setLeagues(normalizedLeagues);
+      setStep("leagues");
+    } catch (e) {
+      setError(
+        e.message ||
+          "Could not find leagues. Check your Fleaflicker email.",
+      );
+    }
+
+    setLoading(false);
+  }
+
   async function handleLeagueSelect(league) {
-    localStorage.setItem("sleeper_league", JSON.stringify(league));
-    await loadDashboard(league, username);
+    if (league._platform === "fleaflicker") {
+      localStorage.setItem("ff_league", JSON.stringify(league));
+      await loadFleaflickerDashboard(league);
+    } else {
+      localStorage.setItem("sleeper_league", JSON.stringify(league));
+      await loadDashboard(league, username);
+    }
   }
 
   function handleLogout() {
     localStorage.removeItem("sleeper_username");
     localStorage.removeItem("sleeper_league");
+    localStorage.removeItem("dynasty_os_platform");
+    localStorage.removeItem("ff_email");
+    localStorage.removeItem("ff_league");
     setUsername("");
+    setFfEmail("");
+    setPlatform("sleeper");
     setLeagues([]);
     setSelectedLeague(null);
     setAnalysis(null);
@@ -251,9 +420,17 @@ export default function App() {
         <InputScreen
           username={username}
           setUsername={setUsername}
-          onSubmit={handleUsernameSubmit}
+          onSubmit={
+            platform === "sleeper"
+              ? handleUsernameSubmit
+              : handleFleaflickerSubmit
+          }
           loading={loading}
           error={error}
+          platform={platform}
+          onSetPlatform={setPlatform}
+          ffEmail={ffEmail}
+          setFfEmail={setFfEmail}
         />
       </Layout>
     );
@@ -289,6 +466,7 @@ export default function App() {
           onToggleBars={toggleBars}
           onSwitchLeague={() => {
             localStorage.removeItem("sleeper_league");
+            localStorage.removeItem("ff_league");
             setStep("leagues");
           }}
           onLogout={handleLogout}
