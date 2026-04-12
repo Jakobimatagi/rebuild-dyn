@@ -599,7 +599,7 @@ export default function TradeTab({
         )}
       </div>
 
-      <div style={{ ...styles.card, borderColor: "rgba(0,245,160,0.2)" }}>
+      {/* <div style={{ ...styles.card, borderColor: "rgba(0,245,160,0.2)" }}>
         <div style={styles.sectionLabel}>Suggested Trade Paths</div>
         {tradeSuggestions.length ? (
           tradeSuggestions.map((suggestion, index) => (
@@ -727,7 +727,7 @@ export default function TradeTab({
             lacks easy surplus or the league is balanced.
           </div>
         )}
-      </div>
+      </div> */}
     </div>
   );
 }
