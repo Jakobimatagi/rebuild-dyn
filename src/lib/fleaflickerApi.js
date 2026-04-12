@@ -8,11 +8,26 @@ const FF_BASE_URL = import.meta.env.DEV
   ? "/fleaflicker"
   : "https://www.fleaflicker.com/api";
 
+/** Convert camelCase keys to snake_case (deep). Values are untouched. */
+function camelToSnakeKeys(obj) {
+  if (Array.isArray(obj)) return obj.map(camelToSnakeKeys);
+  if (obj !== null && typeof obj === "object" && obj.constructor === Object) {
+    return Object.fromEntries(
+      Object.entries(obj).map(([key, val]) => [
+        key.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`),
+        camelToSnakeKeys(val),
+      ]),
+    );
+  }
+  return obj;
+}
+
 async function fetchFF(endpoint, params = {}) {
   const query = new URLSearchParams({ sport: "NFL", ...params });
   const res = await fetch(`${FF_BASE_URL}/${endpoint}?${query}`);
   if (!res.ok) throw new Error(`Fleaflicker API error: ${res.status}`);
-  return res.json();
+  const json = await res.json();
+  return camelToSnakeKeys(json);
 }
 
 // ─── Public API Functions ─────────────────────────────────
@@ -136,6 +151,7 @@ function mapSlotToSleeperPos(pos) {
     )
       return "FLEX";
     if (elig.includes("RB") && elig.includes("WR")) return "FLEX";
+    if (elig.includes("K") && elig.includes("D/ST")) return "K";
   }
 
   const map = {
@@ -159,9 +175,11 @@ function buildSleeperRosterPositions(rules) {
 
   for (const pos of rules.roster_positions || []) {
     if (pos.group === "START") {
-      const sp = mapSlotToSleeperPos(pos);
-      const count = pos.start || pos.min || 1;
-      for (let i = 0; i < count; i++) positions.push(sp);
+      const count = pos.start || 0;
+      if (count > 0) {
+        const sp = mapSlotToSleeperPos(pos);
+        for (let i = 0; i < count; i++) positions.push(sp);
+      }
     }
   }
 
@@ -176,15 +194,12 @@ function buildSleeperScoringSettings(rules) {
   for (const group of rules.groups || []) {
     for (const rule of group.scoring_rules || []) {
       const abbr = (rule.category?.abbreviation || "").toLowerCase();
-      const pts = rule.points?.value || 0;
-      const per = rule.for_every || 1;
+      const pts = rule.points_per?.value || 0;
 
       if (abbr === "rec") s.rec = pts;
-      else if (abbr === "rec yd" || abbr === "rec yds") s.rec_yd = pts / per;
-      else if (abbr === "rush yd" || abbr === "rush yds")
-        s.rush_yd = pts / per;
-      else if (abbr === "pass yd" || abbr === "pass yds")
-        s.pass_yd = pts / per;
+      else if (abbr === "rec yd" || abbr === "rec yds") s.rec_yd = pts;
+      else if (abbr === "rush yd" || abbr === "rush yds") s.rush_yd = pts;
+      else if (abbr === "pass yd" || abbr === "pass yds") s.pass_yd = pts;
       else if (abbr === "rec td") s.rec_td = pts;
       else if (abbr === "rush td") s.rush_td = pts;
       else if (abbr === "pass td") s.pass_td = pts;
@@ -427,6 +442,7 @@ export async function loadFleaflickerLeague(leagueId, teamId, sleeperPlayers) {
       fpts: Math.round((myTeam.points_for?.value || 0) * 100) / 100,
       fpts_against:
         Math.round((myTeam.points_against?.value || 0) * 100) / 100,
+      team_name: myTeam.name || "",
     },
   };
 
@@ -455,6 +471,7 @@ export async function loadFleaflickerLeague(leagueId, teamId, sleeperPlayers) {
         fpts: Math.round((t?.points_for?.value || 0) * 100) / 100,
         fpts_against:
           Math.round((t?.points_against?.value || 0) * 100) / 100,
+        team_name: t?.name || "",
       },
     };
   });

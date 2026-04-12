@@ -358,11 +358,10 @@ export default function App() {
       localStorage.setItem("ff_email", ffEmail);
 
       const normalizedLeagues = data.leagues
-        .filter((lg) => lg.sport === "NFL")
         .map((lg) => ({
           league_id: `ff_${lg.id}`,
           name: lg.name,
-          total_rosters: null,
+          total_rosters: lg.size || null,
           season: String(data.season || new Date().getFullYear()),
           _platform: "fleaflicker",
           _ff_league_id: lg.id,
