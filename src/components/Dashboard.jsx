@@ -8,6 +8,7 @@ import RosterTab from "./dashboard/RosterTab";
 import ScoreWeightsModal from "./dashboard/ScoreWeightsModal";
 import TradeTab from "./dashboard/TradeTab";
 import LeagueActivityTab from "./dashboard/LeagueActivityTab";
+import DocumentationTab from "./dashboard/DocumentationTab";
 
 export default function Dashboard({
   analysis,
@@ -133,17 +134,25 @@ export default function Dashboard({
           marginBottom: 32,
         }}
       >
-        {["overview", "roster", "picks", "trades", "league", "activity"].map((tab) => (
+        {[
+          { key: "overview", label: "overview" },
+          { key: "roster", label: "roster" },
+          { key: "picks", label: "picks" },
+          { key: "trades", label: "trades" },
+          { key: "league", label: "league" },
+          { key: "activity", label: "activity" },
+          { key: "docs", label: "Calculation Documentation" },
+        ].map((tab) => (
           <button
-            key={tab}
+            key={tab.key}
             className="dyn-tab"
             role="tab"
-            aria-selected={activeTab === tab}
-            aria-label={`${tab} tab`}
-            style={styles.tab(activeTab === tab)}
-            onClick={() => setActiveTab(tab)}
+            aria-selected={activeTab === tab.key}
+            aria-label={`${tab.label} tab`}
+            style={styles.tab(activeTab === tab.key)}
+            onClick={() => setActiveTab(tab.key)}
           >
-            {tab}
+            {tab.label}
           </button>
         ))}
       </div>
@@ -214,6 +223,8 @@ export default function Dashboard({
           myTeamLabel={analysis.myTeamLabel}
         />
       )}
+
+      {activeTab === "docs" && <DocumentationTab />}
     </>
   );
 }
