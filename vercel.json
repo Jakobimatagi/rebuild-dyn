@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/api/fleaflicker", "destination": "/api/fleaflicker" }
+  ]
+}
