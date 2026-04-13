@@ -6,7 +6,7 @@
 
 const FF_BASE_URL = import.meta.env.DEV
   ? "/fleaflicker"
-  : "https://www.fleaflicker.com/api";
+  : "/api/fleaflicker";
 
 /** Convert camelCase keys to snake_case (deep). Values are untouched. */
 function camelToSnakeKeys(obj) {
@@ -23,8 +23,11 @@ function camelToSnakeKeys(obj) {
 }
 
 async function fetchFF(endpoint, params = {}) {
-  const query = new URLSearchParams({ sport: "NFL", ...params });
-  const res = await fetch(`${FF_BASE_URL}/${endpoint}?${query}`);
+  const query = new URLSearchParams(params);
+  const url = import.meta.env.DEV
+    ? `${FF_BASE_URL}/${endpoint}?sport=NFL&${query}`
+    : `${FF_BASE_URL}?path=${endpoint}&${query}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`Fleaflicker API error: ${res.status}`);
   const json = await res.json();
   return camelToSnakeKeys(json);
