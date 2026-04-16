@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { POSITION_PRIORITY } from "../constants";
 import { styles } from "../styles";
 import GradeKeyModal from "./dashboard/GradeKeyModal";
@@ -31,6 +32,8 @@ export default function Dashboard({
   recalculating,
 }) {
   const strategyPlannerEnabled = import.meta.env.VITE_ENABLE_STRATEGY_PLANNER === "true";
+  const [strategyUnlocked, setStrategyUnlocked] = useState(false);
+  const [unlockInput, setUnlockInput] = useState("");
 
   const {
     byPos,
@@ -216,7 +219,7 @@ export default function Dashboard({
         />
       )}
 
-      {activeTab === "strategy" && !strategyPlannerEnabled && (
+      {activeTab === "strategy" && !strategyPlannerEnabled && !strategyUnlocked && (
         <div style={{
           display: "flex",
           flexDirection: "column",
@@ -233,10 +236,45 @@ export default function Dashboard({
             rookie strategy, risk flags, and a full roadmap — powered by blended FantasyCalc
             + RosterAudit valuations. Stay tuned.
           </p>
+          <div style={{ marginTop: 24, display: "flex", gap: 8 }}>
+            <input
+              type="password"
+              placeholder="Enter access code"
+              value={unlockInput}
+              onChange={(e) => setUnlockInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && unlockInput === "LetMeIn!") setStrategyUnlocked(true);
+              }}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 6,
+                border: "1px solid #334155",
+                background: "#1e2230",
+                color: "#fff",
+                fontSize: 14,
+                outline: "none",
+              }}
+            />
+            <button
+              onClick={() => { if (unlockInput === "LetMeIn!") setStrategyUnlocked(true); }}
+              style={{
+                padding: "8px 16px",
+                borderRadius: 6,
+                border: "none",
+                background: "#00f5a0",
+                color: "#141722",
+                fontWeight: 700,
+                fontSize: 14,
+                cursor: "pointer",
+              }}
+            >
+              Unlock
+            </button>
+          </div>
         </div>
       )}
 
-      {activeTab === "strategy" && strategyPlannerEnabled && (
+      {activeTab === "strategy" && (strategyPlannerEnabled || strategyUnlocked) && (
         <StrategyPlannerTab
           analysis={analysis}
           selectedLeague={selectedLeague}
