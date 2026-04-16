@@ -365,11 +365,23 @@ export function trendComponent(s24, s23) {
   return Math.min(100, Math.max(0, 60 + pct * 100));
 }
 
-export function situComponent(depthOrder, team) {
+export function situComponent(depthOrder, team, position) {
   if (!team || team === "FA") return 20;
   if (depthOrder === 1) return 90;
-  if (depthOrder === 2) return 55;
-  return 30;
+
+  // Position-specific falloff:
+  // WR: 2-WR sets are standard, WR2 still gets heavy target share
+  // RB: RB2 gets meaningful carries but clear step down from bell-cow
+  // TE: TE2 rarely sees the field in most offenses
+  // QB: QB2 only matters in superflex; on-field value near zero
+  const falloff = {
+    WR: { 2: 82, 3: 55, 4: 30 },
+    RB: { 2: 68, 3: 35 },
+    TE: { 2: 45, 3: 25 },
+    QB: { 2: 40 },
+  };
+  const posMap = falloff[position] || falloff.RB;
+  return posMap[depthOrder] ?? 20;
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +399,7 @@ export function calcScore(
   const age = ageComponent(player.position, player.age, ageCurves);
   const avail = availComponent([s24, s23], player.injuryStatus);
   const trend = trendComponent(s24, s23);
-  const situ = situComponent(player.depthOrder, player.team);
+  const situ = situComponent(player.depthOrder, player.team, player.position);
   const w = normalizeScoringWeights(scoringWeights);
 
   const dc = draftCapitalScore(player.draftRound, player.draftSlot);

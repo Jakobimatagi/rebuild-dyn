@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { POSITION_PRIORITY } from "../constants";
 import { styles } from "../styles";
 import GradeKeyModal from "./dashboard/GradeKeyModal";
@@ -9,6 +10,8 @@ import ScoreWeightsModal from "./dashboard/ScoreWeightsModal";
 import TradeTab from "./dashboard/TradeTab";
 import LeagueActivityTab from "./dashboard/LeagueActivityTab";
 import DocumentationTab from "./dashboard/DocumentationTab";
+import RankingsTab from "./dashboard/RankingsTab";
+import StrategyPlannerTab from "./dashboard/StrategyPlannerTab";
 
 export default function Dashboard({
   analysis,
@@ -28,6 +31,9 @@ export default function Dashboard({
   onConfirmScoreWeights,
   recalculating,
 }) {
+  const [strategyUnlocked, setStrategyUnlocked] = useState(false);
+  const [unlockCode, setUnlockCode] = useState("");
+
   const {
     byPos,
     sells,
@@ -139,6 +145,8 @@ export default function Dashboard({
           { key: "roster", label: "roster" },
           { key: "picks", label: "picks" },
           { key: "trades", label: "trades" },
+          { key: "strategy", label: "strategy" },
+          { key: "rankings", label: "rankings" },
           { key: "league", label: "league" },
           { key: "activity", label: "activity" },
           { key: "docs", label: "Calculation Documentation" },
@@ -208,6 +216,71 @@ export default function Dashboard({
           leagueTeams={analysis.leagueTeams}
           teamPhase={analysis.teamPhase}
         />
+      )}
+
+      {activeTab === "strategy" && !strategyUnlocked && (
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: 340,
+          padding: "48px 24px",
+          textAlign: "center",
+        }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>🧪</div>
+          <h2 style={{ color: "#fff", margin: "0 0 8px", fontSize: 22 }}>Strategy Planner — Coming Soon</h2>
+          <p style={{ color: "#94a3b8", fontSize: 15, maxWidth: 420, lineHeight: 1.5 }}>
+            Personalized rebuild, retool, and contender playbooks with trade packages,
+            rookie strategy, risk flags, and a full roadmap — powered by blended FantasyCalc
+            + RosterAudit valuations. Stay tuned.
+          </p>
+          <div style={{ marginTop: 24, display: "flex", gap: 8 }}>
+            <input
+              type="password"
+              placeholder="Access code"
+              value={unlockCode}
+              onChange={(e) => setUnlockCode(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && unlockCode === "LetMeIn!") setStrategyUnlocked(true);
+              }}
+              style={{
+                background: "#1e293b",
+                border: "1px solid #334155",
+                borderRadius: 6,
+                color: "#fff",
+                padding: "8px 12px",
+                fontSize: 14,
+                outline: "none",
+              }}
+            />
+            <button
+              onClick={() => { if (unlockCode === "LetMeIn!") setStrategyUnlocked(true); }}
+              style={{
+                background: "#334155",
+                border: "none",
+                borderRadius: 6,
+                color: "#94a3b8",
+                padding: "8px 16px",
+                fontSize: 14,
+                cursor: "pointer",
+              }}
+            >
+              Unlock
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "strategy" && strategyUnlocked && (
+        <StrategyPlannerTab
+          analysis={analysis}
+          selectedLeague={selectedLeague}
+        />
+      )}
+
+      {activeTab === "rankings" && (
+        <RankingsTab rosterAuditSource={analysis.rosterAuditSource} />
       )}
 
       {activeTab === "league" && (

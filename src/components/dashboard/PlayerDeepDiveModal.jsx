@@ -116,11 +116,21 @@ function trendExplanation(score, ppg, pctileLast, pctilePrev) {
   return `Percentile rank ${dir} by ${mag} points year-over-year (${pctilePrev ?? "—"}th → ${pctileLast ?? "—"}th pctile). ${Math.abs(delta) >= 15 ? "Significant movement." : Math.abs(delta) >= 8 ? "Moderate movement." : "Stable production."}`;
 }
 
-function situExplanation(score, depthOrder, team) {
+function situExplanation(score, depthOrder, team, position) {
   if (!team || team === "FA") return "Free agent — no guaranteed role. Opportunity highly uncertain.";
   if (depthOrder === 1) return "Depth chart starter. Full opportunity priced in (+90 situation score).";
-  if (depthOrder === 2) return "Listed as depth chart #2. Partial opportunity, role dependent on starter health.";
-  return "Listed as #3 or lower on depth chart. Minimal expected opportunity this season.";
+  if (depthOrder === 2) {
+    if (position === "WR") return "WR2 — still a core route-runner in 2-WR sets. Strong target share expected.";
+    if (position === "RB") return "RB2 — meaningful carries in committee or change-of-pace role, but clear step down from the lead back.";
+    if (position === "TE") return "TE2 — rarely on the field in most offensive schemes. Very limited opportunity.";
+    if (position === "QB") return "QB2 — backup with near-zero on-field value outside of superflex formats.";
+  }
+  if (depthOrder === 3) {
+    if (position === "WR") return "WR3 — rotational role in 3-WR sets. Opportunity is matchup-dependent.";
+    if (position === "RB") return "RB3 — limited to special teams or emergency carries. Minimal fantasy value.";
+    return "Listed as #3 or lower. Minimal expected opportunity this season.";
+  }
+  return "Listed as #4 or deeper on depth chart. Negligible expected opportunity.";
 }
 
 // ---------------------------------------------------------------------------
@@ -640,7 +650,7 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, onClose })
             label: "Situation",
             color: "#c084fc",
             value: components.situ,
-            explanation: situExplanation(components.situ, player.depthOrder, team),
+            explanation: situExplanation(components.situ, player.depthOrder, team, player.position),
           },
         ].map(({ label, color, value, explanation }) => (
           <div

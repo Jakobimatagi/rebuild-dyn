@@ -156,3 +156,144 @@ export function estimatePickValue(pick, leagueContext, tradeMarket = null) {
   const marketMultiplier = tradeMarket?.pickRoundMultipliers?.[pick.round] || 1;
   return Math.max(8, Math.round(value * marketMultiplier));
 }
+
+// ---------------------------------------------------------------------------
+// Phase-aware pick valuation (used by strategy planner)
+// ---------------------------------------------------------------------------
+// estimatePickValue() above hardcodes the slot to 16/24 because it doesn't
+// know whose pick it is. The strategy planner DOES know — a contender's 1st
+// projects late, a rebuilder's 1st projects early. These two valuers respect
+// that. valueOfPickPhase returns score-scale (8-95). pickFcValue returns
+// dollar-scale calibrated to the dynasty market.
+
+function phaseSlot(round, ownerPhase) {
+  if (round !== 1) return 24;
+  if (ownerPhase === "rebuild") return 6;
+  if (ownerPhase === "retool") return 14;
+  if (ownerPhase === "contender") return 24;
+  return 16;
+}
+
+export function pickSlotLabel(round, ownerPhase) {
+  if (round !== 1) return null;
+  if (ownerPhase === "rebuild") return "early";
+  if (ownerPhase === "retool") return "mid";
+  if (ownerPhase === "contender") return "late";
+  return null;
+}
+
+export function valueOfPickPhase(pick, ownerPhase, leagueContext) {
+  if (!pick?.round) return 12;
+  const currentYear = new Date().getFullYear();
+  const yearsOut = Math.max(
+    0,
+    Number(pick.season || currentYear) - currentYear,
+  );
+  const slot = phaseSlot(pick.round, ownerPhase);
+  let value = draftCapitalScore(pick.round, slot) || 12;
+  if (pick.round === 1 && leagueContext?.isSuperflex) value += 8;
+  if (pick.round === 1 && leagueContext?.tePremium) value += 2;
+  if (yearsOut === 1) value -= 4;
+  if (yearsOut >= 2) value -= 10;
+  return Math.max(8, Math.round(value));
+}
+
+// Calibrated FC-DOLLAR equivalent for picks. The score-scale valuer
+// systematically undervalues picks relative to FantasyCalc reality —
+// a late 1st in the dynasty market is ~$3500, but in score-scale it's ~78,
+// which makes WR3 vets look like fair trade for 1sts when they're not.
+// This table is the dynasty-market truth.
+//
+// NOTE: this is the canonical fallback. If RosterAudit `/picks` data is
+// available in `pickValueOverrides`, those values take precedence — they're
+// market-calibrated rather than estimated.
+export function pickFcValue(
+  pick,
+  ownerPhase,
+  leagueContext,
+  pickValueOverrides = null,
+) {
+  if (!pick?.round) return 100;
+  const currentYear = new Date().getFullYear();
+  const yearsOut = Math.max(
+    0,
+    Number(pick.season || currentYear) - currentYear,
+  );
+  const round = pick.round;
+  const slot = phaseSlot(round, ownerPhase);
+
+  // RosterAudit override path — supports both RA native keys
+  // (`${season}-${round}-${slotLabel}`, year discount already baked in)
+  // and legacy keys (`${round}-${slot}` or `${round}`).
+  if (pickValueOverrides) {
+    const season = Number(pick.season || currentYear);
+    const slotLabel = ownerPhase === "rebuild" ? "early"
+      : ownerPhase === "contender" ? "late"
+      : "mid";
+    // Try RA native key first (already year-discounted)
+    const raKey = `${season}-${round}-${slotLabel}`;
+    const raVal = pickValueOverrides[raKey];
+    if (raVal != null) {
+      // RA already applies year discount and format awareness —
+      // only adjust for TE premium (which RA doesn't track).
+      let v = Number(raVal);
+      if (round === 1 && leagueContext?.tePremium) v *= 1.05;
+      return Math.max(50, Math.round(v));
+    }
+    // Legacy fallback: numeric-slot key
+    const slotKey = `${round}-${slot}`;
+    const roundKey = `${round}`;
+    const override =
+      pickValueOverrides[slotKey] ?? pickValueOverrides[roundKey] ?? null;
+    if (override != null) {
+      let v = Number(override);
+      if (yearsOut === 1) v *= 0.85;
+      else if (yearsOut === 2) v *= 0.7;
+      else if (yearsOut >= 3) v *= 0.55;
+      if (round === 1 && leagueContext?.isSuperflex) v *= 1.18;
+      if (round === 1 && leagueContext?.tePremium) v *= 1.05;
+      return Math.max(50, Math.round(v));
+    }
+  }
+
+  let base;
+  if (round === 1) {
+    if (slot <= 6) base = 5800;
+    else if (slot <= 10) base = 5000;
+    else if (slot <= 14) base = 4400;
+    else if (slot <= 20) base = 3700;
+    else base = 3000;
+  } else if (round === 2) base = 1200;
+  else if (round === 3) base = 500;
+  else if (round === 4) base = 200;
+  else base = 100;
+
+  if (yearsOut === 1) base *= 0.85;
+  else if (yearsOut === 2) base *= 0.7;
+  else if (yearsOut >= 3) base *= 0.55;
+
+  if (round === 1 && leagueContext?.isSuperflex) base *= 1.18;
+  if (round === 1 && leagueContext?.tePremium) base *= 1.05;
+
+  return Math.max(50, Math.round(base));
+}
+
+// ---------------------------------------------------------------------------
+// Trend scoring delta — reusable across all planner sections.
+// ---------------------------------------------------------------------------
+// `fantasyCalcTrend` is the raw 30-day $ change in FC value. We normalize
+// to a percent of the player's current FC value so a $200 move on a $400
+// JAG carries more rerank weight than a $200 move on a $4000 star.
+// Capped at ±15 to keep trend modest vs path-specific fit scoring.
+//
+// mode = "buy":  trending UP target = harder to extract (negative)
+// mode = "sell": trending DOWN player = sell urgency (positive)
+export function trendDelta(player, mode = "buy") {
+  const trend = Number(player?.fantasyCalcTrend || 0);
+  const fc = Number(player?.fantasyCalcValue || 0);
+  if (!trend || fc <= 0) return 0;
+  const pct = trend / fc; // -0.5 to +0.5 typical extremes
+  const clamped = Math.max(-0.5, Math.min(0.5, pct));
+  const sign = mode === "buy" ? -1 : 1;
+  return sign * clamped * 30; // ±15 max
+}
