@@ -67,7 +67,7 @@ export function generateTradeTargets(analysis, path) {
   // Split into tiers by relative position. Top 3 → tier1, next 4 → tier2, rest → tier3.
   const tier1 = scored.slice(0, 3);
   const tier2 = scored.slice(3, 7);
-  const tier3 = scored.slice(7, 12);
+  const tier3 = scored.slice(7);
 
   return { tier1, tier2, tier3, totalConsidered: base.length, totalKept: scored.length };
 }

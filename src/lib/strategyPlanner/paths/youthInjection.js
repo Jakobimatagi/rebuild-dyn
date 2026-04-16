@@ -43,17 +43,17 @@ export const youthInjection = {
       p.archetype === "Mainstay" ||
       p.archetype === "Upside Shot" ||
       p.archetype === "Foundational" ||
-      (p.prediction?.breakoutProb || 0) >= 0.3
+      (p.prediction?.breakoutProb || 0) >= 30
     );
   },
   targetRerank: (sug) => {
     const p = sug.targetPlayer;
-    const breakout = (p.prediction?.breakoutProb || 0) * 25;
+    const breakout = (p.prediction?.breakoutProb || 0) * 0.25;
     const roleBonus = (p.depthOrder ?? 9) <= 2 ? 6 : 0;
     return (sug.fitScore || 0) + breakout + roleBonus;
   },
   targetReason: (p) =>
-    `Age ${p.age}, locked role, ${((p.prediction?.breakoutProb || 0) * 100).toFixed(0)}% breakout probability`,
+    `Age ${p.age}, locked role, ${(p.prediction?.breakoutProb || 0).toFixed(0)}% breakout probability`,
 
   rookieStrategy: {
     perYear: (year, inventory, picks) => ({

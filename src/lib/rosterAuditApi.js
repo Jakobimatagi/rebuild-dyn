@@ -1,7 +1,6 @@
 /**
  * rosterAuditApi.js
  * Fetches dynasty player values and pick values from RosterAudit.
- * 24-hour localStorage cache, same pattern as fantasyCalcApi.js.
  */
 
 const RA_BASE_URL = import.meta.env.DEV
