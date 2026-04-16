@@ -15,6 +15,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/fleaflicker/, ''),
       },
+      '/rosteraudit': {
+        target: 'https://rosteraudit.com/wp-json/ra/v1',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/rosteraudit/, ''),
+      },
     },
   },
 })

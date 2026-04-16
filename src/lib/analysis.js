@@ -1,5 +1,6 @@
 import { DEFAULT_SCORING_WEIGHTS, buildBenchmarks } from './scoringEngine';
 import { buildFantasyCalcContext } from './fantasyCalcBlend';
+import { buildRosterAuditContext } from './rosterAuditApi';
 import { buildRosterSnapshot, classifyLeagueTeams } from './rosterBuilder';
 import { getLeagueRulesContext } from './marketValue';
 import { buildTradeMarket, buildTradeSuggestions, evaluateTrade } from './tradeEngine';
@@ -37,6 +38,8 @@ export function buildRosterAnalysis(
     const now = new Date();
     return now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
   })(),
+  rosterAuditValues = [],
+  rosterAuditPicks = null,
 ) {
   const currentYear = new Date().getFullYear();
   const futureSeasons = [currentYear, currentYear + 1, currentYear + 2];
@@ -66,6 +69,12 @@ export function buildRosterAnalysis(
     lastSeasonYear,
   );
   const fantasyCalcContext = buildFantasyCalcContext(fantasyCalcValues);
+  const raFormat = leagueContext.isSuperflex ? 'sf' : '1qb';
+  const rosterAuditContext = buildRosterAuditContext(
+    rosterAuditValues,
+    rosterAuditPicks,
+    raFormat,
+  );
 
   // Build prediction context from all available seasons (recent 3 + all historical).
   // This builds empirical age curves and the historical snapshot DB for comp matching.
@@ -100,6 +109,7 @@ export function buildRosterAnalysis(
       futureSeasons,
       lastSeasonYear,
       predictionContext,
+      rosterAuditContext,
     ),
   );
 
@@ -138,6 +148,14 @@ export function buildRosterAnalysis(
       totalPlayers: fantasyCalcContext.totalPlayers,
       attribution: 'FantasyCalc',
       url: 'https://www.fantasycalc.com/',
+    },
+    rosterAuditSource: {
+      enabled: rosterAuditContext.bySleeperId.size > 0,
+      totalPlayers: rosterAuditContext.bySleeperId.size,
+      pickValues: rosterAuditContext.pickValues,
+      rankings: rosterAuditValues,
+      attribution: 'RosterAudit',
+      url: 'https://rosteraudit.com/',
     },
     scoringWeights,
     tradeMarket,

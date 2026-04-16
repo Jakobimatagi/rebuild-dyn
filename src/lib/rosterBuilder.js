@@ -347,6 +347,7 @@ export function buildRosterSnapshot(
   futureSeasons,
   lastSeasonYear,
   predictionContext = null,
+  rosterAuditContext = null,
 ) {
   const playerIds = roster.players || [];
   const picks = buildRosterPicks(
@@ -379,6 +380,8 @@ export function buildRosterSnapshot(
         rawDraftSlot != null ? Number(rawDraftSlot) || null : null;
       const draftYear = p.draft_year ?? p.metadata?.draft_year ?? null;
 
+      const depthOrder = p.depth_chart_order || 2;
+
       const playerData = {
         position: pos,
         age,
@@ -387,7 +390,7 @@ export function buildRosterSnapshot(
         draftSlot,
         team: p.team || "FA",
         injuryStatus: p.injury_status || null,
-        depthOrder: p.depth_chart_order || 2,
+        depthOrder,
       };
 
       const pctiles = playerPctiles(
@@ -442,6 +445,7 @@ export function buildRosterSnapshot(
         ppg,
         gp24,
         lastSeasonYear,
+        depthOrder,
         peakPctile: pctiles.peak,
         currentPctile: pctiles.current,
         pctileLast: pctiles.pLast,
@@ -449,6 +453,18 @@ export function buildRosterSnapshot(
         pctileOlder: pctiles.pOlder,
         draftTier: draftTierLabel(draftRound, draftSlot),
       };
+
+      // RosterAudit enrichment (before archetype so RA signals are available)
+      const raEntry = rosterAuditContext?.bySleeperId?.get(String(id));
+      if (raEntry) {
+        enrichedPlayer.rosterAuditValue = raEntry.value;
+        enrichedPlayer.rosterAuditPosRank = raEntry.rankPos;
+        enrichedPlayer.rosterAuditTrend = raEntry.trend30d;
+        enrichedPlayer.rosterAuditTier = raEntry.tier;
+        enrichedPlayer.rosterAuditBuyLow = raEntry.buyLow;
+        enrichedPlayer.rosterAuditSellHigh = raEntry.sellHigh;
+        enrichedPlayer.rosterAuditBreakout = raEntry.breakout;
+      }
 
       enrichedPlayer.archetype = getArchetype(enrichedPlayer);
       enrichedPlayer.tags = getArchetypeTags(enrichedPlayer);
@@ -463,6 +479,11 @@ export function buildRosterSnapshot(
       enrichedPlayer.fantasyCalcValue = market.fantasyCalcValue;
       enrichedPlayer.fantasyCalcRank = market.fantasyCalcRank;
       enrichedPlayer.fantasyCalcTrend = market.fantasyCalcTrend;
+
+      const fc = Number(enrichedPlayer.fantasyCalcValue || 0);
+      const ra = Number(enrichedPlayer.rosterAuditValue || 0);
+      enrichedPlayer.dynastyMarketValue =
+        fc > 0 && ra > 0 ? (fc + ra) / 2 : fc > 0 ? fc : ra;
 
       if (predictionContext) {
         enrichedPlayer.prediction = buildPlayerPrediction(enrichedPlayer, predictionContext);

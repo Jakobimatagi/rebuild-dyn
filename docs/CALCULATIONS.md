@@ -9,6 +9,7 @@
   - [Trend Component](#trend-component)
   - [Situation Component](#situation-component)
 - [FantasyCalc Market Blending](#fantasycalc-market-blending)
+- [RosterAudit Market Blending](#rosteraudit-market-blending)
 - [Verdicts & Grades](#verdicts--grades)
 - [Player Archetypes](#player-archetypes)
 - [Market Value (Trade Currency)](#market-value-trade-currency)
@@ -17,6 +18,7 @@
 - [Trade Engine](#trade-engine)
 - [Team Phase Classification](#team-phase-classification)
 - [League Activity Score](#league-activity-score)
+- [Data Sources & Attribution](#data-sources--attribution)
 
 ---
 
@@ -195,6 +197,55 @@ FC_weight = clamp(0.5 + certainty × 0.15 − deviation × 0.35, 0.20, 0.65)
 
 ---
 
+## RosterAudit Market Blending
+
+In addition to FantasyCalc, the system pulls dynasty player rankings and draft pick values from [RosterAudit](https://rosteraudit.com) — an independent dynasty valuation source. This gives us a second market opinion for cross-referencing.
+
+### What We Pull from RosterAudit
+
+| Field             | Description                                          |
+| ----------------- | ---------------------------------------------------- |
+| **Value**         | RA's dynasty dollar value for the player             |
+| **Position Rank** | RA's positional ranking (e.g., WR12)                 |
+| **Overall Rank**  | RA's overall dynasty ranking                         |
+| **Tier**          | RA's tier classification (1 = elite, higher = lower) |
+| **30-Day Trend**  | Value change over 30 days (positive = rising)        |
+| **7-Day Trend**   | Value change over 7 days                             |
+| **Buy Low**       | RA flags this player as a buy-low candidate          |
+| **Sell High**     | RA flags this player as a sell-high candidate         |
+| **Breakout**      | RA flags this player as a breakout candidate          |
+| **Pick Values**   | Per-round, per-slot dynasty pick values (SF & 1QB)   |
+
+### Blended Dynasty Market Value
+
+When both FantasyCalc (FC) and RosterAudit (RA) have a value for a player, the system blends them into a single **Dynasty Market Value** used across the trade engine and strategy planner:
+
+```
+Dynasty Market Value = (FC_Value + RA_Value) / 2
+```
+
+If only one source has a value, that source is used alone. This averaging smooths out source-specific biases and gives more stable trade valuations.
+
+### RA Signals in Archetype Classification
+
+RosterAudit tier and positional rank feed into archetype logic as tiebreakers:
+
+- **RA Elite** = tier ≤ 2 OR positional rank ≤ 5
+- For undrafted rookies without Sleeper draft metadata: RA Elite counts alongside FC Elite for **Foundational** classification
+- For young/prime starters with solid (but not high) production: RA Elite promotes **Mainstay → Foundational**
+
+### RA Signals in Player Tags
+
+| RA Signal       | Tag Added             | Condition                     |
+| --------------- | --------------------- | ----------------------------- |
+| Buy Low flag    | **Buy Low**           | RA marks player as buy-low    |
+| Sell High flag  | **Sell High**         | RA marks player as sell-high  |
+| Breakout flag   | **Breakout Candidate**| RA marks player as breakout   |
+| 30-day trend    | **Ascending**         | RA trend ≥ +5 (supplements internal trend score) |
+| 30-day trend    | **Declining**         | RA trend ≤ −5 (supplements internal trend score) |
+
+---
+
 ## Verdicts & Grades
 
 ### Player Verdicts
@@ -235,7 +286,7 @@ Every player is classified into one of 11 tiers based on their age, production, 
 | Archetype                     | Description                                          |
 | ----------------------------- | ---------------------------------------------------- |
 | **Cornerstone**               | Proven elite + starter + not old                     |
-| **Foundational**              | Young/prime + starter + high production OR elite draft pick with role |
+| **Foundational**              | Young/prime + starter + high production, elite draft pick with role, OR RA elite consensus with solid production |
 | **Mainstay**                  | Young/prime + moderately productive                  |
 | **Upside Shot**               | Young + has a role + hasn't broken out yet            |
 | **Short Term League Winner**  | Old but proven elite                                 |
@@ -251,7 +302,9 @@ Every player is classified into one of 11 tiers based on their age, production, 
 Players also receive diagnostic tags:
 
 - **Undervalued / Overvalued:** Internal vs blended score gap ≥ 8
-- **Ascending / Declining:** Trend score ≥ 60 or ≤ 40
+- **Ascending / Declining:** Trend score ≥ 60 or ≤ 40 (also triggered by RosterAudit 30-day trend ≥ +5 or ≤ −5)
+- **Buy Low / Sell High:** RosterAudit consensus flags
+- **Breakout Candidate:** RosterAudit breakout flag
 - **Fragile Role:** Situation score < 55
 - **Injury Risk:** Availability score < 60
 - **Volatile Profile:** Peak percentile − current percentile ≥ 35
@@ -587,3 +640,23 @@ Each team also gets an individual activity score:
 **Trade activity** blends absolute rate (vs 6/season benchmark) and relative rate (vs league average), 50/50.
 
 **Consistency** uses the Herfindahl-Hirschman Index (HHI) to measure concentration — a league where all trades happen in one week scores low; evenly spread trades score high.
+
+---
+
+## Data Sources & Attribution
+
+This tool would not be possible without the following external data sources:
+
+### [FantasyCalc](https://fantasycalc.com)
+
+Dynasty trade values, player rankings, and 30-day trend data. FantasyCalc aggregates real user trade activity to produce consensus dynasty market values — providing the market-side signal that balances our internal scoring model. Used for market blending, trade valuations, and pick calibration.
+
+### [RosterAudit](https://rosteraudit.com)
+
+Independent dynasty player rankings, tier classifications, pick values, and buy-low/sell-high/breakout flags. RosterAudit provides a second expert-driven valuation lens that cross-references FantasyCalc's crowd-sourced values. Used for blended dynasty market values, archetype tiebreakers, player tags, and the Rankings tab.
+
+### [Sleeper](https://sleeper.com)
+
+League data, rosters, draft history, player metadata, depth charts, injury status, and transaction history. Sleeper is the platform that powers the dynasty leagues this tool analyzes.
+
+**All data from these sources is used with respect and appreciation. We do not claim ownership of any external data — we simply blend multiple expert opinions to help dynasty managers make better decisions.**

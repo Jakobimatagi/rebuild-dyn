@@ -43,6 +43,8 @@ export function getArchetype(player) {
     draftRound,
     draftSlot,
     fantasyCalcNormalized,
+    rosterAuditTier,
+    rosterAuditPosRank,
   } = player;
   const { age: ageScore, situ: situScore, trend: trendScore } = components;
 
@@ -66,6 +68,11 @@ export function getArchetype(player) {
   const hasRole = situScore >= 52;
   const isDeclining = trendScore < 40;
 
+  // RA consensus signals
+  const raTier = Number(rosterAuditTier) || 99;
+  const raPosRank = Number(rosterAuditPosRank) || 999;
+  const raElite = raTier <= 2 || raPosRank <= 5;
+
   // Elite draft picks (top-15 NFL, years 1-2) with any meaningful role are Foundational.
   // isStarter was too strict — rookies often sit at WR2/RB2 on depth charts even when
   // clearly the future focal point. Draft capital + role is enough for this tier.
@@ -80,7 +87,7 @@ export function getArchetype(player) {
   const isFCElite =
     fantasyCalcNormalized != null && fantasyCalcNormalized >= 80;
   if (draftRound == null && yearsExp <= 1) {
-    if (isFCElite && isStarter) return "Foundational";
+    if ((isFCElite || raElite) && isStarter) return "Foundational";
     if (isStarter) return "Upside Shot";
     if (hasRole) return "JAG - Developmental";
   }
@@ -88,6 +95,10 @@ export function getArchetype(player) {
   if (isProvenElite && isStarter && !isOld) return "Cornerstone";
   if (isOld && isProvenElite) return "Short Term League Winner";
   if ((isYoung || isPrime) && isStarter && isHighProd) return "Foundational";
+
+  // RA elite consensus can promote borderline Mainstay → Foundational
+  if ((isYoung || isPrime) && isStarter && isSolidProd && raElite) return "Foundational";
+
   if (isYoung && gp24 < 10 && currentPctile < 35) return "JAG - Developmental";
   if (isYoung && hasRole && !isHighProd) return "Upside Shot";
   if ((isVet || isOld) && isSolidProd && hasRole) return "Productive Vet";
@@ -109,6 +120,10 @@ export function getArchetypeTags(player) {
     yearsExp = 0,
     draftRound,
     gp24 = 0,
+    rosterAuditTrend,
+    rosterAuditBuyLow,
+    rosterAuditSellHigh,
+    rosterAuditBreakout,
   } = player;
 
   const ageScore = components.age ?? 0;
@@ -124,9 +139,10 @@ export function getArchetypeTags(player) {
   if (internalScore - score >= 8) tags.push("Undervalued");
   if (score - internalScore >= 8) tags.push("Overvalued");
 
-  // Trend tags
-  if (trendScore >= 60) tags.push("Ascending");
-  else if (trendScore <= 40) tags.push("Declining");
+  // Trend tags — combine internal trend component with RA 30-day trend
+  const raTrend = Number(rosterAuditTrend) || 0;
+  if (trendScore >= 60 || raTrend >= 5) tags.push("Ascending");
+  else if (trendScore <= 40 || raTrend <= -5) tags.push("Declining");
 
   // Risk tags
   if (situScore < 55) tags.push("Fragile Role");
@@ -139,6 +155,11 @@ export function getArchetypeTags(player) {
   if (ageScore >= 75 && yearsExp <= 2 && draftRound === 1 && current < 55)
     tags.push("Untapped Upside");
   if (peak > 0 && peak < 75 && yearsExp >= 4) tags.push("Capped Ceiling");
+
+  // RosterAudit consensus tags
+  if (rosterAuditBuyLow) tags.push("Buy Low");
+  if (rosterAuditSellHigh) tags.push("Sell High");
+  if (rosterAuditBreakout) tags.push("Breakout Candidate");
 
   return tags;
 }
