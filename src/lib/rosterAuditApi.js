@@ -91,6 +91,16 @@ export function buildRosterAuditContext(raValues = [], raPicks = null, format = 
     });
   }
 
+  const allSortedValues = raValues
+    .map((e) => Number(e?.value || 0))
+    .filter((v) => v > 0)
+    .sort((a, b) => a - b);
+
+  const maxRankOverall = raValues.reduce(
+    (best, e) => Math.max(best, Number(e?.rank_overall || 0)),
+    0,
+  );
+
   // Build pick value lookup: keyed by `${season}-${round}-${slot}`
   // slot is "early"/"mid"/"late" — maps to our phaseSlot system
   const pickValues = {};
@@ -102,7 +112,7 @@ export function buildRosterAuditContext(raValues = [], raPicks = null, format = 
     }
   }
 
-  return { bySleeperId, pickValues };
+  return { bySleeperId, pickValues, allSortedValues, maxRankOverall: Math.max(1, maxRankOverall) };
 }
 
 // ---------------------------------------------------------------------------
