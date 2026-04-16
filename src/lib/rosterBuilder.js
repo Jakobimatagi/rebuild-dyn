@@ -412,16 +412,16 @@ export function buildRosterSnapshot(
       const ppg = s24?.gp > 0 ? ((s24.pts_ppr || 0) / s24.gp).toFixed(1) : null;
       const gp24 = s24?.gp || 0;
 
-      // Blend internal score with FC market data NOW so every downstream grade
-      // (verdict, archetype, room quality, trade value) uses the FC-informed score.
+      // Blend internal score with FC + RA market data NOW so every downstream grade
+      // (verdict, archetype, room quality, trade value) uses the community-informed score.
       const fantasyCalcEntry = fantasyCalcContext.bySleeperId.get(String(id));
-      const { score, fantasyCalcNormalized } = computeBlendedScore(
+      const raEntry = rosterAuditContext?.bySleeperId?.get(String(id));
+      const { score, fantasyCalcNormalized, rosterAuditNormalized } = computeBlendedScore(
         internalScore,
         fantasyCalcEntry,
         fantasyCalcContext,
-        gp24,
-        yearsExp,
-        scoringWeights,
+        raEntry,
+        rosterAuditContext,
       );
 
       const verdict = getVerdict(score);
@@ -431,6 +431,7 @@ export function buildRosterSnapshot(
         score,
         internalScore,
         fantasyCalcNormalized,
+        rosterAuditNormalized,
         components,
         verdict,
         name: `${p.first_name} ${p.last_name}`,
@@ -455,7 +456,6 @@ export function buildRosterSnapshot(
       };
 
       // RosterAudit enrichment (before archetype so RA signals are available)
-      const raEntry = rosterAuditContext?.bySleeperId?.get(String(id));
       if (raEntry) {
         enrichedPlayer.rosterAuditValue = raEntry.value;
         enrichedPlayer.rosterAuditPosRank = raEntry.rankPos;
@@ -482,8 +482,9 @@ export function buildRosterSnapshot(
 
       const fc = Number(enrichedPlayer.fantasyCalcValue || 0);
       const ra = Number(enrichedPlayer.rosterAuditValue || 0);
+      // FC carries more weight (larger community, more liquid market)
       enrichedPlayer.dynastyMarketValue =
-        fc > 0 && ra > 0 ? (fc + ra) / 2 : fc > 0 ? fc : ra;
+        fc > 0 && ra > 0 ? fc * 0.60 + ra * 0.40 : fc > 0 ? fc : ra;
 
       if (predictionContext) {
         enrichedPlayer.prediction = buildPlayerPrediction(enrichedPlayer, predictionContext);

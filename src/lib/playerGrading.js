@@ -135,9 +135,11 @@ export function getArchetypeTags(player) {
 
   const tags = [];
 
-  // Value tags
-  if (internalScore - score >= 8) tags.push("Undervalued");
-  if (score - internalScore >= 8) tags.push("Overvalued");
+  // Value tags — threshold of 12 (not 8) because the blended score now leans
+  // 55–75% on market values, so internal-vs-blended gaps are systematically
+  // larger. 12 keeps the signal rare enough to be meaningful.
+  if (internalScore - score >= 12) tags.push("Undervalued");
+  if (score - internalScore >= 12) tags.push("Overvalued");
 
   // Trend tags — combine internal trend component with RA 30-day trend
   const raTrend = Number(rosterAuditTrend) || 0;

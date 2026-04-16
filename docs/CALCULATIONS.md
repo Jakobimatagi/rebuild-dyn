@@ -8,8 +8,8 @@
   - [Availability Component](#availability-component)
   - [Trend Component](#trend-component)
   - [Situation Component](#situation-component)
-- [FantasyCalc Market Blending](#fantasycalc-market-blending)
-- [RosterAudit Market Blending](#rosteraudit-market-blending)
+- [Market-Weighted Score Blending](#market-weighted-score-blending)
+- [RosterAudit Data](#rosteraudit-data)
 - [Verdicts & Grades](#verdicts--grades)
 - [Player Archetypes](#player-archetypes)
 - [Market Value (Trade Currency)](#market-value-trade-currency)
@@ -155,53 +155,46 @@ Based on depth chart order:
 
 ---
 
-## FantasyCalc Market Blending
+## Market-Weighted Score Blending
 
-The internal dynasty score is blended with external market data from FantasyCalc to produce the final score:
+The final player score is a weighted blend of the internal dynasty score with two external market sources: **FantasyCalc** (crowd-sourced consensus) and **RosterAudit** (expert consensus). Community and expert consensus carries the majority of the weight — the internal model's role is to catch what the market is slow on (rookies, role changes, injury returns) rather than to be the primary authority.
+
+### Blend Weights
+
+The weighting depends on which sources have data for the player:
+
+| Sources Available | Internal | FantasyCalc | RosterAudit |
+| ----------------- | -------- | ----------- | ----------- |
+| **FC + RA** (most players)   | 20%      | 55%         | 25%         |
+| **FC only**                   | 25%      | 75%         | —           |
+| **RA only**                   | 40%      | —           | 60%         |
+| **Neither** (deep sleepers)   | 100%     | —           | —           |
+
+**Formula (both sources available):**
 
 ```
-Final Score = Internal × (1 − FC_weight) + FC_Normalized × FC_weight
+Final Score = Internal × 0.20 + FC_Normalized × 0.55 + RA_Normalized × 0.25
 ```
 
-### How FantasyCalc Values Are Normalized (0–100)
+FC carries more weight than RA because its trade-based crowd data reflects a larger, more liquid market. RA contributes expert tier signals and serves as a cross-check.
 
-Three signals are combined:
+### How Market Values Are Normalized (0–100)
+
+Both FC and RA use the same normalization formula, which produces a score on a 5–100 scale:
 
 | Signal            | Weight | Source                              |
 | ----------------- | ------ | ----------------------------------- |
 | Rank Score        | 55%    | Overall dynasty rank (inverted)     |
 | Value Percentile  | 45%    | Where the raw value sits among all  |
-| Trend Adjustment  | ±7%    | 30-day value trend (±1500 = ±7%)    |
+| Trend Adjustment  | ±12%   | 30-day value trend (±1000 = ±12%)  |
 
-### How Much Weight Does the Market Get?
-
-The FC weight ranges from **0.20 to 0.65**, controlled by two factors:
-
-**1. Data Certainty** (more data = trust the market more):
-
-```
-Season Certainty = min(1, Games_Played / 14)
-Experience Certainty = min(1, Years_Exp / 4)
-Composite = Season × 0.6 + Experience × 0.4
-```
-
-**2. Custom Weight Deviation** (custom scoring weights = trust internal model more):
-
-```
-FC_weight = clamp(0.5 + certainty × 0.15 − deviation × 0.35, 0.20, 0.65)
-```
-
-**In plain English:**
-- A veteran with 14+ games and default weights → FC gets ~65% influence
-- A rookie with custom weights → FC gets ~20% influence (trust internal model more)
+Rank is the more stable signal; value percentile captures the real market spread. The trend adjustment is deliberately amplified over prior versions so rising and falling players register more sharply.
 
 ---
 
-## RosterAudit Market Blending
+## RosterAudit Data
 
-In addition to FantasyCalc, the system pulls dynasty player rankings and draft pick values from [RosterAudit](https://rosteraudit.com) — an independent dynasty valuation source. This gives us a second market opinion for cross-referencing.
-
-### What We Pull from RosterAudit
+The system pulls the following fields from [RosterAudit](https://rosteraudit.com):
 
 | Field             | Description                                          |
 | ----------------- | ---------------------------------------------------- |
@@ -213,18 +206,18 @@ In addition to FantasyCalc, the system pulls dynasty player rankings and draft p
 | **7-Day Trend**   | Value change over 7 days                             |
 | **Buy Low**       | RA flags this player as a buy-low candidate          |
 | **Sell High**     | RA flags this player as a sell-high candidate         |
-| **Breakout**      | RA flags this player as a breakout candidate          |
+| **Breakout**      | RA flags this player as a breakout candidate         |
 | **Pick Values**   | Per-round, per-slot dynasty pick values (SF & 1QB)   |
 
-### Blended Dynasty Market Value
+### Dynasty Market Value (Trade Currency)
 
-When both FantasyCalc (FC) and RosterAudit (RA) have a value for a player, the system blends them into a single **Dynasty Market Value** used across the trade engine and strategy planner:
+For the trade engine and strategy planner, player value is expressed in dollars rather than score points. When both FC and RA have a dollar value, they're blended:
 
 ```
-Dynasty Market Value = (FC_Value + RA_Value) / 2
+Dynasty Market Value = FC_Value × 0.60 + RA_Value × 0.40
 ```
 
-If only one source has a value, that source is used alone. This averaging smooths out source-specific biases and gives more stable trade valuations.
+FC is weighted higher because its crowd-trade market is larger and more liquid. If only one source has a value, that source is used alone.
 
 ### RA Signals in Archetype Classification
 
@@ -301,7 +294,7 @@ Every player is classified into one of 11 tiers based on their age, production, 
 
 Players also receive diagnostic tags:
 
-- **Undervalued / Overvalued:** Internal vs blended score gap ≥ 8
+- **Undervalued / Overvalued:** Internal vs blended score gap ≥ 12
 - **Ascending / Declining:** Trend score ≥ 60 or ≤ 40 (also triggered by RosterAudit 30-day trend ≥ +5 or ≤ −5)
 - **Buy Low / Sell High:** RosterAudit consensus flags
 - **Breakout Candidate:** RosterAudit breakout flag

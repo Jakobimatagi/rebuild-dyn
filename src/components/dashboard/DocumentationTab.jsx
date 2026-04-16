@@ -154,16 +154,30 @@ const SECTIONS = [
     ],
   },
   {
-    id: "fantasycalc",
-    title: "FantasyCalc Market Blending",
+    id: "market-blending",
+    title: "Market-Weighted Score Blending",
     content: [
       {
         type: "paragraph",
-        text: "The internal dynasty score is blended with external market data from FantasyCalc to produce the final score. The FC weight ranges from 0.20 to 0.65.",
+        text: "The final player score is a weighted blend of the internal dynasty score with two external market sources: FantasyCalc (crowd-sourced consensus) and RosterAudit (expert consensus). Community and expert consensus carries the majority of the weight — the internal model catches what the market is slow on rather than being the primary authority.",
+      },
+      {
+        type: "table",
+        headers: ["Sources Available", "Internal", "FantasyCalc", "RosterAudit"],
+        rows: [
+          ["FC + RA (most players)", "20%", "55%", "25%"],
+          ["FC only", "25%", "75%", "—"],
+          ["RA only", "40%", "—", "60%"],
+          ["Neither", "100%", "—", "—"],
+        ],
       },
       {
         type: "formula",
-        text: "Final Score = Internal × (1 − FC_weight) + FC_Normalized × FC_weight",
+        text: "Final Score = Internal × 0.20 + FC_Normalized × 0.55 + RA_Normalized × 0.25",
+      },
+      {
+        type: "paragraph",
+        text: "Both FC and RA are normalized to a 0–100 scale using the same formula:",
       },
       {
         type: "table",
@@ -171,19 +185,12 @@ const SECTIONS = [
         rows: [
           ["Rank Score", "55%", "Overall dynasty rank (inverted)"],
           ["Value Percentile", "45%", "Where the raw value sits among all"],
-          ["Trend Adjustment", "±7%", "30-day value trend"],
+          ["Trend Adjustment", "±12%", "30-day value trend (±1000 = ±12%)"],
         ],
       },
       {
         type: "paragraph",
-        text: "Data certainty controls FC weight: more games played and more experience = higher FC influence. Custom scoring weights that deviate from defaults = lower FC influence (trust internal model more).",
-      },
-      {
-        type: "list",
-        items: [
-          "Veteran with 14+ games and default weights → FC gets ~65% influence",
-          "Rookie with custom weights → FC gets ~20% influence",
-        ],
+        text: "FC is weighted higher than RA because its trade-based crowd data reflects a larger, more liquid market. For trade-engine dollar values, Dynasty Market Value = FC × 0.60 + RA × 0.40.",
       },
     ],
   },
@@ -247,7 +254,7 @@ const SECTIONS = [
         type: "list",
         label: "Diagnostic Tags",
         items: [
-          "Undervalued / Overvalued: Internal vs blended score gap ≥ 8",
+          "Undervalued / Overvalued: Internal vs blended score gap ≥ 12",
           "Ascending / Declining: Trend score ≥ 60 or ≤ 40",
           "Fragile Role: Situation score < 55",
           "Injury Risk: Availability score < 60",

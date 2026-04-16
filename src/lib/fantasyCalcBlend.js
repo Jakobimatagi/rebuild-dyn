@@ -2,11 +2,23 @@
  * fantasyCalcBlend.js
  * Normalizes FantasyCalc market data and blends it with internal scores.
  */
-import {
-  clamp,
-  getWeightDeviationRatio,
-  DEFAULT_SCORING_WEIGHTS,
-} from "./scoringEngine";
+import { clamp } from "./scoringEngine";
+
+// Binary search for the percentile rank of `value` within a pre-sorted array.
+// Returns the fraction of entries strictly less than `value` (0..1).
+// O(log n) vs the O(n) .filter(...).length it replaces — matters when called
+// per player in the roster since sortedValues is league-wide (~500 entries).
+function percentileOf(value, sortedValues) {
+  if (!sortedValues?.length) return 0.5;
+  let lo = 0;
+  let hi = sortedValues.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (sortedValues[mid] < value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo / sortedValues.length;
+}
 
 export function buildFantasyCalcContext(fantasyCalcValues = []) {
   const bySleeperId = new Map();
@@ -19,9 +31,7 @@ export function buildFantasyCalcContext(fantasyCalcValues = []) {
     0,
   );
 
-  // Pre-sort all values ascending for O(n) percentile lookup in normalizeFantasyCalcValue.
-  // This replaces the ad-hoc sqrt(value/maxValue) compression with a true percentile rank,
-  // which more accurately reflects where a player sits in the actual market distribution.
+  // Pre-sort ascending so percentileOf() can binary-search per player.
   const allSortedValues = fantasyCalcValues
     .map((e) => Number(e?.value || 0))
     .filter((v) => v > 0)
@@ -46,16 +56,10 @@ export function normalizeFantasyCalcValue(entry, context) {
 
   const value = Number(entry.value || 0);
 
-  // Percentile rank within all FC values: more principled than sqrt(value/maxValue),
-  // which assumed a specific distribution shape. Percentile directly reflects market position.
-  let valuePercentile;
-  if (context.allSortedValues?.length > 0) {
-    const below = context.allSortedValues.filter((v) => v < value).length;
-    valuePercentile = below / context.allSortedValues.length;
-  } else {
-    // Fallback for contexts without pre-sorted values
-    valuePercentile = clamp(Math.sqrt(value / context.maxValue), 0, 1);
-  }
+  // Percentile rank within all FC values: reflects actual market position.
+  const valuePercentile = context.allSortedValues?.length > 0
+    ? percentileOf(value, context.allSortedValues)
+    : clamp(Math.sqrt(value / context.maxValue), 0, 1);
 
   // Rank score: linear inverse rank (1 = #1 overall, 0 = last)
   const rankScore = clamp(
@@ -66,9 +70,8 @@ export function normalizeFantasyCalcValue(entry, context) {
     1,
   );
 
-  // Trend: FC values are on 0-10000 scale; a 30-day swing of ±500 is significant.
-  // Normalize on 1500 so typical hot/cold streaks produce ±5-7 pts of adjustment.
-  const trendAdj = clamp(Number(entry.trend30Day || 0) / 1500, -0.07, 0.07);
+  // Trend: ±1000-point 30-day swing = ±12 pts. More responsive to market momentum.
+  const trendAdj = clamp(Number(entry.trend30Day || 0) / 1000, -0.12, 0.12);
 
   // Rank is the more stable signal; value percentile captures real market spread.
   return Math.round(
@@ -76,40 +79,68 @@ export function normalizeFantasyCalcValue(entry, context) {
   );
 }
 
-// Blends the internal score with FantasyCalc market data.
-// Called early in player enrichment so every downstream grade (verdict, archetype,
-// room quality, trade value) already reflects the FC-informed score.
-// FC weight ranges from 50% (complete rookies with no games) to 65% (4+ yr vets).
+// Normalize a RosterAudit entry to a 5–100 score using the same percentile
+// approach as normalizeFantasyCalcValue. Requires raContext to expose
+// allSortedValues and maxRankOverall (built in buildRosterAuditContext).
+export function normalizeRosterAuditValue(raEntry, raContext) {
+  if (!raEntry || !raContext) return null;
+
+  const value = Number(raEntry.value || 0);
+  if (value <= 0) return null;
+
+  const valuePercentile = percentileOf(value, raContext.allSortedValues);
+
+  const rankScore = clamp(
+    1 - (Number(raEntry.rankOverall || raContext.maxRankOverall) - 1) / raContext.maxRankOverall,
+    0,
+    1,
+  );
+
+  const trendAdj = clamp(Number(raEntry.trend30d || 0) / 1000, -0.12, 0.12);
+
+  return Math.round(
+    clamp((rankScore * 0.55 + valuePercentile * 0.45 + trendAdj) * 100, 5, 100),
+  );
+}
+
+// Blends internal score with FC and RosterAudit market data.
+// Weights heavily favor community/expert consensus since internal model
+// is not consensus-calibrated:
+//   FC + RA both present → internal 20%, FC 55%, RA 25%
+//   FC only              → internal 25%, FC 75%
+//   RA only              → internal 40%, RA 60%
+//   Neither              → internal 100% (fallback)
 export function computeBlendedScore(
   internalScore,
   fantasyCalcEntry,
   fantasyCalcContext,
-  gp24,
-  yearsExp,
-  scoringWeights = DEFAULT_SCORING_WEIGHTS,
+  rosterAuditEntry = null,
+  rosterAuditContext = null,
 ) {
-  const fantasyCalcNormalized = normalizeFantasyCalcValue(
-    fantasyCalcEntry,
-    fantasyCalcContext,
-  );
-  if (fantasyCalcNormalized == null) {
-    return { score: internalScore, fantasyCalcNormalized: null };
+  const fantasyCalcNormalized = normalizeFantasyCalcValue(fantasyCalcEntry, fantasyCalcContext);
+  const rosterAuditNormalized = normalizeRosterAuditValue(rosterAuditEntry, rosterAuditContext);
+
+  const hasFc = fantasyCalcNormalized != null;
+  const hasRa = rosterAuditNormalized != null;
+
+  if (!hasFc && !hasRa) {
+    return { score: internalScore, fantasyCalcNormalized: null, rosterAuditNormalized: null };
   }
-  const seasonCertainty = Math.min(1, (gp24 || 0) / 14);
-  const expCertainty = Math.min(1, (yearsExp || 0) / 4);
-  const certainty = seasonCertainty * 0.6 + expCertainty * 0.4;
-  const customWeightIntensity = getWeightDeviationRatio(scoringWeights);
-  const fcBaseWeight = 0.5 + certainty * 0.15;
-  const fcWeight = clamp(
-    fcBaseWeight - customWeightIntensity * 0.35,
-    0.2,
-    0.65,
-  );
-  const score = Math.max(
-    5,
-    Math.round(
-      internalScore * (1 - fcWeight) + fantasyCalcNormalized * fcWeight,
-    ),
-  );
-  return { score, fantasyCalcNormalized };
+
+  let score;
+  if (hasFc && hasRa) {
+    score = Math.max(5, Math.round(
+      internalScore * 0.20 + fantasyCalcNormalized * 0.55 + rosterAuditNormalized * 0.25,
+    ));
+  } else if (hasFc) {
+    score = Math.max(5, Math.round(
+      internalScore * 0.25 + fantasyCalcNormalized * 0.75,
+    ));
+  } else {
+    score = Math.max(5, Math.round(
+      internalScore * 0.40 + rosterAuditNormalized * 0.60,
+    ));
+  }
+
+  return { score, fantasyCalcNormalized, rosterAuditNormalized };
 }
