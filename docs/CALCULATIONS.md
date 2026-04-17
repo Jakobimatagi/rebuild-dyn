@@ -682,3 +682,25 @@ Independent dynasty player rankings, tier classifications, pick values, and buy-
 League data, rosters, draft history, player metadata, depth charts, injury status, and transaction history. Sleeper is the platform that powers the dynasty leagues this tool analyzes.
 
 **All data from these sources is used with respect and appreciation. We do not claim ownership of any external data — we simply blend multiple expert opinions to help dynasty managers make better decisions.**
+
+### Draft Slot Assignment & Pick Value Calculation
+
+**Draft slot assignment for picks uses the following logic:**
+
+- **Current year picks:**
+  - If available, the Sleeper `/drafts` endpoint is used as the authoritative source for draft order. This provides the exact slot (e.g., 1.05) for each roster based on the league's settings.
+  - If a pick was acquired from another team, its slot is based on the original owner's slot in the Sleeper draft order.
+- **Future year picks:**
+  - If no draft order is set for a future year, slots are projected using each team's competitive score ("team strength"). The weakest team is assigned 1.01, the strongest 1.N, and so on.
+  - These projections update dynamically as team strength changes.
+- **Pick display:**
+  - Picks are shown with their slot label (e.g., 1.05) when available, or as "early/mid/late" if only a phase-based estimate is possible.
+  - A note is shown for future years: "Draft order predicted from team strength".
+- **Pick value calculation:**
+  - If RosterAudit market values are available for the exact slot (e.g., `2026-1-5`), those are used.
+  - Otherwise, values are estimated using internal models, with fallback to phase-based (early/mid/late) values.
+
+**Summary:**
+- Sleeper draft order is always used when available for the current year.
+- Future picks are predicted from team strength.
+- Pick values prefer exact slot market data, then fallback to estimates.
