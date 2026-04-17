@@ -4,7 +4,6 @@ import { styles } from "../styles";
 import GradeKeyModal from "./dashboard/GradeKeyModal";
 import LeagueTab from "./dashboard/LeagueTab";
 import OverviewTab from "./dashboard/OverviewTab";
-import PicksTab from "./dashboard/PicksTab";
 import RosterTab from "./dashboard/RosterTab";
 import ScoreWeightsModal from "./dashboard/ScoreWeightsModal";
 import TradeTab from "./dashboard/TradeTab";
@@ -46,11 +45,13 @@ export default function Dashboard({
     picks,
     proportions,
     surplusPositions,
+    needs,
     tradeSuggestions,
     tradeBlock,
     leagueContext,
     tradeMarket,
     fantasyCalcSource,
+    rosterAuditSource,
   } = analysis;
 
   return (
@@ -144,7 +145,6 @@ export default function Dashboard({
         {[
           { key: "overview", label: "overview" },
           { key: "roster", label: "roster" },
-          { key: "picks", label: "picks" },
           { key: "trades", label: "trades" },
           { key: "strategy", label: "strategy" },
           { key: "rankings", label: "rankings" },
@@ -186,6 +186,10 @@ export default function Dashboard({
           teamPhase={analysis.teamPhase}
           posRanks={analysis.posRanks}
           onOpenGradeKey={() => setShowGradeKey(true)}
+          leagueTeams={analysis.leagueTeams}
+          myNeeds={needs}
+          mySurplus={surplusPositions}
+          myRosterId={analysis.rosterId}
         />
       )}
 
@@ -198,11 +202,14 @@ export default function Dashboard({
           onToggleBars={onToggleBars}
           positionPriority={POSITION_PRIORITY}
           scoringWeights={analysis.scoringWeights}
+          picksByYear={picksByYear}
+          picks={picks}
+          leagueContext={leagueContext}
+          tradeMarket={tradeMarket}
+          leagueTeams={analysis.leagueTeams}
+          myRosterId={analysis.rosterId}
+          raPickValues={rosterAuditSource?.pickValues}
         />
-      )}
-
-      {activeTab === "picks" && (
-        <PicksTab picksByYear={picksByYear} picks={picks} />
       )}
 
       {activeTab === "trades" && (
@@ -217,6 +224,8 @@ export default function Dashboard({
           fantasyCalcSource={fantasyCalcSource}
           leagueTeams={analysis.leagueTeams}
           teamPhase={analysis.teamPhase}
+          posRanks={analysis.posRanks}
+          myRosterId={analysis.rosterId}
         />
       )}
 

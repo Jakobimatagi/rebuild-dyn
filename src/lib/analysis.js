@@ -1,7 +1,7 @@
 import { DEFAULT_SCORING_WEIGHTS, buildBenchmarks } from './scoringEngine';
 import { buildFantasyCalcContext } from './fantasyCalcBlend';
 import { buildRosterAuditContext } from './rosterAuditApi';
-import { buildRosterSnapshot, classifyLeagueTeams } from './rosterBuilder';
+import { buildRosterSnapshot, classifyLeagueTeams, assignDraftSlots } from './rosterBuilder';
 import { getLeagueRulesContext } from './marketValue';
 import { buildTradeMarket, buildTradeSuggestions, evaluateTrade } from './tradeEngine';
 import { buildPredictionContext } from './predictionEngine';
@@ -43,6 +43,7 @@ export function buildRosterAnalysis(
   })(),
   rosterAuditValues = [],
   rosterAuditPicks = null,
+  sleeperDrafts = [],
 ) {
   const currentYear = new Date().getFullYear();
   const futureSeasons = [currentYear, currentYear + 1, currentYear + 2];
@@ -118,6 +119,34 @@ export function buildRosterAnalysis(
 
   // Classify all teams relative to each other (contender / retool / rebuild)
   classifyLeagueTeams(leagueTeams, leagueContext);
+
+  // Extract draft order from Sleeper drafts endpoint.
+  // The drafts array may contain multiple drafts; find the one for the
+  // upcoming season (currentYear) with a draft_order set.
+  let knownDraftSlots = null;
+  if (sleeperDrafts?.length) {
+    const targetSeason = String(currentYear);
+    const draft = sleeperDrafts.find(
+      (d) => String(d.season) === targetSeason && d.draft_order,
+    ) || sleeperDrafts.find((d) => d.draft_order);
+    if (draft?.draft_order) {
+      // Sleeper draft_order is keyed by user_id, but we track teams by roster_id.
+      // Build a userId → rosterId lookup from the rosters array.
+      const userToRoster = new Map(
+        rosters.map((r) => [String(r.owner_id), r.roster_id]),
+      );
+      knownDraftSlots = new Map();
+      for (const [userId, slot] of Object.entries(draft.draft_order)) {
+        const rosterId = userToRoster.get(String(userId));
+        if (rosterId != null) {
+          knownDraftSlots.set(String(rosterId), Number(slot));
+        }
+      }
+    }
+  }
+
+  // Project draft order from competitive scores (worst = 1.01, best = 1.N)
+  assignDraftSlots(leagueTeams, knownDraftSlots);
 
   // Rank every team's position rooms 1..N across the league.
   _assignPositionRanks(leagueTeams, leagueContext.isSuperflex);

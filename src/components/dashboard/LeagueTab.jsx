@@ -109,6 +109,64 @@ function TeamRoster({ byPos }) {
   );
 }
 
+function TeamPicks({ picks, numTeams }) {
+  if (!picks || picks.length === 0) return null;
+  const currentYear = String(new Date().getFullYear());
+  const byYear = {};
+  for (const pick of picks) {
+    const yr = pick.season || "?";
+    (byYear[yr] = byYear[yr] || []).push(pick);
+  }
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ ...styles.sectionLabel, marginBottom: 8 }}>Draft Capital</div>
+      {Object.keys(byYear).sort().map((year) => (
+        <div key={year} style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: "#00f5a0", letterSpacing: 2, marginBottom: 6 }}>{year}</div>
+          {year > currentYear && (
+            <div style={{ fontSize: 9, color: "#94a3b8", marginBottom: 4, fontStyle: "italic" }}>
+              Projected
+            </div>
+          )}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {byYear[year].map((pick, i) => {
+              const label = pick.round === 1 ? "1st" : pick.round === 2 ? "2nd" : pick.round === 3 ? "3rd" : `${pick.round}th`;
+              const color = pick.round === 1 ? "#00f5a0" : pick.round === 2 ? "#ffd84d" : "#d9deef";
+              return (
+                <div
+                  key={i}
+                  style={{
+                    padding: "4px 10px",
+                    background: `${color}11`,
+                    border: `1px solid ${color}44`,
+                    borderRadius: 2,
+                    fontSize: 11,
+                    color,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  {pick.slotLabel ? (
+                    <span style={{ fontWeight: 600 }}>{pick.slotLabel}</span>
+                  ) : (
+                    <span>{label} Rd</span>
+                  )}
+                  {!pick.isOwn && (
+                    <span style={{ color: "#d1d7ea", fontSize: 9 }}>
+                      via {pick.fromTeam || "trade"}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function LeagueTab({ leagueTeams, myTeamLabel, isSuperflex }) {
   const [expandedTeam, setExpandedTeam] = useState(null);
 
@@ -256,7 +314,12 @@ export default function LeagueTab({ leagueTeams, myTeamLabel, isSuperflex }) {
               </div>
             </button>
 
-            {isExpanded && <TeamRoster byPos={team.byPos} />}
+            {isExpanded && (
+              <>
+                <TeamRoster byPos={team.byPos} />
+                <TeamPicks picks={team.picks} numTeams={leagueTeams.length} />
+              </>
+            )}
           </div>
         );
       })}

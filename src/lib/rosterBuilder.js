@@ -57,6 +57,7 @@ export function buildRosterPicks(
       season: String(pick.season),
       round: pick.round,
       isOwn: false,
+      originalRosterId: pick.roster_id,
       fromTeam:
         rosterLabelById.get(pick.roster_id) || `Roster ${pick.roster_id}`,
       label: `${pick.season} ${pick.round === 1 ? "1st" : pick.round === 2 ? "2nd" : pick.round === 3 ? "3rd" : `${pick.round}th`} via ${rosterLabelById.get(pick.roster_id) || `Roster ${pick.roster_id}`}`,
@@ -326,6 +327,73 @@ export function classifyLeagueTeams(leagueTeams, leagueContext) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Assign projected draft slots based on competitive score
+// Worst team = 1 (pick 1.01), best team = N (pick 1.N)
+// ---------------------------------------------------------------------------
+export function assignDraftSlots(leagueTeams, knownSlots = null) {
+  if (!leagueTeams.length) return;
+  const numTeams = leagueTeams.length;
+  const currentYear = new Date().getFullYear();
+  const nextDraftYear = String(currentYear);
+
+  // If we have known draft slots (e.g., from Sleeper draft order), use those
+  // for the upcoming draft. knownSlots is a Map<rosterId, slot>.
+  let recordSlot;
+  if (knownSlots && knownSlots.size > 0) {
+    recordSlot = knownSlots;
+  } else {
+    // Fallback: use actual record (worst record = pick 1).
+    // Tiebreaker: fewer points for = earlier pick.
+    const byRecord = [...leagueTeams].sort((a, b) => {
+      const aWins = a.wins || 0;
+      const bWins = b.wins || 0;
+      if (aWins !== bWins) return aWins - bWins;
+      const aPF = a.pointsFor || 0;
+      const bPF = b.pointsFor || 0;
+      return aPF - bPF;
+    });
+
+    recordSlot = new Map();
+    byRecord.forEach((team, idx) => {
+      recordSlot.set(String(team.rosterId), idx + 1);
+    });
+  }
+
+  // For future drafts (2027+): project from competitive score
+  const byScore = [...leagueTeams].sort(
+    (a, b) => (a.teamPhase?.score || 0) - (b.teamPhase?.score || 0),
+  );
+
+  const scoreSlot = new Map();
+  byScore.forEach((team, idx) => {
+    scoreSlot.set(String(team.rosterId), idx + 1);
+  });
+
+  // Stamp each team's picks with the projected slot
+  for (const team of leagueTeams) {
+    team.projectedDraftSlot = recordSlot.get(String(team.rosterId));
+
+    for (const pick of team.picks) {
+      // Determine which team originally owns this pick
+      const ownerId = pick.isOwn ? team.rosterId : pick.originalRosterId;
+      if (ownerId == null) continue;
+
+      // Use record-based slot for the upcoming draft, score-based for future
+      const slotMap = pick.season === nextDraftYear ? recordSlot : scoreSlot;
+      pick.slot = slotMap.get(String(ownerId)) || null;
+
+      // Build display label like "1.01", "2.05"
+      if (pick.slot != null) {
+        const padded = String(pick.slot).padStart(String(numTeams).length, "0");
+        pick.slotLabel = `${pick.round}.${padded}`;
+      }
+    }
+  }
+
+  return recordSlot;
+}
+
 function ordinal(n) {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
@@ -548,10 +616,15 @@ export function buildRosterSnapshot(
 
   const weakRooms = POSITION_PRIORITY.filter((pos) => {
     const room = byPos[pos];
-    return (
-      room.length < 2 ||
-      room.filter((player) => player.verdict === "buy").length === 0
-    );
+    if (room.length < 2) return true;
+    const buyCount = room.filter((player) => player.verdict === "buy").length;
+    if (buyCount === 0) return true;
+    const avg = room.reduce((s, p) => s + p.score, 0) / room.length;
+    // Room has depth but low overall quality — flag if below C-grade average
+    if (avg < 45) return true;
+    // Room has only 1 buy among many players and average is mediocre (below B-grade)
+    if (buyCount <= 1 && avg < 58) return true;
+    return false;
   });
 
   const needs = getRosterNeeds(byPos, proportions);

@@ -42,9 +42,29 @@ export function buildFantasyCalcContext(fantasyCalcValues = []) {
     if (sleeperId) bySleeperId.set(String(sleeperId), entry);
   });
 
+  // Parse pick entries to extract known draft slots.
+  // FC names picks like "2026 Pick 1.05" → season=2026, round=1, slot=5
+  const pickSlots = new Map(); // key: "${season}-${round}" → slot (number)
+  fantasyCalcValues.forEach((entry) => {
+    const name = entry?.player?.name;
+    if (!name || entry?.player?.position !== "PICK") return;
+    const m = name.match(/^(\d{4})\s+Pick\s+(\d+)\.(\d+)$/i);
+    if (m) {
+      const season = m[1];
+      const round = Number(m[2]);
+      const slot = Number(m[3]);
+      const sleeperId = entry?.player?.sleeperId;
+      // Key by sleeperId so we can match to our pick objects
+      if (sleeperId) {
+        pickSlots.set(String(sleeperId), { season, round, slot });
+      }
+    }
+  });
+
   return {
     bySleeperId,
     allSortedValues,
+    pickSlots,
     maxValue: Math.max(1, maxValue),
     maxOverallRank: Math.max(1, maxOverallRank),
     totalPlayers: fantasyCalcValues.length,
