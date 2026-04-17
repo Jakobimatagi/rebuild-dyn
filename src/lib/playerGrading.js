@@ -1,8 +1,9 @@
 /**
  * playerGrading.js
  * Player verdict labels, room grades, archetype classification, and tags.
- * Pure functions — no external lib dependencies, no side effects.
+ * Pure functions — no side effects.
  */
+import { getKeepCount } from "./marketValue";
 
 export function getVerdict(score) {
   if (score >= 72) return "buy";
@@ -19,17 +20,92 @@ export function getColor(verdict) {
   );
 }
 
-export function getRoomGrade(players) {
-  if (!players.length) return { grade: "F", color: "#ff2d55", label: "Empty" };
-  const avg = players.reduce((s, p) => s + p.score, 0) / players.length;
-  const buyCount = players.filter((p) => p.verdict === "buy").length;
-  const ratio = buyCount / players.length;
-  if (ratio >= 0.5 && avg >= 70)
-    return { grade: "A", color: "#00f5a0", label: "Elite Core" };
-  if (ratio >= 0.3 && avg >= 58)
-    return { grade: "B", color: "#7fff7f", label: "Good Shape" };
-  if (avg >= 45) return { grade: "C", color: "#ffd84d", label: "Mixed Bag" };
-  return { grade: "D", color: "#ff6b35", label: "Needs Work" };
+// Computes the raw quality of a position room — production-tilted blend of
+// dynasty value and actual 2024 PPG, weighted near-flat across the
+// starter+flex+depth pool. Returns a number (0-100) used to rank rooms
+// across the league. Returns null for empty rooms so they sort last.
+//
+// For each player in the pool:
+//   gradeInput = 0.3 × dynastyScore + 0.7 × productionScore
+//   weight[i]  = 1 − 0.08·i             // top=1.00, 5th=0.68
+//   quality    = Σ(input × weight) / Σ(weight)
+//
+// Production carries the larger share because room rank answers
+// "who can win games this year?" — PPG drives wins, market value follows.
+export function computeRoomQuality(players, pos = null, isSuperflex = null) {
+  if (!players.length) return null;
+
+  const keepCount = pos && isSuperflex !== null
+    ? getKeepCount(pos, isSuperflex)
+    : players.length;
+
+  // byPos is pre-sorted descending by score in rosterBuilder.
+  const core = players.slice(0, keepCount);
+
+  let weightedSum = 0;
+  let weightTotal = 0;
+  for (let i = 0; i < core.length; i++) {
+    const dynasty = core[i].score ?? 0;
+    const production = core[i].currentPctile ?? 0;
+    const blended = 0.3 * dynasty + 0.7 * production;
+    const w = 1 - i * 0.08;
+    weightedSum += blended * w;
+    weightTotal += w;
+  }
+  return weightedSum / weightTotal;
+}
+
+const POSITIONS_TO_RANK = ["QB", "RB", "WR", "TE"];
+
+// Ranks every team's position rooms 1..N across the league. Mutates each
+// team in `leagueTeams` to add `posRanks: { QB: { rank, of, quality, color }, ... }`.
+// Color tiers split the league into thirds: top → green, middle → yellow,
+// bottom → red. Empty rooms (null quality) sort last and get red.
+export function assignPositionRanks(leagueTeams, isSuperflex) {
+  const total = leagueTeams.length;
+  if (!total) return;
+
+  for (const pos of POSITIONS_TO_RANK) {
+    const entries = leagueTeams.map((team) => ({
+      team,
+      quality: computeRoomQuality(team.byPos?.[pos] || [], pos, isSuperflex),
+    }));
+
+    // Sort descending by quality. Null sorts last.
+    entries.sort((a, b) => {
+      if (a.quality == null && b.quality == null) return 0;
+      if (a.quality == null) return 1;
+      if (b.quality == null) return -1;
+      return b.quality - a.quality;
+    });
+
+    entries.forEach((entry, idx) => {
+      const rank = idx + 1;
+      if (!entry.team.posRanks) entry.team.posRanks = {};
+      entry.team.posRanks[pos] = {
+        rank,
+        of: total,
+        quality: entry.quality != null ? Math.round(entry.quality) : null,
+        color: rankColor(rank, total),
+      };
+    });
+  }
+}
+
+function rankColor(rank, total) {
+  const third = total / 3;
+  if (rank <= third) return "#00f5a0";
+  if (rank <= third * 2) return "#ffd84d";
+  return "#ff6b35";
+}
+
+export function rankLabel(rank) {
+  const mod10 = rank % 10;
+  const mod100 = rank % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${rank}st`;
+  if (mod10 === 2 && mod100 !== 12) return `${rank}nd`;
+  if (mod10 === 3 && mod100 !== 13) return `${rank}rd`;
+  return `${rank}th`;
 }
 
 export function getArchetype(player) {

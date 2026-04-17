@@ -1,5 +1,5 @@
 import { POSITION_PRIORITY } from "../../constants";
-import { getColor, getRoomGrade } from "../../lib/analysis";
+import { getColor, rankLabel } from "../../lib/analysis";
 import { styles } from "../../styles";
 
 export default function OverviewTab({
@@ -9,6 +9,7 @@ export default function OverviewTab({
   proportions,
   aiAdvice,
   teamPhase,
+  posRanks,
   onOpenGradeKey,
 }) {
   return (
@@ -22,7 +23,7 @@ export default function OverviewTab({
         }}
       >
         <div style={{ ...styles.sectionLabel, marginBottom: 0 }}>
-          Position Room Grades
+          Position Room Rankings
         </div>
         <button
           onClick={onOpenGradeKey}
@@ -58,7 +59,8 @@ export default function OverviewTab({
         }}
       >
         {POSITION_PRIORITY.map((pos) => {
-          const grade = getRoomGrade(byPos[pos]);
+          const r = posRanks?.[pos];
+          const color = r?.color || "#4a5068";
           const players = byPos[pos];
           const roomAvg = players.length
             ? Math.round(
@@ -70,7 +72,7 @@ export default function OverviewTab({
               key={pos}
               style={{
                 ...styles.card,
-                borderColor: `${grade.color}33`,
+                borderColor: `${color}33`,
                 textAlign: "center",
               }}
             >
@@ -86,16 +88,16 @@ export default function OverviewTab({
               </div>
               <div
                 style={{
-                  fontSize: 48,
+                  fontSize: 42,
                   fontWeight: 700,
-                  color: grade.color,
+                  color,
                   lineHeight: 1,
                 }}
               >
-                {grade.grade}
+                {r ? rankLabel(r.rank) : "—"}
               </div>
               <div style={{ fontSize: 10, color: "#d1d7ea", marginTop: 8 }}>
-                {grade.label}
+                {r ? `of ${r.of} teams` : "no players"}
               </div>
               <div style={{ fontSize: 10, color: "#c8cfe3", marginTop: 4 }}>
                 {players.length} players · avg {roomAvg}

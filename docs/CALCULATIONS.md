@@ -250,17 +250,46 @@ RosterAudit tier and positional rank feed into archetype logic as tiebreakers:
 | ≥ 35        | **Sell** | Orange |
 | < 35        | **Cut**  | Red    |
 
-### Position Room Grades
+### Position Room Rankings
 
-Each position group gets a letter grade:
+Each team's position rooms are ranked **1..N across the league** (where N = number of teams). No more letter-grade thresholds — your QB room's "score" is its rank versus everyone else at the same position. Top third = green, middle third = yellow, bottom third = red.
 
-| Criteria                                      | Grade | Label       |
-| --------------------------------------------- | ----- | ----------- |
-| ≥ 50% buy verdicts AND avg score ≥ 70         | **A** | Elite Core  |
-| ≥ 30% buy verdicts AND avg score ≥ 58         | **B** | Good Shape  |
-| Average score ≥ 45                            | **C** | Mixed Bag   |
-| Otherwise                                     | **D** | Needs Work  |
-| No players                                    | **F** | Empty       |
+Rooms are quality-scored on the **players who actually matter** — starters + flex candidates + a small depth buffer — not the full roster. This prevents a team with 2 elite WRs and 4 deep-bench scrubs from being dragged down by depth that will never start.
+
+**Grading pool size per position** (derived from league config):
+
+| Position | 1QB League | Superflex |
+| -------- | ---------- | --------- |
+| QB       | 2          | 3         |
+| RB       | 4          | 4         |
+| WR       | 5          | 5         |
+| TE       | 2          | 2         |
+
+If a team has more players than the pool size, only the top-N by score are graded. If they have fewer, all players are graded — but the room is **capped at grade B** because you can't be "Elite Core" with a roster hole.
+
+**Production-tilted quality.** Each room's quality blends dynasty value with actual 2024 production, weighted heavily toward production (70/30). The question this answers is "can this room win games this year?" — so PPG carries far more than market value.
+
+For each player in the pool:
+
+```
+gradeInput[i] = 0.3 × dynastyScore[i] + 0.7 × productionScore[i]
+weight[i]     = 1 − 0.08 · i               // top=1.00, 5th=0.68
+quality       = Σ(gradeInput[i] × weight[i]) / Σ(weight[i])
+```
+
+- `dynastyScore` = existing market-blended `player.score` (FC + RA + internal)
+- `productionScore` = `currentPctile` — 2024 PPG percentile vs position peers (already 0-100, position-adjusted)
+
+Rookies have `productionScore` near 0, so they pull rebuild rooms down — that's correct: rookies can't win games yet. The youth/upside signal lives in **team phase** (rebuild/retool/contender), not in room rank.
+
+**Ranking is league-relative.** All teams' qualities at a position are sorted descending. Rank 1 = best room in the league at that position. Color tiers:
+
+| Rank position    | Color  |
+| ---------------- | ------ |
+| Top third        | Green  |
+| Middle third     | Yellow |
+| Bottom third     | Red    |
+| Empty (no room)  | Red, sorted last |
 
 ### Confidence Score (0–100)
 
@@ -594,15 +623,15 @@ Your team is classified as **Contender**, **Retool**, or **Rebuild** using a com
 
 A position is flagged as a **need** if any of:
 - Fewer than 2 players at the position
-- No players scoring ≥ 65
-- Average score below 48
+- No players scoring ≥ 68
+- Average score below 45
 - Significantly under-weighted relative to the rest of the roster
 
 ### Surplus Positions
 
 A position is **surplus** if any of:
 - More players than your keep count
-- Enough quality players (score ≥ 55) beyond starters
+- Enough quality players (score ≥ 52) beyond starters
 - Significantly over-weighted relative to the rest of the roster
 
 ---

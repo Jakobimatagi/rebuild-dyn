@@ -184,6 +184,7 @@ export default function Dashboard({
           proportions={proportions}
           aiAdvice={aiAdvice}
           teamPhase={analysis.teamPhase}
+          posRanks={analysis.posRanks}
           onOpenGradeKey={() => setShowGradeKey(true)}
         />
       )}
@@ -289,6 +290,7 @@ export default function Dashboard({
         <LeagueTab
           leagueTeams={analysis.leagueTeams}
           myTeamLabel={analysis.myTeamLabel}
+          isSuperflex={analysis.isSuperflex}
         />
       )}
 

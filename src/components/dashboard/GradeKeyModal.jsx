@@ -79,38 +79,39 @@ export default function GradeKeyModal({ onClose }) {
             marginBottom: 10,
           }}
         >
-          Position Room Grades
+          Position Room Rankings
+        </div>
+        <div
+          style={{
+            fontSize: 11,
+            color: "#c8cfe3",
+            marginBottom: 12,
+            lineHeight: 1.4,
+          }}
+        >
+          Every team's position rooms are ranked 1..N across the league. Room
+          quality blends dynasty value with 2024 production (30/70), weighted
+          near-flat across the starter+flex+depth pool. Production drives
+          rank — youth/upside lives in team phase, not here.
         </div>
         {[
           {
-            grade: "A",
+            grade: "Top",
             color: "#00f5a0",
-            label: "Elite Core",
-            desc: "50%+ buy verdicts, avg score ≥ 70",
+            label: "Top third",
+            desc: "Best rooms in the league at this position",
           },
           {
-            grade: "B",
-            color: "#7fff7f",
-            label: "Good Shape",
-            desc: "30%+ buy verdicts, avg score ≥ 58",
-          },
-          {
-            grade: "C",
+            grade: "Mid",
             color: "#ffd84d",
-            label: "Mixed Bag",
-            desc: "Avg score ≥ 45, some young talent",
+            label: "Middle third",
+            desc: "Average rooms — playable but not difference-makers",
           },
           {
-            grade: "D",
+            grade: "Bot",
             color: "#ff6b35",
-            label: "Needs Work",
-            desc: "Avg score below 45, aging or thin",
-          },
-          {
-            grade: "F",
-            color: "#ff2d55",
-            label: "Empty",
-            desc: "No rostered players at this position",
+            label: "Bottom third",
+            desc: "Below-league rooms — upgrade target",
           },
         ].map(({ grade, color, label, desc }) => (
           <div
@@ -124,7 +125,7 @@ export default function GradeKeyModal({ onClose }) {
           >
             <div
               style={{
-                width: 28,
+                width: 44,
                 height: 28,
                 flexShrink: 0,
                 borderRadius: 3,
@@ -134,7 +135,7 @@ export default function GradeKeyModal({ onClose }) {
                 alignItems: "center",
                 justifyContent: "center",
                 fontWeight: 700,
-                fontSize: 14,
+                fontSize: 11,
                 color,
               }}
             >
