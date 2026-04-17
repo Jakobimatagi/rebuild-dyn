@@ -209,15 +209,24 @@ const SECTIONS = [
         ],
       },
       {
-        type: "table",
-        headers: ["Criteria", "Grade", "Label"],
-        rows: [
-          ["≥ 50% buy verdicts AND avg ≥ 70", "A", "Elite Core"],
-          ["≥ 30% buy verdicts AND avg ≥ 58", "B", "Good Shape"],
-          ["Average score ≥ 45", "C", "Mixed Bag"],
-          ["Otherwise", "D", "Needs Work"],
-          ["No players", "F", "Empty"],
-        ],
+        type: "paragraph",
+        text: "Position rooms are now ranked 1..N across the league instead of given letter grades. Each team's rank at QB/RB/WR/TE is its quality vs. every other team's quality at that position. Top third = green, middle third = yellow, bottom third = red.",
+      },
+      {
+        type: "paragraph",
+        text: "Quality is computed on the players who actually matter — starters + flex candidates + a small depth buffer — not the full roster. Pool sizes: QB 2 (1QB) / 3 (SF), RB 4, WR 5, TE 2.",
+      },
+      {
+        type: "paragraph",
+        text: "Within the pool, each player's input blends dynasty value with 2024 production, tilted heavily toward production: input = 0.3 × dynastyScore + 0.7 × productionScore. Production = PPG percentile vs position peers (0-100, position-adjusted). PPG drives wins, so it drives rank. Rookies pull rebuild rooms down because they can't win games yet — the youth/upside signal lives in team phase.",
+      },
+      {
+        type: "paragraph",
+        text: "Slot weighting is near-flat: weight[i] = 1 − 0.08·i (top=1.00, 5th=0.68). All teams' qualities are sorted descending at each position; rank is the index + 1.",
+      },
+      {
+        type: "formula",
+        text: "quality = Σ(input[i] × weight[i]) / Σ(weight[i])",
       },
       {
         type: "formula",

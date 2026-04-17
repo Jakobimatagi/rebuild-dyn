@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { POSITION_PRIORITY } from "../../constants";
-import { getColor, getRoomGrade } from "../../lib/analysis";
+import { getColor, rankLabel } from "../../lib/analysis";
 import { styles } from "../../styles";
 
 const VERDICT_COLOR = {
@@ -10,11 +10,12 @@ const VERDICT_COLOR = {
   cut: "#ff2d55",
 };
 
-function PositionGrades({ byPos }) {
+function PositionGrades({ posRanks }) {
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
       {POSITION_PRIORITY.map((pos) => {
-        const grade = getRoomGrade(byPos[pos] || []);
+        const r = posRanks?.[pos];
+        const color = r?.color || "#4a5068";
         return (
           <div
             key={pos}
@@ -22,8 +23,8 @@ function PositionGrades({ byPos }) {
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              background: `${grade.color}12`,
-              border: `1px solid ${grade.color}30`,
+              background: `${color}12`,
+              border: `1px solid ${color}30`,
               borderRadius: 4,
               padding: "6px 12px",
               minWidth: 44,
@@ -32,8 +33,8 @@ function PositionGrades({ byPos }) {
             <span style={{ fontSize: 9, letterSpacing: 2, color: "#9ca3b8", textTransform: "uppercase" }}>
               {pos}
             </span>
-            <span style={{ fontSize: 18, fontWeight: 700, color: grade.color, lineHeight: 1.3 }}>
-              {grade.grade}
+            <span style={{ fontSize: 16, fontWeight: 700, color, lineHeight: 1.3 }}>
+              {r ? rankLabel(r.rank) : "—"}
             </span>
           </div>
         );
@@ -108,7 +109,7 @@ function TeamRoster({ byPos }) {
   );
 }
 
-export default function LeagueTab({ leagueTeams, myTeamLabel }) {
+export default function LeagueTab({ leagueTeams, myTeamLabel, isSuperflex }) {
   const [expandedTeam, setExpandedTeam] = useState(null);
 
   const sorted = [...leagueTeams].sort(
@@ -197,7 +198,7 @@ export default function LeagueTab({ leagueTeams, myTeamLabel }) {
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                  <PositionGrades byPos={team.byPos} />
+                  <PositionGrades posRanks={team.posRanks} />
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
                     <div
                       style={{

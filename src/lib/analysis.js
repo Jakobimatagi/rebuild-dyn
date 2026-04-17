@@ -6,6 +6,7 @@ import { getLeagueRulesContext } from './marketValue';
 import { buildTradeMarket, buildTradeSuggestions, evaluateTrade } from './tradeEngine';
 import { buildPredictionContext } from './predictionEngine';
 import { buildLeagueActivity } from './activityEngine';
+import { assignPositionRanks as _assignPositionRanks } from './playerGrading';
 
 // Re-exports — consumers that import from 'analysis' still work unchanged.
 export { DEFAULT_SCORING_WEIGHTS, draftTierLabel } from './scoringEngine';
@@ -14,7 +15,9 @@ export { evaluateTrade } from './tradeEngine';
 export {
   getVerdict,
   getColor,
-  getRoomGrade,
+  computeRoomQuality,
+  assignPositionRanks,
+  rankLabel,
   getArchetype,
   getArchetypeTags,
   getConfidence,
@@ -115,6 +118,9 @@ export function buildRosterAnalysis(
 
   // Classify all teams relative to each other (contender / retool / rebuild)
   classifyLeagueTeams(leagueTeams, leagueContext);
+
+  // Rank every team's position rooms 1..N across the league.
+  _assignPositionRanks(leagueTeams, leagueContext.isSuperflex);
 
   const myTeam =
     leagueTeams.find((team) => team.rosterId === myRoster.roster_id) ||

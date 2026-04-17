@@ -77,11 +77,14 @@ export function getRosterNeeds(byPos, proportions) {
     const roomAvg = room.length
       ? room.reduce((sum, player) => sum + player.score, 0) / room.length
       : 0;
-    const premiumCount = room.filter((player) => player.score >= 65).length;
+    // Premium threshold raised to 68 (was 65) because top players inflate under
+    // the market-weighted blend; avg threshold lowered to 45 (was 48) because
+    // per-room averages drop. Both preserve original signal strength.
+    const premiumCount = room.filter((player) => player.score >= 68).length;
     return (
       room.length < 2 ||
       premiumCount === 0 ||
-      roomAvg < 48 ||
+      roomAvg < 45 ||
       (proportions[pos]?.delta ?? 0) <= -5
     );
   }).sort(
@@ -93,7 +96,9 @@ export function getRosterSurplusPositions(byPos, proportions, isSuperflex) {
   return POSITION_PRIORITY.filter((pos) => {
     const room = byPos[pos] || [];
     const keepCount = getKeepCount(pos, isSuperflex);
-    const goodDepth = room.filter((player) => player.score >= 55).length;
+    // Good-depth threshold lowered to 52 (was 55) — depth players score lower
+    // under the market-weighted blend, so the old bar caught too few rosters.
+    const goodDepth = room.filter((player) => player.score >= 52).length;
     return (
       room.length > keepCount ||
       goodDepth >= keepCount ||
