@@ -74,6 +74,7 @@ export default function App() {
       payload.lastSeason,
       payload.rosterAuditValues,
       payload.rosterAuditPicks,
+      payload.sleeperDrafts,
     );
   }
 
@@ -138,6 +139,7 @@ export default function App() {
         stats14,
         rosterAuditValues,
         rosterAuditPicks,
+        sleeperDrafts,
       ] = await Promise.all([
         fetchSleeper(`/league/${league.league_id}/users`),
         fetchSleeper(`/league/${league.league_id}/rosters`),
@@ -163,6 +165,7 @@ export default function App() {
         // RosterAudit — second dynasty value source
         fetchRosterAuditValues(league).catch(() => []),
         fetchRosterAuditPicks().catch(() => null),
+        fetchSleeper(`/league/${league.league_id}/drafts`).catch(() => []),
       ]);
 
       const userObj = users.find(
@@ -186,6 +189,7 @@ export default function App() {
         fantasyCalcValues,
         rosterAuditValues,
         rosterAuditPicks,
+        sleeperDrafts,
         users,
         rosters,
         lastSeason,

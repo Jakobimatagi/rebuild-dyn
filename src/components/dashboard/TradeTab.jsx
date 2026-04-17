@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
+import { POSITION_PRIORITY } from "../../constants";
 import { evaluateTrade } from "../../lib/tradeEngine";
 import { estimatePickValue } from "../../lib/marketValue";
 import { styles } from "../../styles";
@@ -434,6 +435,8 @@ export default function TradeTab({
   fantasyCalcSource,
   leagueTeams,
   teamPhase,
+  posRanks,
+  myRosterId,
 }) {
   return (
     <div>
@@ -510,40 +513,89 @@ export default function TradeTab({
       >
         <div style={styles.card}>
           <div style={styles.sectionLabel}>Need Rooms</div>
-          {weakRooms.length ? (
-            weakRooms.map((pos) => (
-              <div
-                key={pos}
-                style={{ fontSize: 12, color: "#d9deef", marginBottom: 8 }}
-              >
-                <span style={{ color: "#ff6b35" }}>▸ </span>
-                {pos}
+          {(() => {
+            const set = new Set(weakRooms);
+            if (posRanks) {
+              for (const pos of POSITION_PRIORITY) {
+                const r = posRanks[pos];
+                if (r && r.rank > (r.of * 2) / 3) set.add(pos);
+              }
+            }
+            const displayRooms = POSITION_PRIORITY.filter((pos) => set.has(pos));
+            return displayRooms.length ? (
+              displayRooms.map((pos) => {
+                const r = posRanks?.[pos];
+                return (
+                  <div
+                    key={pos}
+                    style={{ fontSize: 12, color: "#d9deef", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                  >
+                    <span><span style={{ color: "#ff6b35" }}>▸ </span>{pos}</span>
+                    {r && (
+                      <span style={{ fontSize: 10, color: "#94a3b8" }}>
+                        {r.rank} of {r.of}
+                      </span>
+                    )}
+                  </div>
+                );
+              })
+            ) : (
+              <div style={{ fontSize: 12, color: "#d1d7ea" }}>
+                No urgent holes. Focus on insulation upgrades.
               </div>
-            ))
-          ) : (
-            <div style={{ fontSize: 12, color: "#d1d7ea" }}>
-              No urgent holes. Focus on insulation upgrades.
-            </div>
-          )}
+            );
+          })()}
         </div>
 
         <div style={styles.card}>
           <div style={styles.sectionLabel}>Move From Strength</div>
-          {surplusPositions.length ? (
-            surplusPositions.map((pos) => (
-              <div
-                key={pos}
-                style={{ fontSize: 12, color: "#d9deef", marginBottom: 8 }}
-              >
-                <span style={{ color: "#00f5a0" }}>▸ </span>
-                {pos}
+          {(() => {
+            const myTeam = leagueTeams?.find((t) => t.rosterId === myRosterId);
+            const displaySurplus = posRanks
+              ? POSITION_PRIORITY.filter((pos) => {
+                  const r = posRanks[pos];
+                  return r && r.rank <= Math.ceil(r.of / 3);
+                })
+              : surplusPositions;
+            return displaySurplus.length ? (
+              displaySurplus.map((pos) => {
+                const r = posRanks?.[pos];
+                const topPlayers = (myTeam?.enriched || [])
+                  .filter((p) => p.position === pos)
+                  .sort((a, b) => b.score - a.score)
+                  .slice(0, 3);
+                return (
+                  <div key={pos} style={{ marginBottom: 12 }}>
+                    <div
+                      style={{ fontSize: 12, color: "#d9deef", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}
+                    >
+                      <span><span style={{ color: "#00f5a0" }}>▸ </span>{pos}</span>
+                      {r && (
+                        <span style={{ fontSize: 10, color: "#94a3b8" }}>
+                          {r.rank} of {r.of}
+                        </span>
+                      )}
+                    </div>
+                    {topPlayers.map((p) => (
+                      <div
+                        key={p.id}
+                        style={{ fontSize: 11, color: "#c8cfe3", marginLeft: 14, marginBottom: 2 }}
+                      >
+                        {p.name}{" "}
+                        <span style={{ color: p.score >= 70 ? "#00f5a0" : "#94a3b8" }}>
+                          ({p.score})
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })
+            ) : (
+              <div style={{ fontSize: 12, color: "#d1d7ea" }}>
+                Lean on picks and secondary pieces more than core starters.
               </div>
-            ))
-          ) : (
-            <div style={{ fontSize: 12, color: "#d1d7ea" }}>
-              Lean on picks and secondary pieces more than core starters.
-            </div>
-          )}
+            );
+          })()}
         </div>
       </div>
 

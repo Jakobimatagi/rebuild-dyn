@@ -144,7 +144,8 @@ export function estimatePickValue(pick, leagueContext, tradeMarket = null) {
     0,
     Number(pick.season || currentYear) - currentYear,
   );
-  const slot = pick.round === 1 ? 16 : 24;
+  // Use actual projected slot when available, otherwise default mid-round
+  const slot = pick.slot != null ? pick.slot : (pick.round === 1 ? 16 : 24);
   let value = draftCapitalScore(pick.round, slot) || 12;
 
   if (pick.round === 1 && leagueContext.isSuperflex) value += 8;
