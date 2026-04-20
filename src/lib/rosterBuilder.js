@@ -485,6 +485,28 @@ export function buildRosterSnapshot(
       const ppg = s24?.gp > 0 ? ((s24.pts_ppr || 0) / s24.gp).toFixed(1) : null;
       const gp24 = s24?.gp || 0;
 
+      // Usage stats — per-game rates only when ≥4 games played.
+      // Sleeper returns full stat objects; we pull what the grade system can use.
+      const _gp = gp24 >= 4 ? gp24 : 0;
+      const rushAttPg   = _gp ? (s24.rush_att   || 0) / _gp : null;
+      const rushYdPg    = _gp ? (s24.rush_yd    || 0) / _gp : null;
+      const targetsPg   = _gp ? (s24.rec_tgt    || 0) / _gp : null;
+      const receptionsPg = _gp ? (s24.rec       || 0) / _gp : null;
+      const rzTargets   = _gp ? (s24.rec_rz_tgt || 0) : null; // season total, not per-game
+
+      // BMI from Sleeper player metadata — weight (lbs) and height (inches or "6'2" format).
+      const weightLbs = Number(p.weight) || 0;
+      const heightRaw = p.height || "";
+      const heightIn = (() => {
+        const n = Number(heightRaw);
+        if (!isNaN(n) && n > 50) return n;
+        const m = heightRaw.match(/(\d+)'(\d+)/);
+        return m ? Number(m[1]) * 12 + Number(m[2]) : 0;
+      })();
+      const bmi = weightLbs > 0 && heightIn > 0
+        ? Math.round((weightLbs / (heightIn * heightIn)) * 703 * 10) / 10
+        : null;
+
       // Blend internal score with FC + RA market data NOW so every downstream grade
       // (verdict, archetype, room quality, trade value) uses the community-informed score.
       const fantasyCalcEntry = fantasyCalcContext.bySleeperId.get(String(id));
@@ -526,6 +548,13 @@ export function buildRosterSnapshot(
         pctilePrev: pctiles.pPrev,
         pctileOlder: pctiles.pOlder,
         draftTier: draftTierLabel(draftRound, draftSlot),
+        rushAttPg,
+        rushYdPg,
+        targetsPg,
+        receptionsPg,
+        rzTargets,
+        bmi,
+        weightLbs: weightLbs || null,
       };
 
       // RosterAudit enrichment (before archetype so RA signals are available)

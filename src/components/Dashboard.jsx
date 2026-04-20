@@ -211,6 +211,8 @@ export default function Dashboard({
           leagueTeams={analysis.leagueTeams}
           myRosterId={analysis.rosterId}
           raPickValues={rosterAuditSource?.pickValues}
+          posRanks={analysis.posRanks}
+          isSuperflex={analysis.leagueContext?.isSuperflex}
         />
       )}
 
