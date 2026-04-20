@@ -4,6 +4,7 @@
  * Pure functions — no side effects.
  */
 import { getKeepCount } from "./marketValue";
+import { clamp } from "./scoringEngine";
 
 export function getVerdict(score) {
   if (score >= 72) return "buy";
@@ -55,6 +56,102 @@ export function computeRoomQuality(players, pos = null, isSuperflex = null) {
   return weightedSum / weightTotal;
 }
 
+// Position-specific 1-10 room grade.
+// Answers "how elite is this room in absolute terms?" — distinct from
+// league-relative posRanks. 8-10 is a cheat-code room, 5-7 is playable,
+// 1-4 is a hole that needs addressing.
+//
+// Per-slot weights reflect the reality of each position:
+//   QB_SF : two anchors carry equal weight (Superflex demands both)
+//   QB    : single anchor dominates, QB2 is a streamer floor
+//   RB    : hammers up top, flex-depth still matters (RB attrition)
+//   WR    : widest curve — depth contributes through WR4
+//   TE    : elite anchor is the entire grade, depth barely moves it
+const GRADE_SLOT_WEIGHTS = {
+  QB_SF: [1.0, 0.95, 0.25, 0.1],
+  QB: [1.0, 0.3, 0.1],
+  RB: [1.0, 0.85, 0.5, 0.25],
+  WR: [1.0, 0.85, 0.55, 0.3, 0.15],
+  TE: [1.0, 0.2, 0.08],
+};
+
+// Per-slot quality (0-100) for one player. Blends current production floor,
+// peak ceiling, job security, and age runway — then applies position-specific
+// adjustments backed by actual usage data where available.
+//
+// QB: job security paramount; rushing upside (30+ rush yd/g) is a real floor bonus.
+// RB: workhorse carry load (15+ att/g) and pass-catching (4+ tgt/g) raise the floor.
+// WR: 23-27 prime window with real volume (8+ tgt/g) is the ascending-alpha signal.
+// TE: red zone presence (8+ RZ targets/season) confirms a true difference-maker role.
+function slotQuality(player, pos, slotIdx) {
+  if (!player) return 0;
+  const cur = player.currentPctile ?? 0;
+  const peak = player.peakPctile ?? 0;
+  const situ = player.components?.situ ?? 0;
+  const ageScore = player.components?.age ?? 0;
+  const rawAge = player.age ?? 26;
+  const exp = player.yearsExp ?? 0;
+
+  let q = 0.4 * cur + 0.25 * peak + 0.2 * situ + 0.15 * ageScore;
+
+  if (pos === "QB" && slotIdx < 2) {
+    if (situ < 60) q *= 0.75;
+    else if (situ >= 85 && cur >= 60) q += 4;
+    if ((player.rushYdPg ?? 0) >= 30) q += 3;
+  } else if (pos === "RB") {
+    if (slotIdx < 2 && situ < 55) q *= 0.82;
+    if (slotIdx < 2 && (player.rushAttPg ?? 0) >= 15) q += 4;
+    if ((player.targetsPg ?? 0) >= 4) q += 3;
+  } else if (pos === "WR") {
+    if (slotIdx < 2 && rawAge >= 23 && rawAge <= 27 && cur >= 55) q += 6;
+    if (slotIdx < 2 && (player.targetsPg ?? 0) >= 8) q += 3;
+    if (slotIdx < 2 && (player.targetsPg ?? 0) < 4 && cur < 50) q -= 4;
+    if (slotIdx >= 2 && exp >= 5 && cur < 35) q *= 0.7;
+  } else if (pos === "TE" && slotIdx === 0) {
+    if (cur >= 70 && peak >= 70) q += 8;
+    else if (cur < 40) q *= 0.7;
+    if ((player.rzTargets ?? 0) >= 8) q += 4;
+  }
+
+  return clamp(q, 0, 100);
+}
+
+function gradeFromScore(s) {
+  if (s >= 80) return 10;
+  if (s >= 72) return 9;
+  if (s >= 64) return 8;
+  if (s >= 56) return 7;
+  if (s >= 48) return 6;
+  if (s >= 40) return 5;
+  if (s >= 32) return 4;
+  if (s >= 24) return 3;
+  if (s >= 16) return 2;
+  return 1;
+}
+
+function gradeColor(grade) {
+  if (grade >= 8) return "#00f5a0";
+  if (grade >= 5) return "#ffd84d";
+  return "#ff6b35";
+}
+
+export function computePositionGrade(players, pos, isSuperflex) {
+  const key = pos === "QB" && isSuperflex ? "QB_SF" : pos;
+  const weights = GRADE_SLOT_WEIGHTS[key];
+  if (!weights) return null;
+
+  let weightedSum = 0;
+  let weightTotal = 0;
+  for (let i = 0; i < weights.length; i++) {
+    const w = weights[i];
+    weightedSum += slotQuality(players?.[i], pos, i) * w;
+    weightTotal += w;
+  }
+  const raw = weightTotal > 0 ? weightedSum / weightTotal : 0;
+  const grade = gradeFromScore(raw);
+  return { grade, color: gradeColor(grade), score: Math.round(raw) };
+}
+
 const POSITIONS_TO_RANK = ["QB", "RB", "WR", "TE"];
 
 // Ranks every team's position rooms 1..N across the league. Mutates each
@@ -66,10 +163,14 @@ export function assignPositionRanks(leagueTeams, isSuperflex) {
   if (!total) return;
 
   for (const pos of POSITIONS_TO_RANK) {
-    const entries = leagueTeams.map((team) => ({
-      team,
-      quality: computeRoomQuality(team.byPos?.[pos] || [], pos, isSuperflex),
-    }));
+    const entries = leagueTeams.map((team) => {
+      const roster = team.byPos?.[pos] || [];
+      return {
+        team,
+        quality: computeRoomQuality(roster, pos, isSuperflex),
+        grade: computePositionGrade(roster, pos, isSuperflex),
+      };
+    });
 
     // Sort descending by quality. Null sorts last.
     entries.sort((a, b) => {
@@ -87,6 +188,9 @@ export function assignPositionRanks(leagueTeams, isSuperflex) {
         of: total,
         quality: entry.quality != null ? Math.round(entry.quality) : null,
         color: rankColor(rank, total),
+        grade: entry.grade?.grade ?? null,
+        gradeColor: entry.grade?.color ?? null,
+        gradeScore: entry.grade?.score ?? null,
       };
     });
   }

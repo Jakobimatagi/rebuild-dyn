@@ -6,6 +6,404 @@ import { estimatePickValue, pickSlotLabel } from "../../lib/marketValue";
 import PlayerDeepDiveModal from "./PlayerDeepDiveModal";
 import ScoreBar from "./ScoreBar";
 
+const POS_RUBRIC = {
+  QB: [
+    { range: "8–10", desc: "Two locked-in starters with elite production and ceiling — the Superflex cheat code" },
+    { range: "5–7", desc: "One elite anchor + a bridge vet, or two solid mid-tier starters" },
+    { range: "1–4", desc: "No insulated starter — streaming and praying every week" },
+  ],
+  RB: [
+    { range: "8–10", desc: "High-volume hammer(s) with locked-in carries + a pass-catcher keeping the floor stable" },
+    { range: "5–7", desc: "Solid contributors but aging, rotational, or no pass-catching role to protect the floor" },
+    { range: "1–4", desc: "No insulated assets — handcuffs and dart throws" },
+  ],
+  WR: [
+    { range: "8–10", desc: "Multiple high-volume targets (age 23–27) with real production plus reliable depth" },
+    { range: "5–7", desc: "Solid secondary pieces without a commanding alpha driving targets" },
+    { range: "1–4", desc: "Low-target role players and depth fillers — no one tilting coverage" },
+  ],
+  TE: [
+    { range: "8–10", desc: "Top-end producer with red-zone presence — a true positional advantage every week" },
+    { range: "5–7", desc: "Reliable TE averaging around 10–12 ppg — not bleeding points, not winning weeks" },
+    { range: "1–4", desc: "Minimal weekly production — praying for a touchdown to matter" },
+  ],
+};
+
+function gradeColor(grade) {
+  if (grade >= 8) return "#00f5a0";
+  if (grade >= 5) return "#ffd84d";
+  return "#ff6b35";
+}
+
+function gradeTierLabel(grade) {
+  if (grade >= 8) return "Cheat code";
+  if (grade >= 5) return "Playable";
+  return "Hole";
+}
+
+function fmt1(n) { return n != null ? n.toFixed(1) : null; }
+
+function getGradeSignals(players, pos, isSuperflex) {
+  if (!players.length) return [{ text: "No players rostered — priority add", positive: false }];
+  const signals = [];
+  const anchor = players[0];
+  const anchor2 = players[1];
+
+  if (pos === "QB") {
+    const situ1 = anchor.components?.situ ?? 0;
+    const cur1 = anchor.currentPctile ?? 0;
+    const rushYd = anchor.rushYdPg;
+    if (situ1 >= 85 && cur1 >= 60) {
+      const rushNote = rushYd >= 30 ? ` · adds ${fmt1(rushYd)} rush yd/g floor` : "";
+      signals.push({ text: `${anchor.name} is a locked-in starter with elite production${rushNote}`, positive: true });
+    } else if (situ1 < 60) {
+      signals.push({ text: `${anchor.name}'s role security is shaky — job insecurity dragging the grade`, positive: false });
+    } else {
+      const rushNote = rushYd >= 30 ? ` — rushing upside (${fmt1(rushYd)} yd/g) raises his floor` : "";
+      signals.push({ text: `${anchor.name} is a solid but not elite QB1${rushNote}`, positive: null });
+    }
+    if (isSuperflex) {
+      if (anchor2) {
+        const situ2 = anchor2.components?.situ ?? 0;
+        const cur2 = anchor2.currentPctile ?? 0;
+        if (situ2 >= 70 && cur2 >= 50) {
+          signals.push({ text: `${anchor2.name} is a real QB2 — Superflex ceiling intact`, positive: true });
+        } else {
+          signals.push({ text: `${anchor2.name} is a bridge/streaming option — QB2 slot is a weekly liability`, positive: false });
+        }
+      } else {
+        signals.push({ text: "No QB2 rostered — Superflex ceiling capped every week", positive: false });
+      }
+    }
+  } else if (pos === "RB") {
+    const situ1 = anchor.components?.situ ?? 0;
+    const carries = anchor.rushAttPg;
+    const tgts = anchor.targetsPg;
+    if (situ1 >= 75 && carries >= 15) {
+      signals.push({ text: `${anchor.name} is a true bell-cow — ${fmt1(carries)} carries/g with locked-in role`, positive: true });
+    } else if (situ1 >= 75) {
+      signals.push({ text: `${anchor.name} has the role secured${carries != null ? ` (${fmt1(carries)} att/g)` : ""}`, positive: true });
+    } else if (situ1 < 55) {
+      signals.push({ text: `${anchor.name} is in a committee — no workhorse at RB1${carries != null ? ` (${fmt1(carries)} att/g)` : ""}`, positive: false });
+    } else {
+      signals.push({ text: `${anchor.name} is a solid RB1 but carries some role risk`, positive: null });
+    }
+    // Pass-catching floor
+    const bestCatcher = players.find(p => (p.targetsPg ?? 0) >= 4);
+    if (bestCatcher) {
+      signals.push({ text: `${bestCatcher.name} adds a pass-catching floor — ${fmt1(bestCatcher.targetsPg)} tgt/g keeps the room stable on bad run-game weeks`, positive: true });
+    } else if (anchor2) {
+      const situ2 = anchor2.components?.situ ?? 0;
+      if (situ2 < 55) {
+        signals.push({ text: `${anchor2.name} is rotational — handoff the moment they break down`, positive: false });
+      }
+    } else {
+      signals.push({ text: "Thin behind RB1 — one injury collapses your floor", positive: false });
+    }
+  } else if (pos === "WR") {
+    const alpha = players.find(p => p.age >= 23 && p.age <= 27 && (p.currentPctile ?? 0) >= 55);
+    if (alpha) {
+      const tgtNote = alpha.targetsPg >= 8 ? ` · ${fmt1(alpha.targetsPg)} tgt/g confirms the target share` : alpha.targetsPg != null ? ` · ${fmt1(alpha.targetsPg)} tgt/g` : "";
+      signals.push({ text: `${alpha.name} (age ${alpha.age}) is in the prime window${tgtNote}`, positive: true });
+    } else {
+      signals.push({ text: "No ascending alpha (age 23–27) with real production — long-term ceiling limited", positive: false });
+    }
+    const highVol = players.find(p => p !== alpha && (p.targetsPg ?? 0) >= 7);
+    if (highVol) {
+      signals.push({ text: `${highVol.name} is a legit WR2 commanding volume — ${fmt1(highVol.targetsPg)} tgt/g`, positive: true });
+    }
+    const lowTgtVets = players.filter((p, i) => i >= 2 && (p.yearsExp ?? 0) >= 5 && (p.targetsPg ?? 0) < 4);
+    if (lowTgtVets.length >= 2) {
+      signals.push({ text: "Depth past WR2 is low-target filler — not real flex options", positive: false });
+    }
+  } else if (pos === "TE") {
+    const cur = anchor.currentPctile ?? 0;
+    const peak = anchor.peakPctile ?? 0;
+    const rz = anchor.rzTargets;
+    const tgts = anchor.targetsPg;
+    if (cur >= 70 && peak >= 70) {
+      const rzNote = rz >= 8 ? ` · ${rz} red zone targets last season` : "";
+      signals.push({ text: `${anchor.name} is a true difference-maker — elite production and ceiling${rzNote}`, positive: true });
+    } else if (cur < 40) {
+      signals.push({ text: `${anchor.name} is providing minimal production — praying for touchdowns each week`, positive: false });
+    } else {
+      const rzNote = rz >= 8 ? ` · ${rz} red zone targets gives him TD upside` : rz != null && rz < 4 ? " · low red zone volume limits his ceiling" : "";
+      signals.push({ text: `${anchor.name} is a mid-tier TE — reliable but not a positional edge${rzNote}`, positive: null });
+    }
+    if (!anchor2 || (anchor2.currentPctile ?? 0) < 30) {
+      signals.push({ text: "No real TE2 — an injury to your starter is a season-altering problem", positive: false });
+    }
+  }
+
+  return signals.slice(0, 3);
+}
+
+// ---------------------------------------------------------------------------
+// Flex Room
+// ---------------------------------------------------------------------------
+
+const FLEX_RUBRIC = [
+  { range: "8–10", desc: "Multiple plug-and-play options — you never stress the flex spot" },
+  { range: "5–7", desc: "One reliable flex starter; the rest are matchup-dependent streamers" },
+  { range: "1–4", desc: "Weekly guessing game — your best option is someone else's taxi squad" },
+];
+
+function computeFlexGrade(flexPlayers, flexCount) {
+  if (!flexPlayers.length) return 1;
+  const slots = Math.max(flexCount || 1, 1);
+  const starters = flexPlayers.slice(0, slots);
+  const avg = starters.reduce((s, p) => s + p.score, 0) / starters.length;
+  return Math.max(1, Math.min(10, Math.round((avg - 38) / 5 + 1)));
+}
+
+function getFlexSignals(flexPlayers, flexCount) {
+  if (!flexPlayers.length) return [{ text: "No viable flex options — every positional room needs upgrades", positive: false }];
+  const signals = [];
+  const slots = Math.max(flexCount || 1, 1);
+  const reliables = flexPlayers.filter(p => p.score >= 58);
+  const top = flexPlayers[0];
+
+  if (reliables.length >= slots) {
+    signals.push({ text: `${reliables.length} players at or above a reliable weekly starter threshold — real weekly options, not hope`, positive: true });
+  } else if (reliables.length === 0) {
+    signals.push({ text: `${top.name} is your best flex option at a score of ${top.score} — below a reliable starter floor`, positive: false });
+  } else {
+    signals.push({ text: `${reliables.length} of your ${slots} flex slot${slots > 1 ? "s" : ""} filled by a reliable option — rest are matchup plays`, positive: null });
+  }
+
+  const youngUpside = flexPlayers.find(p => p.age <= 25 && p.score >= 52);
+  if (youngUpside) {
+    signals.push({ text: `${youngUpside.name} (age ${youngUpside.age}) is a young flex piece with ascending upside`, positive: true });
+  }
+
+  const vets = flexPlayers.filter(p => (p.yearsExp ?? 0) >= 6 && p.score < 50);
+  if (vets.length >= 2) {
+    signals.push({ text: `${vets.length} aging vets with declining value clogging your flex depth — trade or cut candidates`, positive: false });
+  }
+
+  return signals.slice(0, 3);
+}
+
+function FlexRoom({ byPos, leagueContext, setDeepDivePlayer }) {
+  const starterCounts = leagueContext?.starterCounts || { RB: 2, WR: 3, TE: 1 };
+  const flexCount = leagueContext?.flexCount || 1;
+
+  const flexPlayers = [
+    ...((byPos.RB || []).slice(starterCounts.RB ?? 2)),
+    ...((byPos.WR || []).slice(starterCounts.WR ?? 3)),
+    ...((byPos.TE || []).slice(starterCounts.TE ?? 1)),
+  ].sort((a, b) => b.score - a.score);
+
+  const grade = computeFlexGrade(flexPlayers, flexCount);
+  const color = gradeColor(grade);
+  const activeRow = FLEX_RUBRIC.find(({ range }) =>
+    (range.startsWith("8") && grade >= 8) ||
+    (range.startsWith("5") && grade >= 5 && grade <= 7) ||
+    (range.startsWith("1") && grade <= 4)
+  );
+  const signals = getFlexSignals(flexPlayers, flexCount);
+
+  return (
+    <div style={{ marginBottom: 32 }}>
+      <div className="dyn-room-label" style={{ ...styles.sectionLabel, marginBottom: 12 }}>
+        FLEX Room
+      </div>
+
+      {flexPlayers.length === 0 ? (
+        <div style={{ ...styles.card, borderColor: "rgba(255,45,85,0.3)" }}>
+          <span style={{ color: "#ff2d55", fontSize: 12 }}>⚠ No flex depth — all positions are thin past their starter slots</span>
+        </div>
+      ) : (
+        flexPlayers.slice(0, 8).map((p) => {
+          const col = getColor(p.verdict);
+          return (
+            <div
+              key={p.id}
+              className="dyn-card-player"
+              style={{ ...styles.card, padding: "12px 16px" }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{
+                    width: 36, height: 36, borderRadius: "50%",
+                    background: `${col}18`, border: `2px solid ${col}`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 12, color: col, fontWeight: 700, flexShrink: 0,
+                  }}>
+                    {p.score}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 13, color: "#e8e8f0", fontWeight: 600 }}>{p.name}</div>
+                    <div style={{ fontSize: 11, color: "#d1d7ea", marginTop: 2 }}>
+                      {p.position} · {p.team} · {p.age}yo
+                      {p.ppg && <span> · <span style={{ color: "#e0e5f7" }}>{p.ppg} ppg ({p.gp24}g)</span></span>}
+                      {p.injuryStatus && <span style={{ color: "#ff6b35", marginLeft: 6 }}>{p.injuryStatus}</span>}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 9, color: "#94a3b8", letterSpacing: 1 }}>
+                    {p.position === "RB" ? `RB${(byPos.RB || []).indexOf(p) + 1}` :
+                     p.position === "WR" ? `WR${(byPos.WR || []).indexOf(p) + 1}` :
+                     `TE${(byPos.TE || []).indexOf(p) + 1}`}
+                  </span>
+                  <span style={styles.tag(col)}>{p.verdict}</span>
+                  <button
+                    onClick={() => setDeepDivePlayer(p)}
+                    title="Deep dive"
+                    aria-label={`Deep dive for ${p.name}`}
+                    className="dyn-expand-btn"
+                    style={{
+                      background: "rgba(0,245,160,0.07)",
+                      border: "1px solid rgba(0,245,160,0.25)",
+                      borderRadius: 2, color: "#00f5a0",
+                      fontSize: 9, padding: "3px 8px",
+                      letterSpacing: 1, cursor: "pointer",
+                    }}
+                  >
+                    Deep Dive
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })
+      )}
+
+      {/* Flex Room Report */}
+      <div style={{ marginTop: 10, borderRadius: 6, background: `${color}0a`, border: `1px solid ${color}30`, padding: "12px 16px" }}>
+        <div style={{ fontSize: 9, color: "#94a3b8", letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 }}>Room Report</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
+            <span style={{ fontSize: 26, fontWeight: 700, color, lineHeight: 1 }}>{grade}</span>
+            <span style={{ fontSize: 12, color: "#d1d7ea", fontWeight: 500 }}>/10</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: 0.5 }}>{gradeTierLabel(grade)}</span>
+              <span style={{ fontSize: 10, color: "#94a3b8" }}>· {flexCount} flex slot{flexCount > 1 ? "s" : ""}</span>
+            </div>
+            {activeRow && <span style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.4 }}>{activeRow.desc}</span>}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {FLEX_RUBRIC.map(({ range }) => {
+              const tc = range.startsWith("8") ? "#00f5a0" : range.startsWith("5") ? "#ffd84d" : "#ff6b35";
+              const isActive = activeRow?.range === range;
+              return <div key={range} style={{ width: 8, height: 8, borderRadius: "50%", background: isActive ? tc : `${tc}30`, border: `1px solid ${tc}${isActive ? "cc" : "44"}` }} />;
+            })}
+          </div>
+        </div>
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+          {signals.map(({ text, positive }, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+              <span style={{ fontSize: 10, flexShrink: 0, marginTop: 1, color: positive === true ? "#00f5a0" : positive === false ? "#ff6b35" : "#ffd84d" }}>
+                {positive === true ? "▲" : positive === false ? "▼" : "◆"}
+              </span>
+              <span style={{ fontSize: 11, color: "#c8cfe3", lineHeight: 1.4 }}>{text}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PositionGradeStrip({ pos, posRanks, isSuperflex, players }) {
+  const r = posRanks?.[pos];
+  const grade = r?.grade ?? null;
+  if (grade == null) return null;
+  const color = gradeColor(grade);
+  const rubric = POS_RUBRIC[pos] || [];
+  const activeRow = rubric.find(({ range }) =>
+    (range.startsWith("8") && grade >= 8) ||
+    (range.startsWith("5") && grade >= 5 && grade <= 7) ||
+    (range.startsWith("1") && grade <= 4)
+  );
+  const signals = getGradeSignals(players || [], pos, isSuperflex);
+
+  return (
+    <div
+      style={{
+        marginTop: 10,
+        borderRadius: 6,
+        background: `${color}0a`,
+        border: `1px solid ${color}30`,
+        padding: "12px 16px",
+      }}
+    >
+      <div style={{ fontSize: 9, color: "#94a3b8", letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 }}>
+        Room Report
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: signals.length ? 10 : 0 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
+          <span style={{ fontSize: 26, fontWeight: 700, color, lineHeight: 1 }}>{grade}</span>
+          <span style={{ fontSize: 12, color: "#d1d7ea", fontWeight: 500 }}>/10</span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: 0.5 }}>
+              {gradeTierLabel(grade)}
+            </span>
+            {isSuperflex && pos === "QB" && (
+              <span style={{ fontSize: 9, color: "#94a3b8", letterSpacing: 1 }}>SUPERFLEX</span>
+            )}
+            {r?.rank != null && (
+              <span style={{ fontSize: 10, color: "#94a3b8" }}>· {r.rank}/{r.of} in league</span>
+            )}
+          </div>
+          {activeRow && (
+            <span style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.4 }}>{activeRow.desc}</span>
+          )}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
+          {rubric.map(({ range }) => {
+            const tc = range.startsWith("8") ? "#00f5a0" : range.startsWith("5") ? "#ffd84d" : "#ff6b35";
+            const isActive = activeRow?.range === range;
+            return (
+              <div
+                key={range}
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: isActive ? tc : `${tc}30`,
+                  border: `1px solid ${tc}${isActive ? "cc" : "44"}`,
+                }}
+              />
+            );
+          })}
+        </div>
+      </div>
+
+      {signals.length > 0 && (
+        <div
+          style={{
+            borderTop: "1px solid rgba(255,255,255,0.06)",
+            paddingTop: 8,
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}
+        >
+          {signals.map(({ text, positive }, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+              <span style={{
+                fontSize: 10,
+                flexShrink: 0,
+                marginTop: 1,
+                color: positive === true ? "#00f5a0" : positive === false ? "#ff6b35" : "#ffd84d",
+              }}>
+                {positive === true ? "▲" : positive === false ? "▼" : "◆"}
+              </span>
+              <span style={{ fontSize: 11, color: "#c8cfe3", lineHeight: 1.4 }}>{text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Phase → RA slot key
 const PHASE_TO_SLOT = { rebuild: "early", retool: "mid", contender: "late" };
 
@@ -46,6 +444,8 @@ export default function RosterTab({
   leagueTeams,
   myRosterId,
   raPickValues,
+  posRanks,
+  isSuperflex,
 }) {
   const [deepDivePlayer, setDeepDivePlayer] = useState(null);
 
@@ -99,17 +499,17 @@ export default function RosterTab({
               </span>
             </button>
 
-            {!isRoomCollapsed &&
-              (byPos[pos].length === 0 ? (
-                <div
-                  style={{ ...styles.card, borderColor: "rgba(255,45,85,0.3)" }}
-                >
-                  <span style={{ color: "#ff2d55", fontSize: 12 }}>
-                    ⚠ Empty — priority fill via draft or trade
-                  </span>
-                </div>
-              ) : (
-                byPos[pos].map((p) => {
+            {!isRoomCollapsed && (
+              <>
+                {byPos[pos].length === 0 ? (
+                  <div
+                    style={{ ...styles.card, borderColor: "rgba(255,45,85,0.3)" }}
+                  >
+                    <span style={{ color: "#ff2d55", fontSize: 12 }}>
+                      ⚠ Empty — priority fill via draft or trade
+                    </span>
+                  </div>
+                ) : byPos[pos].map((p) => {
                   const col = getColor(p.verdict);
                   const barsOpen = !!expandedBars[p.id];
                   return (
@@ -584,11 +984,15 @@ export default function RosterTab({
                       )}
                     </div>
                   );
-                })
-              ))}
+                })}
+              <PositionGradeStrip pos={pos} posRanks={posRanks} isSuperflex={isSuperflex} players={byPos[pos]} />
+            </>
+          )}
           </div>
         );
       })}
+
+      <FlexRoom byPos={byPos} leagueContext={leagueContext} setDeepDivePlayer={setDeepDivePlayer} />
 
       {/* Draft Capital Section */}
       {picks && picks.length > 0 && (() => {
