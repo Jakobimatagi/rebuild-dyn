@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { verifyLogin, fetchAllData, upsertProspect, deleteProspect, upsertAnnotation, fetchMyRankings, upsertExpertRanking, deleteExpertRanking } from "../lib/supabase.js";
+import { verifyLogin, fetchAllData, upsertProspect, upsertAnnotation, fetchMyRankings, upsertExpertRanking, deleteExpertRanking } from "../lib/supabase.js";
 import { BLUE_BLOOD_TEAMS, P5_TEAMS, CAPITAL_PROD_SCORES, CONFERENCE_SCORES, TIER_RANK, deriveSchool, computeGrade, deriveTier, dynastyScore } from "../lib/prospectScoring.js";
 
 const POS_COLORS = {
@@ -1358,12 +1358,6 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                 </button>
                 <input ref={annInputRef} type="file" accept=".csv,text/csv" className="hidden"
                   onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportCsv(f); e.target.value = ""; }} />
-                {state.prospects.length > 0 && (
-                  <button onClick={async () => { if (confirm("Clear all prospects from the database?")) { await Promise.all(state.prospects.map((p) => deleteProspect(p.id).catch(console.error))); update({ prospects: [], tab: "add" }); } }}
-                    className="text-xs font-semibold border border-rose-500/30 hover:border-rose-400/60 text-rose-400 px-2.5 py-1.5 rounded-md bg-slate-900/40">
-                    Clear All
-                  </button>
-                )}
               </div>
             </div>
 
