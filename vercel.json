@@ -1,6 +1,7 @@
 {
   "rewrites": [
     { "source": "/api/fleaflicker", "destination": "/api/fleaflicker" },
-    { "source": "/api/rosteraudit", "destination": "/api/rosteraudit" }
+    { "source": "/api/rosteraudit", "destination": "/api/rosteraudit" },
+    { "source": "/admin/:path*", "destination": "/index.html" }
   ]
 }

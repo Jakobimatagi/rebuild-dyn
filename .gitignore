@@ -1,2 +1,11 @@
+# Dependencies and build output
+node_modules/
+dist/
+
 # Local Claude settings (contain machine-specific paths)
 .claude/settings.local.json
+
+# Local env files — secrets stay out of the repo
+.env
+.env.local
+.env.*.local

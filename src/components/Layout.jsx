@@ -12,6 +12,8 @@ export default function Layout({ children }) {
         {children}
       </div>
       <footer style={footerStyle}>
+        <a href="/rookie-rankings" style={linkStyle}>Rookie Rankings</a>
+        <span style={{ color: "rgba(255,255,255,0.15)", margin: "0 10px" }}>·</span>
         <a
           href="#privacy"
           style={linkStyle}
@@ -21,6 +23,8 @@ export default function Layout({ children }) {
         </a>
         <span style={{ color: "rgba(255,255,255,0.15)", margin: "0 10px" }}>·</span>
         <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}>© {new Date().getFullYear()} Dynasty Advisor</span>
+        <span style={{ color: "rgba(255,255,255,0.15)", margin: "0 10px" }}>·</span>
+        <a href="/admin/rookie-prospector" style={{ ...linkStyle, color: "rgba(255,255,255,0.2)" }}>Admin</a>
       </footer>
 
       {showPrivacy && (

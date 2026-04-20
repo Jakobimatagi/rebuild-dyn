@@ -11,6 +11,7 @@ import LeagueActivityTab from "./dashboard/LeagueActivityTab";
 import DocumentationTab from "./dashboard/DocumentationTab";
 import RankingsTab from "./dashboard/RankingsTab";
 import StrategyPlannerTab from "./dashboard/StrategyPlannerTab";
+import RookieRankingsTab from "./dashboard/RookieRankingsTab";
 
 export default function Dashboard({
   analysis,
@@ -148,6 +149,7 @@ export default function Dashboard({
           { key: "trades", label: "trades" },
           { key: "strategy", label: "strategy" },
           { key: "rankings", label: "rankings" },
+          { key: "rookies", label: "rookie rankings" },
           { key: "league", label: "league" },
           { key: "activity", label: "activity" },
           { key: "docs", label: "Calculation Documentation" },
@@ -294,6 +296,8 @@ export default function Dashboard({
       {activeTab === "rankings" && (
         <RankingsTab rosterAuditSource={analysis.rosterAuditSource} />
       )}
+
+      {activeTab === "rookies" && <RookieRankingsTab />}
 
       {activeTab === "league" && (
         <LeagueTab
