@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import Dashboard from "./components/Dashboard";
+import ErrorBoundary from "./components/ErrorBoundary";
 import InputScreen from "./components/InputScreen";
 import Layout from "./components/Layout";
 import LeaguePickerScreen from "./components/LeaguePickerScreen";
+import LoadingScreen from "./components/LoadingScreen";
 import { buildRosterAnalysis, DEFAULT_SCORING_WEIGHTS } from "./lib/analysis";
 import { fetchFantasyCalcValues } from "./lib/fantasyCalcApi";
 import {
@@ -368,6 +370,12 @@ export default function App() {
   }
 
   async function handleFleaflickerSubmit() {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(ffEmail)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+
     setLoading(true);
     setError("");
 
@@ -473,6 +481,7 @@ export default function App() {
 
   if (step === "dashboard" && analysis) {
     return (
+      <ErrorBoundary>
       <Layout>
         <Dashboard
           analysis={analysis}
@@ -498,14 +507,9 @@ export default function App() {
           recalculating={recalculating}
         />
       </Layout>
+      </ErrorBoundary>
     );
   }
 
-  return (
-    <Layout>
-      <div style={{ textAlign: "center", padding: 80, color: "#d1d7ea" }}>
-        Loading...
-      </div>
-    </Layout>
-  );
+  return <LoadingScreen message="Loading your league…" />;
 }
