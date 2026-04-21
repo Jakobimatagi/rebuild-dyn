@@ -47,7 +47,6 @@ export default function Dashboard({
     proportions,
     surplusPositions,
     needs,
-    tradeSuggestions,
     tradeBlock,
     leagueContext,
     tradeMarket,
@@ -218,7 +217,6 @@ export default function Dashboard({
 
       {activeTab === "trades" && (
         <TradeTab
-          tradeSuggestions={tradeSuggestions}
           weakRooms={weakRooms}
           surplusPositions={surplusPositions}
           tradeBlock={tradeBlock}

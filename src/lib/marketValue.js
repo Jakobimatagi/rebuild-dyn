@@ -280,6 +280,35 @@ export function pickFcValue(
 }
 
 // ---------------------------------------------------------------------------
+// Shared pick display utilities (used by RosterTab and PicksTab)
+// ---------------------------------------------------------------------------
+
+export const PHASE_TO_SLOT = { rebuild: "early", retool: "mid", contender: "late" };
+
+export function getPickValue(pick, ownerPhase, raPickValues, leagueContext, tradeMarket) {
+  if (raPickValues && pick?.round) {
+    if (pick.slot != null) {
+      const exactKey = `${pick.season}-${pick.round}-${pick.slot}`;
+      const exactVal = raPickValues[exactKey];
+      if (exactVal != null) return { value: exactVal, source: "ra" };
+    }
+    const slot = PHASE_TO_SLOT[ownerPhase] || "mid";
+    const key = `${pick.season}-${pick.round}-${slot}`;
+    const raVal = raPickValues[key];
+    if (raVal != null) return { value: raVal, source: "ra" };
+  }
+  if (leagueContext) {
+    return { value: estimatePickValue(pick, leagueContext, tradeMarket), source: "est" };
+  }
+  return null;
+}
+
+export function formatPickValue(val) {
+  if (val >= 1000) return `${(val / 1000).toFixed(1)}k`;
+  return String(val);
+}
+
+// ---------------------------------------------------------------------------
 // Trend scoring delta — reusable across all planner sections.
 // ---------------------------------------------------------------------------
 // `fantasyCalcTrend` is the raw 30-day $ change in FC value. We normalize

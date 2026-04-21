@@ -107,7 +107,7 @@ export default function App() {
     }
   }, []);
 
-  async function loadDashboard(league, uname) {
+  async function loadDashboard(league, uname, { returnToLeagues = false } = {}) {
     setSelectedLeague(league);
     setLoading(true);
     setError("");
@@ -211,14 +211,14 @@ export default function App() {
       setStep("dashboard");
     } catch (e) {
       localStorage.removeItem("sleeper_league");
-      setError(e.message || "Failed to load dashboard.");
-      setStep("input");
+      setError(e.message || "Failed to load dashboard. Try selecting your league again.");
+      setStep(returnToLeagues ? "leagues" : "input");
     }
 
     setLoading(false);
   }
 
-  async function loadFleaflickerDashboard(league) {
+  async function loadFleaflickerDashboard(league, { returnToLeagues = false } = {}) {
     setSelectedLeague(league);
     setLoading(true);
     setError("");
@@ -305,8 +305,8 @@ export default function App() {
       setStep("dashboard");
     } catch (e) {
       localStorage.removeItem("ff_league");
-      setError(e.message || "Failed to load Fleaflicker dashboard.");
-      setStep("input");
+      setError(e.message || "Failed to load Fleaflicker dashboard. Try selecting your league again.");
+      setStep(returnToLeagues ? "leagues" : "input");
     }
 
     setLoading(false);
@@ -409,10 +409,10 @@ export default function App() {
   async function handleLeagueSelect(league) {
     if (league._platform === "fleaflicker") {
       localStorage.setItem("ff_league", JSON.stringify(league));
-      await loadFleaflickerDashboard(league);
+      await loadFleaflickerDashboard(league, { returnToLeagues: true });
     } else {
       localStorage.setItem("sleeper_league", JSON.stringify(league));
-      await loadDashboard(league, username);
+      await loadDashboard(league, username, { returnToLeagues: true });
     }
   }
 
