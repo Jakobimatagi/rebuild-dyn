@@ -330,15 +330,19 @@ export default function App() {
   }
 
   async function handleUsernameSubmit() {
+    const trimmed = username.trim();
+    if (!trimmed) return;
+    if (trimmed !== username) setUsername(trimmed);
+
     setLoading(true);
     setError("");
 
     try {
-      const user = await fetchSleeper(`/user/${username}`);
+      const user = await fetchSleeper(`/user/${trimmed}`);
       if (!user?.user_id) throw new Error("User not found");
 
       localStorage.setItem("dynasty_os_platform", "sleeper");
-      localStorage.setItem("sleeper_username", username);
+      localStorage.setItem("sleeper_username", trimmed);
       const now = new Date();
       const currentSeason = now.getFullYear();
 
@@ -370,8 +374,11 @@ export default function App() {
   }
 
   async function handleFleaflickerSubmit() {
+    const trimmedEmail = ffEmail.trim();
+    if (trimmedEmail !== ffEmail) setFfEmail(trimmedEmail);
+
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(ffEmail)) {
+    if (!emailRegex.test(trimmedEmail)) {
       setError("Please enter a valid email address.");
       return;
     }
@@ -380,7 +387,7 @@ export default function App() {
     setError("");
 
     try {
-      const data = await fetchFFUserLeagues(ffEmail);
+      const data = await fetchFFUserLeagues(trimmedEmail);
       if (!data.leagues?.length)
         throw new Error("No NFL leagues found for this email.");
 
@@ -466,6 +473,9 @@ export default function App() {
   }
 
   if (step === "leagues") {
+    if (loading && selectedLeague) {
+      return <LoadingScreen message={`Loading ${selectedLeague.name}…`} />;
+    }
     return (
       <Layout>
         <LeaguePickerScreen
