@@ -1,6 +1,26 @@
 import { useState } from "react";
 import { styles } from "../styles";
+import { useModalBehavior } from "../lib/useModalBehavior";
 import PrivacyPolicy from "./Legal";
+
+function PrivacyModal({ onClose }) {
+  const modalRef = useModalBehavior(onClose);
+  return (
+    <div style={overlayStyle} onClick={onClose}>
+      <div
+        ref={modalRef}
+        style={modalStyle}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Privacy policy"
+      >
+        <button style={closeStyle} onClick={onClose} aria-label="Close privacy policy">✕</button>
+        <PrivacyPolicy onBack={onClose} />
+      </div>
+    </div>
+  );
+}
 
 export default function Layout({ children }) {
   const [showPrivacy, setShowPrivacy] = useState(false);
@@ -27,14 +47,7 @@ export default function Layout({ children }) {
         <a href="/admin/rookie-prospector" style={{ ...linkStyle, color: "rgba(255,255,255,0.2)" }}>Admin</a>
       </footer>
 
-      {showPrivacy && (
-        <div style={overlayStyle} onClick={() => setShowPrivacy(false)}>
-          <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
-            <button style={closeStyle} onClick={() => setShowPrivacy(false)} aria-label="Close privacy policy">✕</button>
-            <PrivacyPolicy onBack={() => setShowPrivacy(false)} />
-          </div>
-        </div>
-      )}
+      {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
     </div>
   );
 }
