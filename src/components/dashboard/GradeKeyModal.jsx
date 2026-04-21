@@ -1,20 +1,14 @@
-import { useEffect } from "react";
 import { ARCHETYPE_DESC, ARCHETYPE_META } from "../../constants";
+import { useModalBehavior } from "../../lib/useModalBehavior";
 import { styles } from "../../styles";
 
 export default function GradeKeyModal({ onClose }) {
-  useEffect(() => {
-    const handler = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  const modalRef = useModalBehavior(onClose);
 
   return (
     <div
       onClick={onClose}
       className="dyn-modal-backdrop"
-      role="dialog"
-      aria-label="Grade key"
       style={{
         position: "fixed",
         inset: 0,
@@ -26,8 +20,12 @@ export default function GradeKeyModal({ onClose }) {
       }}
     >
       <div
+        ref={modalRef}
         onClick={(e) => e.stopPropagation()}
         className="dyn-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="grade-key-title"
         style={{
           background: "#0d0d16",
           border: "1px solid rgba(0,245,160,0.18)",
@@ -59,6 +57,7 @@ export default function GradeKeyModal({ onClose }) {
         </button>
 
         <div
+          id="grade-key-title"
           style={{
             fontSize: 10,
             letterSpacing: 4,

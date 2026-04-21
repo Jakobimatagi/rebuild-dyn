@@ -742,9 +742,11 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                   <div className="flex flex-col gap-0.5 pt-5 shrink-0">
                     <button onClick={() => moveRank(x.p.id, "up")}
                       disabled={globalIdx === 0 || !hasRank}
+                      aria-label={`Move ${x.p.name} up in rankings`}
                       className="text-slate-600 hover:text-slate-300 disabled:opacity-20 text-[10px] leading-none px-1 py-0.5">▲</button>
                     <button onClick={() => moveRank(x.p.id, "down")}
                       disabled={globalIdx === rankedAll.length - 1 || !hasRank}
+                      aria-label={`Move ${x.p.name} down in rankings`}
                       className="text-slate-600 hover:text-slate-300 disabled:opacity-20 text-[10px] leading-none px-1 py-0.5">▼</button>
                   </div>
                   <div className="flex-1">

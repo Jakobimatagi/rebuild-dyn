@@ -72,10 +72,13 @@ export default function ProspectCard({
                   </button>
                 ))}
                 <button onClick={() => setPickingYear(false)}
+                  aria-label="Cancel year selection"
                   className="text-[10px] text-slate-600 hover:text-slate-400 px-1">✕</button>
               </div>
             )}
             <button onClick={() => setExpanded((v) => !v)}
+              aria-label={expanded ? "Collapse prospect details" : "Expand prospect details"}
+              aria-expanded={expanded}
               className="text-xs text-slate-500 hover:text-slate-200 border border-white/10 hover:border-white/30 px-2 py-1 rounded">
               {expanded ? "▲" : "▼"}
             </button>

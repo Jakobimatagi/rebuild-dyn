@@ -129,7 +129,9 @@ export default function ProspectEditorTab({ prospects, sleeperByName, annotation
                     Athletics {athOpen ? "▲" : "▾"}
                   </button>
                   <button onClick={() => removePlayer(p.id)}
-                    className="text-slate-600 hover:text-rose-400 text-base px-1 transition-colors" title="Remove player">✕</button>
+                    className="text-slate-600 hover:text-rose-400 text-base px-1 transition-colors"
+                    title="Remove player"
+                    aria-label={`Remove ${p.name || "player"}`}>✕</button>
                 </div>
               </div>
 
@@ -178,7 +180,9 @@ export default function ProspectEditorTab({ prospects, sleeperByName, annotation
                         ))}
                         <td className="px-1 py-1">
                           <button onClick={() => removeSeason(p.id, si)}
-                            className="text-slate-700 hover:text-rose-400 transition-colors" title="Remove season">✕</button>
+                            className="text-slate-700 hover:text-rose-400 transition-colors"
+                            title="Remove season"
+                            aria-label={`Remove season ${s.year || si + 1}`}>✕</button>
                         </td>
                       </tr>
                     ))}

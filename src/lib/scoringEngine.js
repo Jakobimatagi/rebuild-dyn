@@ -3,7 +3,7 @@
  * Core math for player scoring: weight constants, score components,
  * stat benchmarks, and age curves.
  */
-import { POSITION_PRIORITY } from "../constants";
+import { POSITION_PRIORITY } from "../constants.js";
 
 // ---------------------------------------------------------------------------
 // Utilities

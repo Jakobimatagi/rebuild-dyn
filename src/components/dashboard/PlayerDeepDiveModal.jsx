@@ -1,6 +1,6 @@
-import { useEffect } from "react";
 import { ARCHETYPE_DESC, ARCHETYPE_META } from "../../constants";
 import { getColor, getVerdict } from "../../lib/analysis";
+import { useModalBehavior } from "../../lib/useModalBehavior";
 import { styles } from "../../styles";
 
 // ---------------------------------------------------------------------------
@@ -470,11 +470,7 @@ function PredictionSection({ prediction }) {
 // ---------------------------------------------------------------------------
 
 export default function PlayerDeepDiveModal({ player, scoringWeights, onClose }) {
-  useEffect(() => {
-    const handler = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  const modalRef = useModalBehavior(onClose);
 
   if (!player) return null;
 
@@ -500,8 +496,6 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, onClose })
   return (
     <div
       onClick={onClose}
-      role="dialog"
-      aria-label="Player deep dive"
       style={{
         position: "fixed",
         inset: 0,
@@ -515,7 +509,11 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, onClose })
       }}
     >
       <div
+        ref={modalRef}
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Deep dive for ${name}`}
         style={{
           background: "#0d0d16",
           border: "1px solid rgba(0,245,160,0.18)",

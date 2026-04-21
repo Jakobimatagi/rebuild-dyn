@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { DEFAULT_SCORING_WEIGHTS } from "../../lib/analysis";
+import { useModalBehavior } from "../../lib/useModalBehavior";
 
 const FIELDS = [
   { key: "age", label: "Age" },
@@ -15,11 +16,7 @@ export default function ScoreWeightsModal({
   onConfirm,
   isConfirming = false,
 }) {
-  useEffect(() => {
-    const handler = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  const modalRef = useModalBehavior(isConfirming ? () => {} : onClose);
 
   const [draft, setDraft] = useState({
     age: Number(initialWeights.age ?? DEFAULT_SCORING_WEIGHTS.age),
@@ -53,8 +50,6 @@ export default function ScoreWeightsModal({
     <div
       onClick={() => !isConfirming && onClose()}
       className="dyn-modal-backdrop"
-      role="dialog"
-      aria-label="Adjust scoring weights"
       style={{
         position: "fixed",
         inset: 0,
@@ -66,8 +61,12 @@ export default function ScoreWeightsModal({
       }}
     >
       <div
+        ref={modalRef}
         onClick={(event) => event.stopPropagation()}
         className="dyn-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="score-weights-title"
         style={{
           background: "#0d0d16",
           border: "1px solid rgba(0,245,160,0.18)",
@@ -100,6 +99,7 @@ export default function ScoreWeightsModal({
         </button>
 
         <div
+          id="score-weights-title"
           style={{
             fontSize: 10,
             letterSpacing: 4,
@@ -146,6 +146,8 @@ export default function ScoreWeightsModal({
               step="1"
               value={draft[field.key]}
               onChange={(event) => handleChange(field.key, event.target.value)}
+              aria-label={`${field.label} weight`}
+              aria-valuetext={`${draft[field.key]} percent raw, ${normalized[field.key]} percent applied`}
               style={{ width: "100%" }}
             />
           </div>
