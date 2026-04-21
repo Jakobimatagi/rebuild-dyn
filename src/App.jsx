@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Dashboard from "./components/Dashboard";
+import DashboardSkeleton from "./components/DashboardSkeleton";
 import ErrorBoundary from "./components/ErrorBoundary";
 import InputScreen from "./components/InputScreen";
 import Layout from "./components/Layout";
@@ -474,7 +475,11 @@ export default function App() {
 
   if (step === "leagues") {
     if (loading && selectedLeague) {
-      return <LoadingScreen message={`Loading ${selectedLeague.name}…`} />;
+      return (
+        <Layout>
+          <DashboardSkeleton leagueName={selectedLeague.name} />
+        </Layout>
+      );
     }
     return (
       <Layout>
