@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { verifyLogin, fetchAllData, upsertProspect, upsertAnnotation, fetchMyRankings, upsertExpertRanking, deleteExpertRanking } from "../lib/supabase.js";
+import { verifyLogin, fetchAllData, upsertProspect, upsertAnnotation, fetchMyRankings, upsertExpertRanking, deleteExpertRanking, fetchExpertRankings } from "../lib/supabase.js";
 import { BLUE_BLOOD_TEAMS, P5_TEAMS, CAPITAL_PROD_SCORES, CONFERENCE_SCORES, TIER_RANK, deriveSchool, computeGrade, deriveTier, dynastyScore } from "../lib/prospectScoring.js";
 
 const POS_COLORS = {
@@ -180,104 +180,6 @@ function computeValueScore(p, grade, sleeperRank, rosterData) {
   return Math.round((ds + sleeperBonus + tradeValue * 0.05) * 10) / 10;
 }
 
-// ── CSV helpers ───────────────────────────────────────────────────────────────
-
-function csvEscape(v) {
-  const s = v == null ? "" : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-function downloadCsv(content, filename) {
-  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
-  const url  = URL.createObjectURL(blob);
-  const a    = Object.assign(document.createElement("a"), { href: url, download: filename });
-  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-}
-function splitCsvRow(row) {
-  const out = []; let cur = ""; let inQ = false;
-  for (let i = 0; i < row.length; i++) {
-    const ch = row[i];
-    if (inQ) { if (ch === '"' && row[i+1] === '"') { cur += '"'; i++; } else if (ch === '"') inQ = false; else cur += ch; }
-    else { if (ch === '"') inQ = true; else if (ch === ",") { out.push(cur); cur = ""; } else cur += ch; }
-  }
-  return [...out, cur];
-}
-function parseCsv(text) {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  if (lines.length < 2) return [];
-  const header = splitCsvRow(lines[0]).map((h) => h.trim().toLowerCase().replace(/ /g, "_"));
-  return lines.slice(1).map((line) => {
-    const fields = splitCsvRow(line);
-    const obj = {};
-    header.forEach((h, i) => { obj[h] = (fields[i] ?? "").trim(); });
-    return obj;
-  });
-}
-
-// Builds prospects array from raw CSV rows (one row per season).
-function buildProspects(csvRows) {
-  const byId = new Map();
-  csvRows.forEach((r) => {
-    const id  = (r.player_id || "").trim();
-    const nm  = (r.name || "").trim();
-    const pos = (r.position || "").toUpperCase().trim();
-    if (!id || !nm || !["QB","RB","WR","TE"].includes(pos)) return;
-    if (!byId.has(id)) byId.set(id, { id, name: nm, position: pos, seasons: [], draftCapital: "", comparablePlayer: "", athletic: {} });
-    const p = byId.get(id);
-    if (r.projected_draft_year) p.projectedDraftYear = Number(r.projected_draft_year);
-    if (r.draft_capital)        p.draftCapital        = r.draft_capital.trim();
-    if (r.comparable_player)    p.comparablePlayer    = r.comparable_player.trim();
-    const n = (k) => parseFloat(r[k]) || 0;
-    if (n("speed_score"))     p.athletic.speedScore    = n("speed_score");
-    if (n("burst_score"))     p.athletic.burstScore    = n("burst_score");
-    if (n("agility_score"))   p.athletic.agilityScore  = n("agility_score");
-    if (n("forty_yard_dash")) p.athletic.fortyYardDash = n("forty_yard_dash");
-    if (n("catch_radius"))    p.athletic.catchRadius   = n("catch_radius");
-    if (n("height_in"))       p.athletic.heightIn      = n("height_in");
-    if (n("weight_lbs"))      p.athletic.weightLbs     = n("weight_lbs");
-    if (n("arm_length_in"))   p.athletic.armLengthIn   = n("arm_length_in");
-    if (r.season_year) p.seasons.push(r);
-  });
-  return Array.from(byId.values())
-    .filter((p) => p.seasons.length > 0)
-    .map((p) => ({ ...p, projectedDraftYear: p.projectedDraftYear || computeCurrentDraftYear(), school: deriveSchool(p) }));
-}
-
-function buildFullCsv(prospects, annotations, sleeperByName) {
-  const header = [
-    "player_id","name","position","projected_draft_year","draft_capital","comparable_player",
-    "speed_score","burst_score","agility_score","forty_yard_dash","catch_radius","height_in","weight_lbs","arm_length_in",
-    "declared","tier","landing_spot",
-    "season_year","age","school","games",
-    "pass_attempts","passing_yards","yards_per_attempt","completion_pct","passing_tds","interceptions","rushing_yards","rushing_tds",
-    "rush_attempts","yards_per_carry","total_tds","receptions","receiving_yards","yards_per_reception","target_share_pct","catch_rate_pct","receiving_tds","special_teams_yards",
-  ].join(",");
-
-  const rows = [];
-  prospects.forEach((p) => {
-    const ann = annotations[p.id] || {};
-    const ath = p.athletic || {};
-    const base = [
-      p.id, p.name, p.position, p.projectedDraftYear || "",
-      ann.draftCapital || p.draftCapital || "", p.comparablePlayer || "",
-      ath.speedScore ?? "", ath.burstScore ?? "", ath.agilityScore ?? "", ath.fortyYardDash ?? "",
-      ath.catchRadius ?? "", ath.heightIn ?? "", ath.weightLbs ?? "", ath.armLengthIn ?? "",
-      ann.declared ? "yes" : "", ann.tier || "", ann.landingSpot || "",
-    ];
-    const seasons = p.seasons.length > 0 ? p.seasons : [{}];
-    seasons.forEach((s) => {
-      rows.push([
-        ...base,
-        s.season_year ?? "", s.age ?? "", s.school ?? "", s.games ?? "",
-        s.pass_attempts ?? "", s.passing_yards ?? "", s.yards_per_attempt ?? "", s.completion_pct ?? "",
-        s.passing_tds ?? "", s.interceptions ?? "", s.rushing_yards ?? "", s.rushing_tds ?? "",
-        s.rush_attempts ?? "", s.yards_per_carry ?? "", s.total_tds ?? "",
-        s.receptions ?? "", s.receiving_yards ?? "", s.yards_per_reception ?? "",
-        s.target_share_pct ?? "", s.catch_rate_pct ?? "", s.receiving_tds ?? "", s.special_teams_yards ?? "",
-      ].map(csvEscape).join(","));
-    });
-  });
-  return `${header}\n${rows.join("\n")}\n`;
-}
 
 // ── Add-player season row ─────────────────────────────────────────────────────
 
@@ -787,7 +689,6 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
   });
 
   const update = (patch) => setState((s) => ({ ...s, ...patch }));
-  const annInputRef = useRef(null);
   const [addForm, setAddForm]           = useState(() => initAddForm());
   const [addFormError, setAddFormError] = useState("");
   const [addFormSaving, setAddFormSaving] = useState(false);
@@ -915,12 +816,76 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
         rookieDraftAdp: addForm.rookieDraftAdp || "",
       };
       await upsertAnnotation(id, ann);
+
+      // On new prospect, insert into all existing experts' rankings at the right position
+      const isNew = !addForm.id;
+      let updatedExpertRankings = state.expertRankings;
+      if (isNew) {
+        try {
+          const allRankings = await fetchExpertRankings();
+          const byExpert = {};
+          allRankings.forEach((r) => { (byExpert[r.user_id] ??= []).push(r); });
+
+          const { total: newGrade } = computeGrade(prospect, undefined, ann.draftCapital || "");
+          const newTierLabel = ann.tier || deriveTier(newGrade, ann.draftCapital || "") || "";
+          const newTierRank = newTierLabel ? (TIER_RANK[newTierLabel] ?? 99) : 99;
+          const newDs = dynastyScore(newGrade, prospect.position, prospect.seasons);
+
+          const upserts = [];
+          const insertPositions = {};
+
+          Object.entries(byExpert).forEach(([userId, rows]) => {
+            if (rows.length === 0) return;
+            const sorted = [...rows].sort((a, b) => a.rank_order - b.rank_order);
+
+            let insertAt = sorted[sorted.length - 1].rank_order + 1;
+            for (let i = 0; i < sorted.length; i++) {
+              const pid = sorted[i].prospect_id;
+              const existingP = state.prospects.find((p) => p.id === pid);
+              if (!existingP) continue;
+              const existingAnn = state.annotations[pid] || {};
+              const capKey = existingAnn.draftCapital || existingP.draftCapital || "";
+              const { total: eGrade } = computeGrade(existingP, undefined, capKey);
+              const eTierLabel = existingAnn.tier || deriveTier(eGrade, capKey) || "";
+              const eTierRank = eTierLabel ? (TIER_RANK[eTierLabel] ?? 99) : 99;
+              const eDs = dynastyScore(eGrade, existingP.position, existingP.seasons);
+              if (newTierRank < eTierRank || (newTierRank === eTierRank && newDs > eDs)) {
+                insertAt = sorted[i].rank_order;
+                break;
+              }
+            }
+
+            insertPositions[userId] = insertAt;
+            sorted.forEach((r) => {
+              if (r.rank_order >= insertAt) {
+                upserts.push(upsertExpertRanking(userId, r.prospect_id, r.rank_order + 1, r.tier || "", r.notes || ""));
+              }
+            });
+            upserts.push(upsertExpertRanking(userId, id, insertAt, "", ""));
+          });
+
+          await Promise.all(upserts);
+
+          if (state.user && insertPositions[state.user.id] !== undefined) {
+            const insertAt = insertPositions[state.user.id];
+            const next = {};
+            Object.entries(state.expertRankings).forEach(([pid, data]) => {
+              next[pid] = data.rankOrder >= insertAt ? { ...data, rankOrder: data.rankOrder + 1 } : data;
+            });
+            next[id] = { rankOrder: insertAt, tier: "", notes: "" };
+            updatedExpertRankings = next;
+          }
+        } catch (err) {
+          console.error("Failed to sync new prospect into expert rankings:", err);
+        }
+      }
+
       setState((s) => {
         const existingIdx = s.prospects.findIndex((p) => p.id === id);
         const nextProspects = existingIdx >= 0
           ? s.prospects.map((p) => p.id === id ? prospect : p)
           : [...s.prospects, prospect];
-        return { ...s, prospects: nextProspects, annotations: { ...s.annotations, [id]: ann } };
+        return { ...s, prospects: nextProspects, annotations: { ...s.annotations, [id]: ann }, expertRankings: updatedExpertRankings };
       });
       setAddForm(initAddForm(addForm.position));
       setAddFormSaving(false);
@@ -1041,106 +1006,6 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     catch { update({ rosterParseError: "Invalid JSON." }); }
   }
 
-  // Full CSV import — prospects + seasons + annotations
-  function handleImportCsv(file) {
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const rows = parseCsv(String(e.target?.result || ""));
-      const prospects = buildProspects(rows);
-      if (prospects.length === 0) { alert("No valid prospect rows found. Check the CSV format."); return; }
-
-      // Extract annotations from same rows (one entry per player_id)
-      const annMap = {};
-      rows.forEach((r) => {
-        const id = (r.player_id || "").trim();
-        if (!id) return;
-        annMap[id] = {
-          tier:         r.tier          || "",
-          draftCapital: r.draft_capital  || "",
-          landingSpot:  r.landing_spot   || "",
-          declared:     (r.declared || "").toLowerCase() === "yes",
-        };
-      });
-
-      update({ dbLoading: true });
-      try {
-        await Promise.all(prospects.map((p) => upsertProspect(p)));
-        await Promise.all(Object.entries(annMap).map(([id, ann]) => upsertAnnotation(id, ann)));
-
-        // Auto-rank imported prospects by tier → dynastyScore and save to expert_rankings
-        let nextExpertRankings = {};
-        if (state.user) {
-          const ranked = prospects.map((p) => {
-            const ann = annMap[p.id] || {};
-            const capitalKey = ann.draftCapital || p.draftCapital || "";
-            const { total: grade } = computeGrade(p, undefined, capitalKey);
-            const tierLabel = ann.tier || deriveTier(grade, capitalKey) || "";
-            const ds = dynastyScore(grade, p.position, p.seasons);
-            return { p, tierLabel, ds };
-          }).sort((a, b) => {
-            const aTier = a.tierLabel ? (TIER_RANK[a.tierLabel] ?? 99) : 99;
-            const bTier = b.tierLabel ? (TIER_RANK[b.tierLabel] ?? 99) : 99;
-            if (aTier !== bTier) return aTier - bTier;
-            return b.ds - a.ds;
-          });
-
-          await Promise.all(ranked.map((item, i) => {
-            const rankOrder = i + 1;
-            nextExpertRankings[item.p.id] = { rankOrder, tier: "", notes: "" };
-            return upsertExpertRanking(state.user.id, item.p.id, rankOrder);
-          }));
-        }
-
-        setState((s) => {
-          const existingById = new Map(s.prospects.map((p) => [p.id, p]));
-          prospects.forEach((p) => existingById.set(p.id, p));
-          const nextAnnotations = { ...s.annotations };
-          Object.entries(annMap).forEach(([id, ann]) => { nextAnnotations[id] = ann; });
-          return {
-            ...s, dbLoading: false,
-            prospects: Array.from(existingById.values()),
-            annotations: nextAnnotations,
-            expertRankings: { ...s.expertRankings, ...nextExpertRankings },
-          };
-        });
-      } catch (err) {
-        update({ dbLoading: false });
-        alert("Import failed: " + (err.message || err));
-        console.error(err);
-      }
-    };
-    reader.readAsText(file);
-  }
-
-  // Legacy: annotations-only CSV import
-  function handleImportAnnotations(file) {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const rows        = parseCsv(String(e.target?.result || ""));
-      const tierMap     = new Map(TIER_OPTIONS.map((o) => [o.value.toLowerCase().trim(), o.value]));
-      const validCaps   = new Set(CAPITAL_OPTIONS.map((o) => o.value));
-      setState((s) => {
-        const next = { ...s.annotations };
-        const validIds   = new Set(s.prospects.map((p) => String(p.id)));
-        const byNormName = new Map(s.prospects.map((p) => [normalizeName(p.name), String(p.id)]));
-        rows.forEach((r) => {
-          const id = (r.player_id && validIds.has(r.player_id)) ? r.player_id : byNormName.get(normalizeName(r.name));
-          if (!id) return;
-          const patch = {};
-          const tier = tierMap.get((r.tier || "").toLowerCase().trim()) ?? "";
-          if (tier) patch.tier = tier;
-          if (validCaps.has(r.draft_capital)) patch.draftCapital = r.draft_capital;
-          if (r.landing_spot != null) patch.landingSpot = r.landing_spot.trim();
-          if (r.declared != null)     patch.declared    = r.declared.toLowerCase() === "yes";
-          if (Object.keys(patch).length) next[id] = { ...(next[id] || {}), ...patch };
-        });
-        Object.entries(next).forEach(([id, ann]) => upsertAnnotation(id, ann).catch(console.error));
-        return { ...s, annotations: next };
-      });
-    };
-    reader.readAsText(file);
-  }
-
   // ── Gate ──────────────────────────────────────────────────────────────────────
   if (state.initLoading) {
     return (
@@ -1230,19 +1095,6 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
       const bDs = dynastyScore(b.grade, b.p.position, b.p.seasons);
       return bDs - aDs;
     });
-
-  const exportRows = state.prospects.map((p) => {
-    const sleeperRank = state.sleeperByName[normalizeName(p.name)]?.rank;
-    const ann         = state.annotations[p.id] || {};
-    const capitalKey  = ann.draftCapital || p.draftCapital || "";
-    const { total: grade } = computeGrade(p, sleeperRank, capitalKey);
-    return {
-      id: p.id, name: p.name, position: p.position, school: deriveSchool(p),
-      projectedDraftYear: p.projectedDraftYear, declared: !!ann.declared,
-      grade, sleeperRank,
-      tier: ann.tier || "", draftCapital: capitalKey, landingSpot: ann.landingSpot || "",
-    };
-  });
 
   // Expert-rank-sorted list of all filtered prospects (for My Value tab)
   const rankedAll = [...withGrade]
@@ -1346,18 +1198,6 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                     ← New player
                   </button>
                 )}
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => { downloadCsv(buildFullCsv(state.prospects, state.annotations, state.sleeperByName), `prospects_${computeCurrentDraftYear()}.csv`); }}
-                  className="text-xs font-semibold border border-white/10 hover:border-sky-400/60 text-slate-200 px-2.5 py-1.5 rounded-md bg-slate-900/40">
-                  Export CSV
-                </button>
-                <button onClick={() => annInputRef.current?.click()}
-                  className="text-xs font-semibold border border-white/10 hover:border-sky-400/60 text-slate-200 px-2.5 py-1.5 rounded-md bg-slate-900/40">
-                  {state.dbLoading ? "Importing…" : "Import CSV"}
-                </button>
-                <input ref={annInputRef} type="file" accept=".csv,text/csv" className="hidden"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportCsv(f); e.target.value = ""; }} />
               </div>
             </div>
 
