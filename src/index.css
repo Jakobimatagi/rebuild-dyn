@@ -194,6 +194,17 @@ input:focus {
   }
 }
 
+/* ── Skeleton loader ─────────────────────────────────────────────────────── */
+@keyframes dyn-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.dyn-skeleton {
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 3px;
+  animation: dyn-pulse 1.6s ease-in-out infinite;
+}
+
 /* ── Mobile responsive ───────────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .dyn-content {

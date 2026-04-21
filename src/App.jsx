@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import Dashboard from "./components/Dashboard";
+import DashboardSkeleton from "./components/DashboardSkeleton";
+import ErrorBoundary from "./components/ErrorBoundary";
 import InputScreen from "./components/InputScreen";
 import Layout from "./components/Layout";
 import LeaguePickerScreen from "./components/LeaguePickerScreen";
+import LoadingScreen from "./components/LoadingScreen";
 import { buildRosterAnalysis, DEFAULT_SCORING_WEIGHTS } from "./lib/analysis";
 import { fetchFantasyCalcValues } from "./lib/fantasyCalcApi";
 import {
@@ -107,7 +110,7 @@ export default function App() {
     }
   }, []);
 
-  async function loadDashboard(league, uname) {
+  async function loadDashboard(league, uname, { returnToLeagues = false } = {}) {
     setSelectedLeague(league);
     setLoading(true);
     setError("");
@@ -211,14 +214,14 @@ export default function App() {
       setStep("dashboard");
     } catch (e) {
       localStorage.removeItem("sleeper_league");
-      setError(e.message || "Failed to load dashboard.");
-      setStep("input");
+      setError(e.message || "Failed to load dashboard. Try selecting your league again.");
+      setStep(returnToLeagues ? "leagues" : "input");
     }
 
     setLoading(false);
   }
 
-  async function loadFleaflickerDashboard(league) {
+  async function loadFleaflickerDashboard(league, { returnToLeagues = false } = {}) {
     setSelectedLeague(league);
     setLoading(true);
     setError("");
@@ -305,8 +308,8 @@ export default function App() {
       setStep("dashboard");
     } catch (e) {
       localStorage.removeItem("ff_league");
-      setError(e.message || "Failed to load Fleaflicker dashboard.");
-      setStep("input");
+      setError(e.message || "Failed to load Fleaflicker dashboard. Try selecting your league again.");
+      setStep(returnToLeagues ? "leagues" : "input");
     }
 
     setLoading(false);
@@ -328,15 +331,19 @@ export default function App() {
   }
 
   async function handleUsernameSubmit() {
+    const trimmed = username.trim();
+    if (!trimmed) return;
+    if (trimmed !== username) setUsername(trimmed);
+
     setLoading(true);
     setError("");
 
     try {
-      const user = await fetchSleeper(`/user/${username}`);
+      const user = await fetchSleeper(`/user/${trimmed}`);
       if (!user?.user_id) throw new Error("User not found");
 
       localStorage.setItem("dynasty_os_platform", "sleeper");
-      localStorage.setItem("sleeper_username", username);
+      localStorage.setItem("sleeper_username", trimmed);
       const now = new Date();
       const currentSeason = now.getFullYear();
 
@@ -368,11 +375,20 @@ export default function App() {
   }
 
   async function handleFleaflickerSubmit() {
+    const trimmedEmail = ffEmail.trim();
+    if (trimmedEmail !== ffEmail) setFfEmail(trimmedEmail);
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(trimmedEmail)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+
     setLoading(true);
     setError("");
 
     try {
-      const data = await fetchFFUserLeagues(ffEmail);
+      const data = await fetchFFUserLeagues(trimmedEmail);
       if (!data.leagues?.length)
         throw new Error("No NFL leagues found for this email.");
 
@@ -409,10 +425,10 @@ export default function App() {
   async function handleLeagueSelect(league) {
     if (league._platform === "fleaflicker") {
       localStorage.setItem("ff_league", JSON.stringify(league));
-      await loadFleaflickerDashboard(league);
+      await loadFleaflickerDashboard(league, { returnToLeagues: true });
     } else {
       localStorage.setItem("sleeper_league", JSON.stringify(league));
-      await loadDashboard(league, username);
+      await loadDashboard(league, username, { returnToLeagues: true });
     }
   }
 
@@ -458,6 +474,13 @@ export default function App() {
   }
 
   if (step === "leagues") {
+    if (loading && selectedLeague) {
+      return (
+        <Layout>
+          <DashboardSkeleton leagueName={selectedLeague.name} />
+        </Layout>
+      );
+    }
     return (
       <Layout>
         <LeaguePickerScreen
@@ -473,6 +496,7 @@ export default function App() {
 
   if (step === "dashboard" && analysis) {
     return (
+      <ErrorBoundary>
       <Layout>
         <Dashboard
           analysis={analysis}
@@ -498,14 +522,9 @@ export default function App() {
           recalculating={recalculating}
         />
       </Layout>
+      </ErrorBoundary>
     );
   }
 
-  return (
-    <Layout>
-      <div style={{ textAlign: "center", padding: 80, color: "#d1d7ea" }}>
-        Loading...
-      </div>
-    </Layout>
-  );
+  return <LoadingScreen message="Loading your league…" />;
 }

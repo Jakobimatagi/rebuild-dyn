@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ARCHETYPE_META, POSITION_PRIORITY } from "../../constants";
 import { getColor, getVerdict } from "../../lib/analysis";
 import { styles } from "../../styles";
-import { estimatePickValue, pickSlotLabel } from "../../lib/marketValue";
+import { pickSlotLabel, getPickValue, formatPickValue, PHASE_TO_SLOT } from "../../lib/marketValue";
 import PlayerDeepDiveModal from "./PlayerDeepDiveModal";
 import ScoreBar from "./ScoreBar";
 
@@ -404,31 +404,6 @@ function PositionGradeStrip({ pos, posRanks, isSuperflex, players }) {
   );
 }
 
-// Phase → RA slot key
-const PHASE_TO_SLOT = { rebuild: "early", retool: "mid", contender: "late" };
-
-function getPickValue(pick, ownerPhase, raPickValues, leagueContext, tradeMarket) {
-  if (raPickValues && pick?.round) {
-    if (pick.slot != null) {
-      const exactKey = `${pick.season}-${pick.round}-${pick.slot}`;
-      const exactVal = raPickValues[exactKey];
-      if (exactVal != null) return { value: exactVal, source: "ra" };
-    }
-    const slot = PHASE_TO_SLOT[ownerPhase] || "mid";
-    const key = `${pick.season}-${pick.round}-${slot}`;
-    const raVal = raPickValues[key];
-    if (raVal != null) return { value: raVal, source: "ra" };
-  }
-  if (leagueContext) {
-    return { value: estimatePickValue(pick, leagueContext, tradeMarket), source: "est" };
-  }
-  return null;
-}
-
-function formatValue(val) {
-  if (val >= 1000) return `${(val / 1000).toFixed(1)}k`;
-  return String(val);
-}
 
 export default function RosterTab({
   byPos,
@@ -1070,7 +1045,7 @@ export default function RosterTab({
                                 whiteSpace: "nowrap",
                               }}
                             >
-                              {pickVal.source === "ra" ? "" : "~"}{formatValue(pickVal.value)}
+                              {pickVal.source === "ra" ? "" : "~"}{formatPickValue(pickVal.value)}
                             </span>
                           )}
                         </div>
@@ -1112,7 +1087,7 @@ export default function RosterTab({
                         >
                           <div style={{ fontSize: 10, color: "#94a3b8", letterSpacing: 1, marginBottom: 4 }}>{year}</div>
                           <div style={{ fontSize: 16, fontWeight: 700, color: "#e8e8f0" }}>
-                            {hasRA ? "" : "~"}{formatValue(total)}
+                            {hasRA ? "" : "~"}{formatPickValue(total)}
                           </div>
                           <div style={{ fontSize: 10, color: "#c8cfe3", marginTop: 2 }}>
                             {yearPicks.length} pick{yearPicks.length !== 1 ? "s" : ""}

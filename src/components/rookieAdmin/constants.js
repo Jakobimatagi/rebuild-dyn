@@ -1,0 +1,113 @@
+export const POS_COLORS = {
+  QB: "bg-rose-500/15 text-rose-300 border-rose-500/30",
+  RB: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  WR: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  TE: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+};
+
+export const GRADE_COLORS = {
+  A: "bg-emerald-500 text-emerald-950",
+  B: "bg-lime-400 text-lime-950",
+  C: "bg-amber-400 text-amber-950",
+  D: "bg-orange-500 text-orange-950",
+  F: "bg-rose-500 text-rose-950",
+};
+
+export const CAPITAL_OPTIONS = [
+  { value: "", label: "Capital" },
+  { value: "early_1", label: "Early 1st" },
+  { value: "mid_1",   label: "Mid 1st"   },
+  { value: "late_1",  label: "Late 1st"  },
+  { value: "early_2", label: "Early 2nd" },
+  { value: "mid_2",   label: "Mid 2nd"   },
+  { value: "late_2",  label: "Late 2nd"  },
+  { value: "early_3", label: "Early 3rd" },
+  { value: "late_3",  label: "Late 3rd"  },
+  { value: "day3",    label: "Day 3+"    },
+  { value: "udfa",    label: "UDFA"      },
+];
+
+export const TIER_OPTIONS = [
+  { value: "",                         label: "Tier",                       tw: "bg-slate-800 text-slate-400 border border-white/10" },
+  { value: "Cornerstone",              label: "Cornerstone",                tw: "bg-yellow-400 text-yellow-950" },
+  { value: "Foundational",             label: "Foundational",               tw: "bg-emerald-400 text-emerald-950" },
+  { value: "Upside Shot",              label: "Upside Shot",                tw: "bg-purple-400 text-purple-950" },
+  { value: "Mainstay",                 label: "Mainstay",                   tw: "bg-blue-400 text-blue-950" },
+  { value: "Productive Vet",           label: "Productive Vet",             tw: "bg-green-300 text-green-950" },
+  { value: "Short Term League Winner", label: "Short Term League Winner",   tw: "bg-orange-400 text-orange-950" },
+  { value: "Short Term Production",    label: "Short Term Production",      tw: "bg-yellow-300 text-yellow-950" },
+  { value: "Serviceable",              label: "Serviceable",                tw: "bg-slate-300 text-slate-900" },
+  { value: "JAG - Insurance",          label: "JAG - Insurance",            tw: "bg-slate-200 text-slate-900" },
+  { value: "JAG - Developmental",      label: "JAG - Developmental",        tw: "bg-violet-400 text-violet-950" },
+  { value: "Replaceable",              label: "Replaceable",                tw: "bg-rose-500 text-rose-950" },
+];
+
+export const SEASON_COLS = {
+  QB: [
+    { key: "season_year",        label: "Year",  w: 52  },
+    { key: "age",                label: "Age",   w: 40  },
+    { key: "school",             label: "School",w: 110 },
+    { key: "games",              label: "Gms",   w: 40  },
+    { key: "pass_attempts",      label: "Att",   w: 48  },
+    { key: "passing_yards",      label: "PYds",  w: 56  },
+    { key: "yards_per_attempt",  label: "YPA",   w: 46  },
+    { key: "completion_pct",     label: "CP%",   w: 48  },
+    { key: "passing_tds",        label: "TDs",   w: 40  },
+    { key: "interceptions",      label: "INTs",  w: 40  },
+    { key: "rushing_yards",      label: "RuYds", w: 52  },
+    { key: "rushing_tds",        label: "RuTD",  w: 44  },
+  ],
+  RB: [
+    { key: "season_year",        label: "Year",  w: 52  },
+    { key: "age",                label: "Age",   w: 40  },
+    { key: "school",             label: "School",w: 110 },
+    { key: "games",              label: "Gms",   w: 40  },
+    { key: "rush_attempts",      label: "Att",   w: 48  },
+    { key: "rushing_yards",      label: "RuYds", w: 56  },
+    { key: "yards_per_carry",    label: "YPC",   w: 46  },
+    { key: "total_tds",          label: "TDs",   w: 40  },
+    { key: "receptions",         label: "Rec",   w: 40  },
+    { key: "receiving_yards",    label: "ReYds", w: 52  },
+    { key: "target_share_pct",   label: "TS%",   w: 44  },
+  ],
+  WR: [
+    { key: "season_year",        label: "Year",  w: 52  },
+    { key: "age",                label: "Age",   w: 40  },
+    { key: "school",             label: "School",w: 110 },
+    { key: "games",              label: "Gms",   w: 40  },
+    { key: "receptions",         label: "Rec",   w: 44  },
+    { key: "receiving_yards",    label: "ReYds", w: 56  },
+    { key: "yards_per_reception",label: "YPR",   w: 46  },
+    { key: "target_share_pct",   label: "TS%",   w: 44  },
+    { key: "catch_rate_pct",     label: "CR%",   w: 44  },
+    { key: "receiving_tds",      label: "TDs",   w: 40  },
+    { key: "special_teams_yards",label: "STYds", w: 52  },
+  ],
+  TE: [
+    { key: "season_year",        label: "Year",  w: 52  },
+    { key: "age",                label: "Age",   w: 40  },
+    { key: "school",             label: "School",w: 110 },
+    { key: "games",              label: "Gms",   w: 40  },
+    { key: "receptions",         label: "Rec",   w: 44  },
+    { key: "receiving_yards",    label: "ReYds", w: 56  },
+    { key: "yards_per_reception",label: "YPR",   w: 46  },
+    { key: "target_share_pct",   label: "TS%",   w: 44  },
+    { key: "catch_rate_pct",     label: "CR%",   w: 44  },
+    { key: "receiving_tds",      label: "TDs",   w: 40  },
+    { key: "special_teams_yards",label: "STYds", w: 52  },
+  ],
+};
+
+export const ATHLETIC_FIELDS = [
+  { key: "fortyYardDash", label: "40-Yd Dash",  placeholder: "4.38" },
+  { key: "speedScore",    label: "Speed Score",  placeholder: "110"  },
+  { key: "burstScore",    label: "Burst Score",  placeholder: "115"  },
+  { key: "agilityScore",  label: "Agility",      placeholder: "106"  },
+  { key: "catchRadius",   label: "Catch Radius", placeholder: "8.2"  },
+  { key: "heightIn",      label: "Height (in)",  placeholder: "74"   },
+  { key: "weightLbs",     label: "Weight (lbs)", placeholder: "190"  },
+  { key: "armLengthIn",   label: "Arm (in)",     placeholder: "32.5" },
+];
+
+export const PAGE_SIZE = 25;
+export const SESSION_KEY = "rp_session";

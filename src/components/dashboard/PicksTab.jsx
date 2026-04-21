@@ -1,35 +1,5 @@
 import { styles } from "../../styles";
-import { estimatePickValue, pickSlotLabel } from "../../lib/marketValue";
-
-// Phase → RA slot key
-const PHASE_TO_SLOT = { rebuild: "early", retool: "mid", contender: "late" };
-
-function getPickValue(pick, ownerPhase, raPickValues, leagueContext, tradeMarket) {
-  // Prefer RosterAudit market value when available
-  if (raPickValues && pick?.round) {
-    // Try exact slot first (e.g., "2026-1-3" for pick 1.03)
-    if (pick.slot != null) {
-      const exactKey = `${pick.season}-${pick.round}-${pick.slot}`;
-      const exactVal = raPickValues[exactKey];
-      if (exactVal != null) return { value: exactVal, source: "ra" };
-    }
-    // Fall back to phase-based slot (early/mid/late)
-    const slot = PHASE_TO_SLOT[ownerPhase] || "mid";
-    const key = `${pick.season}-${pick.round}-${slot}`;
-    const raVal = raPickValues[key];
-    if (raVal != null) return { value: raVal, source: "ra" };
-  }
-  // Fallback to internal estimate
-  if (leagueContext) {
-    return { value: estimatePickValue(pick, leagueContext, tradeMarket), source: "est" };
-  }
-  return null;
-}
-
-function formatValue(val) {
-  if (val >= 1000) return `${(val / 1000).toFixed(1)}k`;
-  return String(val);
-}
+import { pickSlotLabel, getPickValue, formatPickValue, PHASE_TO_SLOT } from "../../lib/marketValue";
 
 export default function PicksTab({ picksByYear, picks, leagueContext, tradeMarket, leagueTeams, myRosterId, raPickValues }) {
   // Build a map from rosterId → teamPhase so we can project pick position
@@ -146,7 +116,7 @@ export default function PicksTab({ picksByYear, picks, leagueContext, tradeMarke
                           whiteSpace: "nowrap",
                         }}
                       >
-                        {pickVal.source === "ra" ? "" : "~"}{formatValue(pickVal.value)}
+                        {pickVal.source === "ra" ? "" : "~"}{formatPickValue(pickVal.value)}
                       </span>
                     )}
                   </div>
@@ -197,7 +167,7 @@ export default function PicksTab({ picksByYear, picks, leagueContext, tradeMarke
                       {year}
                     </div>
                     <div style={{ fontSize: 16, fontWeight: 700, color: "#e8e8f0" }}>
-                      {hasRA ? "" : "~"}{formatValue(total)}
+                      {hasRA ? "" : "~"}{formatPickValue(total)}
                     </div>
                     <div style={{ fontSize: 10, color: "#c8cfe3", marginTop: 2 }}>
                       {yearPicks.length} pick{yearPicks.length !== 1 ? "s" : ""}
