@@ -523,58 +523,101 @@ function PredictionSection({ prediction }) {
       )}
 
       {/* Historical comps */}
-      {comps.length > 0 && (
-        <div>
-          <div style={{ fontSize: 10, color: "#808898", marginBottom: 8 }}>
-            Historical Comparable Players
-            <span style={{ color: "#606878", marginLeft: 6 }}>
-              (similar age, position, production tier &amp; draft capital)
+      {comps.length > 0 && (() => {
+        const ceilingComps = comps.filter((c) => c.outcomeBucket === "ceiling");
+        const floorComps = comps.filter((c) => c.outcomeBucket === "floor");
+        const typicalComps = comps.filter(
+          (c) => !c.outcomeBucket || c.outcomeBucket === "typical",
+        );
+
+        const renderCard = (comp, i) => {
+          const delta = comp.future1 !== undefined ? comp.future1 - comp.ppgPctile : null;
+          const deltaCol = delta === null
+            ? "#808898"
+            : delta >= 10 ? "#00f5a0"
+            : delta <= -10 ? "#ff6b35"
+            : "#ffd84d";
+          return (
+            <div
+              key={i}
+              style={{
+                padding: "8px 10px",
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.07)",
+                borderRadius: 4,
+              }}
+            >
+              <div style={{ fontSize: 11, color: "#d1d7ea", fontWeight: 600, marginBottom: 3 }}>
+                {comp.name}
+              </div>
+              <div style={{ fontSize: 10, color: "#606878" }}>
+                {comp.year} · age {comp.age} · {comp.ppgPctile}th pctile
+              </div>
+              {delta !== null && (
+                <div style={{ fontSize: 10, color: deltaCol, marginTop: 3 }}>
+                  Year +1: {delta > 0 ? "+" : ""}{delta} pctile pts
+                </div>
+              )}
+              <div style={{ fontSize: 9, color: "#404858", marginTop: 2 }}>
+                {comp.similarity}% match
+              </div>
+            </div>
+          );
+        };
+
+        const sectionHeader = (label, sublabel, color) => (
+          <div style={{ fontSize: 10, color, marginBottom: 6, letterSpacing: 0.5 }}>
+            {label}
+            <span style={{ color: "#606878", marginLeft: 6, letterSpacing: 0, fontWeight: 400 }}>
+              {sublabel}
             </span>
           </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-              gap: 6,
-            }}
-          >
-            {comps.slice(0, 5).map((comp, i) => {
-              const delta = comp.future1 !== undefined ? comp.future1 - comp.ppgPctile : null;
-              const deltaCol = delta === null ? "#808898" : delta >= 10 ? "#00f5a0" : delta <= -10 ? "#ff6b35" : "#ffd84d";
-              return (
-                <div
-                  key={i}
-                  style={{
-                    padding: "8px 10px",
-                    background: "rgba(255,255,255,0.03)",
-                    border: "1px solid rgba(255,255,255,0.07)",
-                    borderRadius: 4,
-                  }}
-                >
-                  <div style={{ fontSize: 11, color: "#d1d7ea", fontWeight: 600, marginBottom: 3 }}>
-                    {comp.name}
+        );
+
+        const gridStyle = {
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+          gap: 6,
+        };
+
+        const hasBuckets = ceilingComps.length > 0 || floorComps.length > 0;
+
+        return (
+          <div>
+            <div style={{ fontSize: 10, color: "#808898", marginBottom: 10 }}>
+              Historical Comparable Players
+              <span style={{ color: "#606878", marginLeft: 6 }}>
+                (best-case and worst-case outcomes among similar profiles)
+              </span>
+            </div>
+
+            {hasBuckets ? (
+              <>
+                {ceilingComps.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    {sectionHeader("CEILING CASE", "— best Y+1 outcomes", "#00f5a0")}
+                    <div style={gridStyle}>{ceilingComps.map(renderCard)}</div>
                   </div>
-                  <div style={{ fontSize: 10, color: "#606878" }}>
-                    {comp.year} · age {comp.age} · {comp.ppgPctile}th pctile
+                )}
+                {floorComps.length > 0 && (
+                  <div>
+                    {sectionHeader("FLOOR CASE", "— worst Y+1 outcomes", "#ff6b35")}
+                    <div style={gridStyle}>{floorComps.map(renderCard)}</div>
                   </div>
-                  {delta !== null && (
-                    <div style={{ fontSize: 10, color: deltaCol, marginTop: 3 }}>
-                      Year +1: {delta > 0 ? "+" : ""}{delta} pctile pts
-                    </div>
-                  )}
-                  <div style={{ fontSize: 9, color: "#404858", marginTop: 2 }}>
-                    {comp.similarity}% match
-                  </div>
-                </div>
-              );
-            })}
+                )}
+              </>
+            ) : (
+              <div style={gridStyle}>{typicalComps.slice(0, 5).map(renderCard)}</div>
+            )}
+
+            <div style={{ fontSize: 9, color: "#505868", marginTop: 8, lineHeight: 1.5 }}>
+              Comps pulled from Sleeper historical data (2009–2024). Filtered to same
+              position, close age, similar production tier &amp; draft capital — then
+              split by what actually happened the following season.
+            </div>
           </div>
-          <div style={{ fontSize: 9, color: "#505868", marginTop: 8, lineHeight: 1.5 }}>
-            Comps pulled from Sleeper historical data (2014–2024). Match scored on
-            position, age proximity, production percentile, and draft capital tier.
-          </div>
-        </div>
-      )}
+        );
+      })()}
     </>
   );
 }
@@ -940,8 +983,8 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, ageCurves,
             lineHeight: 1.5,
           }}
         >
-          Data sources: Sleeper API (stats 2014–2024, player metadata) · FantasyCalc (market consensus).
-          Predictions built from empirical age curves and historical comp matching across 11 NFL seasons.
+          Data sources: Sleeper API (stats 2009–2024, player metadata) · FantasyCalc (market consensus).
+          Predictions built from empirical age curves and historical comp matching across 16 NFL seasons.
         </div>
       </div>
     </div>

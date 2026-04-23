@@ -134,12 +134,18 @@ export default function App() {
         stats20,
         stats19,
         stats18,
-        // Deep historical seasons (2014-2017) for richer age curves and comp matching.
-        // Cached 30 days — these seasons never change.
+        // Deep historical seasons (2009-2017) for richer age curves and comp matching.
+        // Cached 30 days — these seasons never change. Sleeper has real data back
+        // to 2009; 2008 and earlier return placeholder zeros so we stop there.
         stats17,
         stats16,
         stats15,
         stats14,
+        stats13,
+        stats12,
+        stats11,
+        stats10,
+        stats09,
         rosterAuditValues,
         rosterAuditPicks,
         sleeperDrafts,
@@ -165,6 +171,11 @@ export default function App() {
         fetchDeepHistoricalStats(2016),
         fetchDeepHistoricalStats(2015),
         fetchDeepHistoricalStats(2014),
+        fetchDeepHistoricalStats(2013),
+        fetchDeepHistoricalStats(2012),
+        fetchDeepHistoricalStats(2011),
+        fetchDeepHistoricalStats(2010),
+        fetchDeepHistoricalStats(2009),
         // RosterAudit — second dynasty value source
         fetchRosterAuditValues(league).catch(() => []),
         fetchRosterAuditPicks().catch(() => null),
@@ -205,6 +216,11 @@ export default function App() {
           { year: 2016, stats: stats16 },
           { year: 2015, stats: stats15 },
           { year: 2014, stats: stats14 },
+          { year: 2013, stats: stats13 },
+          { year: 2012, stats: stats12 },
+          { year: 2011, stats: stats11 },
+          { year: 2010, stats: stats10 },
+          { year: 2009, stats: stats09 },
         ],
       };
 
@@ -245,6 +261,11 @@ export default function App() {
         stats16,
         stats15,
         stats14,
+        stats13,
+        stats12,
+        stats11,
+        stats10,
+        stats09,
       ] = await Promise.all([
         fetchSleeper("/players/nfl").catch(() => ({})),
         fetchSleeper(`/stats/nfl/regular/${lastSeason}`).catch(() => ({})),
@@ -258,6 +279,11 @@ export default function App() {
         fetchDeepHistoricalStats(2016),
         fetchDeepHistoricalStats(2015),
         fetchDeepHistoricalStats(2014),
+        fetchDeepHistoricalStats(2013),
+        fetchDeepHistoricalStats(2012),
+        fetchDeepHistoricalStats(2011),
+        fetchDeepHistoricalStats(2010),
+        fetchDeepHistoricalStats(2009),
       ]);
 
       // Phase 2: Normalize Fleaflicker data (mutates players with synthetic entries)
@@ -299,6 +325,11 @@ export default function App() {
           { year: 2016, stats: stats16 },
           { year: 2015, stats: stats15 },
           { year: 2014, stats: stats14 },
+          { year: 2013, stats: stats13 },
+          { year: 2012, stats: stats12 },
+          { year: 2011, stats: stats11 },
+          { year: 2010, stats: stats10 },
+          { year: 2009, stats: stats09 },
         ],
       };
 
