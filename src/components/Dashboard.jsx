@@ -203,6 +203,7 @@ export default function Dashboard({
           onToggleBars={onToggleBars}
           positionPriority={POSITION_PRIORITY}
           scoringWeights={analysis.scoringWeights}
+          ageCurves={analysis.ageCurves}
           picksByYear={picksByYear}
           picks={picks}
           leagueContext={leagueContext}

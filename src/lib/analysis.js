@@ -193,6 +193,7 @@ export function buildRosterAnalysis(
       url: 'https://rosteraudit.com/',
     },
     scoringWeights,
+    ageCurves: benchmarks.ageCurves,
     tradeMarket,
     tradeSuggestions,
     tradeBlock: myTeam.tradeablePlayers.slice(0, 8),

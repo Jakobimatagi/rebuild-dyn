@@ -1,3 +1,5 @@
+import { safeLocalStorageWrite } from "./sleeperApi.js";
+
 const FANTASYCALC_BASE_URL = "https://api.fantasycalc.com";
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -57,17 +59,6 @@ export async function fetchFantasyCalcValues(league) {
 
   const data = await res.json();
 
-  try {
-    localStorage.setItem(
-      cacheKey,
-      JSON.stringify({
-        timestamp: Date.now(),
-        data,
-      }),
-    );
-  } catch {
-    // ignore cache write issues
-  }
-
+  safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), data }));
   return data;
 }

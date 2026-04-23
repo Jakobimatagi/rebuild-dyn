@@ -170,9 +170,33 @@ describe("draftTierLabel", () => {
 // ---------------------------------------------------------------------------
 
 describe("ageComponent", () => {
-  it("awards peak score before the position peak age", () => {
-    assert.equal(ageComponent("RB", 22, AGE_CURVES_FALLBACK), 95);
-    assert.equal(ageComponent("WR", 24, AGE_CURVES_FALLBACK), 95);
+  it("returns 95 exactly at peak age", () => {
+    assert.equal(ageComponent("RB", 24, AGE_CURVES_FALLBACK), 95);
+    assert.equal(ageComponent("WR", 26, AGE_CURVES_FALLBACK), 95);
+    assert.equal(ageComponent("QB", 27, AGE_CURVES_FALLBACK), 95);
+  });
+
+  it("scores pre-peak ages below 95 (rising toward peak)", () => {
+    // RB: peak=24, riseFrom=20, riseStart=70 — age 22 should be between riseStart and 95
+    const rb22 = ageComponent("RB", 22, AGE_CURVES_FALLBACK);
+    assert.ok(rb22 > 70 && rb22 < 95, `RB age 22 expected between 70 and 95, got ${rb22}`);
+    // WR: peak=26, riseFrom=21, riseStart=62 — age 24 should be between riseStart and 95
+    const wr24 = ageComponent("WR", 24, AGE_CURVES_FALLBACK);
+    assert.ok(wr24 > 62 && wr24 < 95, `WR age 24 expected between 62 and 95, got ${wr24}`);
+  });
+
+  it("rises monotonically from riseFrom up to peak", () => {
+    const ages = [20, 21, 22, 23, 24];
+    const scores = ages.map((a) => ageComponent("RB", a, AGE_CURVES_FALLBACK));
+    for (let i = 1; i < scores.length; i++) {
+      assert.ok(scores[i] >= scores[i - 1], `RB age ${ages[i]} (${scores[i]}) < age ${ages[i-1]} (${scores[i-1]})`);
+    }
+  });
+
+  it("returns riseStart for ages at or below riseFrom", () => {
+    // RB riseFrom=20, riseStart=70; age 19 should return riseStart floor
+    assert.equal(ageComponent("RB", 19, AGE_CURVES_FALLBACK), 70);
+    assert.equal(ageComponent("RB", 20, AGE_CURVES_FALLBACK), 70);
   });
 
   it("decreases monotonically as age rises past peak", () => {
@@ -198,7 +222,9 @@ describe("ageComponent", () => {
   });
 
   it("tolerates null ageCurves by using fallback", () => {
-    assert.equal(ageComponent("QB", 26, null), 95);
+    // QB age 26 is pre-peak (peak=27): should be interpolated rise, not 95
+    const score = ageComponent("QB", 26, null);
+    assert.ok(score > 63 && score < 95, `expected interpolated rise score, got ${score}`);
   });
 });
 
