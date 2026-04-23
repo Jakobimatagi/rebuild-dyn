@@ -6,7 +6,7 @@
  * breakout probability, and bust/cliff risk assessment.
  *
  * Data sources used (all free):
- *   - Sleeper /stats/nfl/regular/{year}  → up to 11 seasons (2014-2024)
+ *   - Sleeper /stats/nfl/regular/{year}  → up to 16 seasons (2009-2024)
  *   - Sleeper /players/nfl               → age, draft info, position
  *   - FantasyCalc                        → already blended upstream in scoring
  */
@@ -37,7 +37,7 @@ export const POS_CAREER = {
  * Returns { QB: { 22: { median, mean, p75, p25, n }, 23: {...}, ... }, RB: {...}, ... }
  *
  * More seasons → more samples per age bucket → more reliable curves.
- * With 11 years (2014-2024) we get ~50-100 samples per age bucket at peak ages.
+ * With 16 years (2009-2024) we get ~75-150 samples per age bucket at peak ages.
  */
 export function buildDetailedAgeCurves(allStatYears, players) {
   const currentYear = new Date().getFullYear();
@@ -230,6 +230,14 @@ export function buildHistoricalSnapshots(allStatYears, players) {
         if (fp !== undefined) future[ahead] = fp;
       }
 
+      // Approximate years of experience in that specific season.
+      // Sleeper's years_exp reflects current/most-recent value; retrocalc may
+      // be noisy for long-retired players, so we only trust the rookie
+      // classification when age also lines up with a typical rookie window.
+      const yearsExpNow = p.years_exp != null ? Number(p.years_exp) : null;
+      const yearsExpInSeason =
+        yearsExpNow != null ? yearsExpNow - (currentYear - year) : null;
+
       snapshots.push({
         playerId: id,
         name: `${p.first_name || ''} ${p.last_name || ''}`.trim(),
@@ -238,6 +246,7 @@ export function buildHistoricalSnapshots(allStatYears, players) {
         pos,
         ppgPctile,
         draftRound: p.draft_round != null ? Number(p.draft_round) || null : null,
+        yearsExp: yearsExpInSeason,
         future,
       });
     }
@@ -261,54 +270,161 @@ export function buildHistoricalSnapshots(allStatYears, players) {
 export function buildPredictionContext(allStatYears, players, ageCurves) {
   const detailedCurves = buildDetailedAgeCurves(allStatYears, players);
   const historicalSnapshots = buildHistoricalSnapshots(allStatYears, players);
-  return { detailedCurves, historicalSnapshots, ageCurves };
+
+  // Pre-index by position once — findQualifiedComps runs per player, so
+  // scanning the whole snapshots array every time is wasteful when we
+  // already know 3/4 of entries will be rejected on position alone.
+  const snapshotsByPos = {};
+  for (const snap of historicalSnapshots) {
+    if (!snapshotsByPos[snap.pos]) snapshotsByPos[snap.pos] = [];
+    snapshotsByPos[snap.pos].push(snap);
+  }
+
+  return { detailedCurves, historicalSnapshots, snapshotsByPos, ageCurves };
 }
 
 // ---------------------------------------------------------------------------
 // Comparable player finder
 // ---------------------------------------------------------------------------
 
-/**
- * Find historical player-seasons that most closely resemble the given player.
- * Similarity is scored on: position match, age proximity, production tier, draft capital.
- * Only returns comps that have at least one year of future data (so we can show outcomes).
- */
-function findComps(player, historicalSnapshots, limit = 5) {
-  const { position, age, currentPctile = 50, draftRound } = player;
-  const myRound = draftRound != null ? Number(draftRound) || 5 : 5;
+// Minimum similarity score for a comp to be displayed. Prevents showing
+// weak matches that can mislead the reader more than they inform.
+const MIN_COMP_SIMILARITY = 55;
 
-  const candidates = historicalSnapshots.filter(
-    (snap) =>
-      snap.pos === position &&
-      Math.abs(snap.age - age) <= 2 &&
-      Object.keys(snap.future).length > 0,
-  );
+// Pctile difference beyond this is a hard filter — an elite producer shouldn't
+// get comped to a depth player just because age and draft align.
+const MAX_PCTILE_DIFF = 25;
+
+/**
+ * Find the full qualified pool of historical comps for a player.
+ *
+ * Similarity is scored on production tier (highest weight), age proximity,
+ * and draft capital. Additional rules:
+ *   - RBs use a tighter age window (±1) because RB arcs are shorter.
+ *   - Rookies (yearsExp === 0) only comp to historical rookie seasons.
+ *   - For rookies we down-weight production (no NFL sample yet) and
+ *     up-weight draft capital.
+ *   - Low-confidence matches (< MIN_COMP_SIMILARITY) are dropped entirely.
+ *
+ * Returned pool is deduped by player (highest-similarity season per player),
+ * sorted by similarity desc. Used as the base for display selection AND
+ * for breakout/bust base-rate calculations, so the sample stays unbiased.
+ */
+function findQualifiedComps(player, snapshotPool) {
+  const { position, age, currentPctile = 50, draftRound, yearsExp = 0 } = player;
+  const myRound = draftRound != null ? Number(draftRound) || null : null;
+  const isRookie = yearsExp === 0;
+
+  // RB arcs are shorter, so age proximity matters more.
+  const ageWindow = position === 'RB' ? 1 : 2;
+
+  // For rookies, production is noise (no sample), so lean on draft/age.
+  const ageWeight = 15;
+  const pctileWeight = isRookie ? 0.4 : 1.2;
+  const draftWeight = isRookie ? 14 : 8;
+
+  const candidates = snapshotPool.filter((snap) => {
+    // Position is already guaranteed — pool is pre-indexed by position.
+    if (Math.abs(snap.age - age) > ageWindow) return false;
+    if (!Object.keys(snap.future).length) return false;
+
+    // Rookie isolation: a fresh rookie's profile only makes sense against
+    // other rookie seasons. Age 20-24 guards against noisy yearsExp data
+    // for long-retired players.
+    const snapIsRookie =
+      snap.yearsExp === 0 && snap.age >= 20 && snap.age <= 24;
+    if (isRookie && !snapIsRookie) return false;
+    if (!isRookie && snap.yearsExp === 0) return false;
+
+    // Hard cap on production tier gap: elite ≠ depth even if other axes line up.
+    if (!isRookie && Math.abs(snap.ppgPctile - currentPctile) > MAX_PCTILE_DIFF) {
+      return false;
+    }
+    return true;
+  });
 
   if (!candidates.length) return [];
 
   const scored = candidates.map((snap) => {
     const ageDiff = Math.abs(snap.age - age);
     const pctileDiff = Math.abs(snap.ppgPctile - currentPctile);
-    const snapRound = snap.draftRound != null ? snap.draftRound : 5;
-    const draftDiff = Math.abs(myRound - snapRound);
-    const sim = 100 - ageDiff * 15 - pctileDiff * 0.5 - draftDiff * 8;
-    return { ...snap, similarity: Math.max(0, sim) };
+
+    // Only penalize draft diff if both sides have draft data — otherwise a
+    // small fixed uncertainty penalty. Prevents UDFAs from being silently
+    // bucketed as round 5.
+    let draftPenalty;
+    if (myRound != null && snap.draftRound != null) {
+      draftPenalty = Math.abs(myRound - snap.draftRound) * draftWeight;
+    } else {
+      draftPenalty = draftWeight / 2;
+    }
+
+    const sim =
+      100 - ageDiff * ageWeight - pctileDiff * pctileWeight - draftPenalty;
+    return { ...snap, similarity: Math.max(0, Math.round(sim)) };
   });
 
-  scored.sort((a, b) => b.similarity - a.similarity);
+  // Drop weak matches and dedupe by player (keep best-similarity season each).
+  const qualified = scored
+    .filter((s) => s.similarity >= MIN_COMP_SIMILARITY)
+    .sort((a, b) => b.similarity - a.similarity);
 
-  // One entry per player (prefer highest-similarity season if duplicates)
   const seen = new Set();
-  const deduped = [];
-  for (const comp of scored) {
-    if (!seen.has(comp.playerId)) {
-      seen.add(comp.playerId);
-      deduped.push(comp);
-    }
-    if (deduped.length >= limit) break;
+  const unique = [];
+  for (const comp of qualified) {
+    if (seen.has(comp.playerId)) continue;
+    seen.add(comp.playerId);
+    unique.push(comp);
+  }
+  return unique;
+}
+
+/**
+ * From a qualified comp pool, pick the ceiling (best-case) and floor
+ * (worst-case) historical outcomes for display. Shows the realistic
+ * envelope of what happened to similar players, not five near-twins.
+ *
+ * Returns comps tagged with outcomeBucket: 'ceiling' | 'floor' | 'typical'.
+ * Falls back to most-similar-first when there isn't enough Y+1 data.
+ */
+function selectCeilingFloorComps(qualified, limit = 4) {
+  if (!qualified.length) return [];
+
+  // Restrict the outcome split to the top-N most-similar candidates so we
+  // don't surface extreme outcomes from loose matches at the tail.
+  const poolSize = Math.max(limit * 3, 12);
+  const pool = qualified.slice(0, poolSize).filter((c) => c.future[1] !== undefined);
+
+  if (pool.length < 4) {
+    return qualified
+      .slice(0, limit)
+      .map((c) => ({ ...c, outcomeBucket: 'typical' }));
   }
 
-  return deduped;
+  const byOutcome = [...pool].sort(
+    (a, b) => b.future[1] - b.ppgPctile - (a.future[1] - a.ppgPctile),
+  );
+
+  const half = Math.floor(limit / 2);
+  const ceilingCount = Math.min(half, Math.floor(byOutcome.length / 2));
+  const floorCount = Math.min(limit - ceilingCount, byOutcome.length - ceilingCount);
+
+  const ceiling = byOutcome
+    .slice(0, ceilingCount)
+    .map((c) => ({ ...c, outcomeBucket: 'ceiling' }));
+  const floor = byOutcome
+    .slice(-floorCount)
+    .reverse()
+    .map((c) => ({ ...c, outcomeBucket: 'floor' }));
+
+  const seenIds = new Set();
+  const result = [];
+  for (const c of [...ceiling, ...floor]) {
+    if (seenIds.has(c.playerId)) continue;
+    seenIds.add(c.playerId);
+    result.push(c);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -591,15 +707,30 @@ function generateInsights(player, projections, comps, breakoutProb, bustRisk) {
 export function buildPlayerPrediction(player, predictionContext) {
   if (!POSITION_PRIORITY.includes(player.position)) return null;
 
-  const { detailedCurves, historicalSnapshots, ageCurves } = predictionContext;
+  const { detailedCurves, snapshotsByPos, ageCurves } = predictionContext;
 
-  const comps = findComps(player, historicalSnapshots);
-  const breakoutProb = computeBreakoutProb(player, comps);
-  const bustRisk = computeBustRisk(player, comps);
-  const projections = projectYears(player, detailedCurves, ageCurves, comps);
+  // Pre-indexed by position — scan only this player's position bucket.
+  const snapshotPool = snapshotsByPos?.[player.position] || [];
+
+  // Full qualified pool drives stats (breakout/bust base rates, projections,
+  // insights) — we want an unbiased sample for those.
+  const qualifiedComps = findQualifiedComps(player, snapshotPool);
+  // Display gets the ceiling/floor extremes so the user sees the realistic
+  // outcome envelope, not a pile of near-twins.
+  const displayComps = selectCeilingFloorComps(qualifiedComps);
+
+  const breakoutProb = computeBreakoutProb(player, qualifiedComps);
+  const bustRisk = computeBustRisk(player, qualifiedComps);
+  const projections = projectYears(player, detailedCurves, ageCurves, qualifiedComps);
   const trajectory = getTrajectory(player, projections, breakoutProb, bustRisk);
   const dynastyOutlook = getDynastyOutlook(player, projections, breakoutProb, bustRisk);
-  const keyInsights = generateInsights(player, projections, comps, breakoutProb, bustRisk);
+  const keyInsights = generateInsights(
+    player,
+    projections,
+    qualifiedComps,
+    breakoutProb,
+    bustRisk,
+  );
 
   return {
     projections,       // [{ yearsAhead, age, score }, ...] — 3 entries
@@ -607,7 +738,7 @@ export function buildPlayerPrediction(player, predictionContext) {
     dynastyOutlook,    // { label, color }
     breakoutProb: Math.round(breakoutProb * 100),  // 0-100
     bustRisk: Math.round(bustRisk * 100),          // 0-100
-    comps: comps.map((c) => ({
+    comps: displayComps.map((c) => ({
       name: c.name,
       year: c.year,
       age: c.age,
@@ -616,6 +747,7 @@ export function buildPlayerPrediction(player, predictionContext) {
       future2: c.future[2],
       future3: c.future[3],
       similarity: Math.round(c.similarity),
+      outcomeBucket: c.outcomeBucket || 'typical',
     })),
     keyInsights,
   };
