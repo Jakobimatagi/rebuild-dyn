@@ -1,5 +1,6 @@
 import { ARCHETYPE_DESC, ARCHETYPE_META } from "../../constants";
 import { getColor, getVerdict } from "../../lib/analysis";
+import { AGE_CURVES_FALLBACK } from "../../lib/scoringEngine";
 import { useModalBehavior } from "../../lib/useModalBehavior";
 import { styles } from "../../styles";
 
@@ -131,6 +132,119 @@ function situExplanation(score, depthOrder, team, position) {
     return "Listed as #3 or lower. Minimal expected opportunity this season.";
   }
   return "Listed as #4 or deeper on depth chart. Negligible expected opportunity.";
+}
+
+// ---------------------------------------------------------------------------
+// Age curve chart
+// ---------------------------------------------------------------------------
+
+function AgeCurveChart({ pos, currentAge, ageCurves }) {
+  const curve = (ageCurves && ageCurves[pos]) || AGE_CURVES_FALLBACK[pos] || AGE_CURVES_FALLBACK.WR;
+  const { peak, decline, cliff } = curve;
+
+  const W = 480, H = 80;
+  const PAD = { l: 28, r: 12, t: 8, b: 20 };
+  const innerW = W - PAD.l - PAD.r;
+  const innerH = H - PAD.t - PAD.b;
+  const ageMin = 19, ageMax = 42;
+  const ageRange = ageMax - ageMin;
+
+  const xOf = (age) => PAD.l + ((age - ageMin) / ageRange) * innerW;
+  const yOf = (score) => PAD.t + (1 - score / 100) * innerH;
+
+  // Build polyline points using the same math as ageComponent
+  const riseFrom = curve.riseFrom ?? peak - 5;
+  const riseStart = curve.riseStart ?? 65;
+  const scoreAt = (age) => {
+    if (age < peak) {
+      if (age <= riseFrom) return riseStart;
+      const t = (age - riseFrom) / (peak - riseFrom);
+      return Math.round(riseStart + t * (95 - riseStart));
+    }
+    if (age === peak) return 95;
+    if (age <= decline) return Math.max(30, 95 - ((age - peak) / (decline - peak)) * 65);
+    if (age <= cliff) return Math.max(10, 30 - ((age - decline) / (cliff - decline)) * 20);
+    return 12;
+  };
+
+  const ages = Array.from({ length: ageRange + 1 }, (_, i) => ageMin + i);
+  const points = ages.map((a) => `${xOf(a).toFixed(1)},${yOf(scoreAt(a)).toFixed(1)}`).join(" ");
+
+  const clampedAge = Math.max(ageMin, Math.min(ageMax, currentAge));
+  const markerX = xOf(clampedAge);
+  const markerY = yOf(scoreAt(clampedAge));
+
+  const zoneLabels = [
+    { label: "Peak", age: peak, color: "#00f5a0" },
+    { label: "Decline", age: decline, color: "#ffd84d" },
+    { label: "Cliff", age: cliff, color: "#ff6b35" },
+  ];
+
+  return (
+    <div style={{ margin: "8px 0 0" }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        width="100%"
+        style={{ display: "block", overflow: "visible" }}
+        aria-label={`Age production curve for ${pos}, current age ${currentAge}`}
+      >
+        {/* Zone fills */}
+        <rect x={PAD.l} y={PAD.t} width={xOf(peak) - PAD.l} height={innerH} fill="rgba(0,245,160,0.06)" />
+        <rect x={xOf(peak)} y={PAD.t} width={xOf(decline) - xOf(peak)} height={innerH} fill="rgba(255,212,77,0.06)" />
+        <rect x={xOf(decline)} y={PAD.t} width={xOf(cliff) - xOf(decline)} height={innerH} fill="rgba(255,107,53,0.06)" />
+        <rect x={xOf(cliff)} y={PAD.t} width={xOf(ageMax) - xOf(cliff)} height={innerH} fill="rgba(255,107,53,0.03)" />
+
+        {/* Threshold dashes */}
+        {zoneLabels.map(({ age, color }) => (
+          <line
+            key={age}
+            x1={xOf(age)} y1={PAD.t}
+            x2={xOf(age)} y2={PAD.t + innerH}
+            stroke={color} strokeWidth={1} strokeDasharray="3,3" opacity={0.5}
+          />
+        ))}
+
+        {/* Curve */}
+        <polyline points={points} fill="none" stroke="#7b8cff" strokeWidth={2} strokeLinejoin="round" />
+
+        {/* Current age marker */}
+        <line x1={markerX} y1={PAD.t} x2={markerX} y2={PAD.t + innerH} stroke="#fff" strokeWidth={1.5} opacity={0.7} />
+        <circle cx={markerX} cy={markerY} r={3.5} fill="#fff" />
+
+        {/* Y-axis label */}
+        <text x={PAD.l - 4} y={PAD.t + 1} fill="#505868" fontSize={7} textAnchor="end" dominantBaseline="hanging">100</text>
+        <text x={PAD.l - 4} y={PAD.t + innerH} fill="#505868" fontSize={7} textAnchor="end" dominantBaseline="auto">0</text>
+
+        {/* X-axis age ticks */}
+        {[20, 24, 28, 32, 36, 40].map((a) => (
+          <text key={a} x={xOf(a)} y={PAD.t + innerH + 11} fill="#505868" fontSize={7} textAnchor="middle">{a}</text>
+        ))}
+
+        {/* Zone labels */}
+        {zoneLabels.map(({ label, age, color }, i) => {
+          const nextAge = zoneLabels[i + 1]?.age ?? ageMax;
+          const midX = xOf((age + nextAge) / 2);
+          return (
+            <text key={label} x={midX} y={PAD.t + innerH + 11} fill={color} fontSize={7} textAnchor="middle" opacity={0.7}>
+              {label}
+            </text>
+          );
+        })}
+
+        {/* "Age N" label on marker */}
+        <text
+          x={markerX}
+          y={PAD.t - 2}
+          fill="#fff"
+          fontSize={7.5}
+          textAnchor={clampedAge > 36 ? "end" : clampedAge < 23 ? "start" : "middle"}
+          fontWeight="700"
+        >
+          Age {currentAge}
+        </text>
+      </svg>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -469,7 +583,7 @@ function PredictionSection({ prediction }) {
 // Main modal
 // ---------------------------------------------------------------------------
 
-export default function PlayerDeepDiveModal({ player, scoringWeights, onClose }) {
+export default function PlayerDeepDiveModal({ player, scoringWeights, ageCurves, onClose }) {
   const modalRef = useModalBehavior(onClose);
 
   if (!player) return null;
@@ -625,6 +739,7 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, onClose })
             color: "#7b8cff",
             value: components.age,
             explanation: ageExplanation(components.age, position, age),
+            extra: <AgeCurveChart pos={position} currentAge={age} ageCurves={ageCurves} />,
           },
           {
             label: "Production",
@@ -650,7 +765,7 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, onClose })
             value: components.situ,
             explanation: situExplanation(components.situ, player.depthOrder, team, player.position),
           },
-        ].map(({ label, color, value, explanation }) => (
+        ].map(({ label, color, value, explanation, extra }) => (
           <div
             key={label}
             style={{
@@ -674,6 +789,7 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, onClose })
             <div style={{ fontSize: 11, color: "#a0a8c0", lineHeight: 1.5 }}>
               {explanation}
             </div>
+            {extra}
           </div>
         ))}
 

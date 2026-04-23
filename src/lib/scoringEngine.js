@@ -64,11 +64,13 @@ export function getWeightDeviationRatio(weights = DEFAULT_SCORING_WEIGHTS) {
 // Age curves
 // ---------------------------------------------------------------------------
 
+// riseFrom/riseStart define the pre-peak climb: score rises from riseStart at
+// riseFrom linearly to 95 at peak. Based on typical NFL development timelines.
 export const AGE_CURVES_FALLBACK = {
-  QB: { peak: 27, decline: 33, cliff: 38 },
-  RB: { peak: 24, decline: 27, cliff: 30 },
-  WR: { peak: 26, decline: 30, cliff: 33 },
-  TE: { peak: 27, decline: 31, cliff: 34 },
+  QB: { peak: 27, decline: 33, cliff: 38, riseFrom: 22, riseStart: 63 },
+  RB: { peak: 24, decline: 27, cliff: 30, riseFrom: 20, riseStart: 70 },
+  WR: { peak: 26, decline: 30, cliff: 33, riseFrom: 21, riseStart: 62 },
+  TE: { peak: 27, decline: 31, cliff: 34, riseFrom: 22, riseStart: 58 },
 };
 
 // Derives age-production curves from actual player-season data.
@@ -155,10 +157,23 @@ export function buildAgeCurves(players, allStatYears) {
       }
     }
 
+    // Pre-peak rise: use the youngest well-sampled bucket to anchor the climb.
+    const prePeakAges = ages.filter((a) => a < peakAge);
+    let riseFrom = AGE_CURVES_FALLBACK[pos].riseFrom;
+    let riseStart = AGE_CURVES_FALLBACK[pos].riseStart;
+    if (prePeakAges.length > 0) {
+      const youngAge = prePeakAges[0];
+      riseFrom = youngAge;
+      // Normalize the youngest bucket's smoothed PPG against peak → score on 0–95 scale.
+      riseStart = Math.max(30, Math.round((smoothed[youngAge] / peakVal) * 95));
+    }
+
     curves[pos] = {
       peak: Math.max(peakAge, AGE_CURVES_FALLBACK[pos].peak - 2),
       decline: Math.max(decline, peakAge + 2),
       cliff: Math.max(cliff, decline + 2),
+      riseFrom,
+      riseStart,
     };
   });
 
@@ -322,7 +337,15 @@ export function draftTierLabel(round, slot) {
 export function ageComponent(pos, age, ageCurves) {
   const fallback = AGE_CURVES_FALLBACK[pos] || AGE_CURVES_FALLBACK.WR;
   const c = ageCurves && ageCurves[pos] ? ageCurves[pos] : fallback;
-  if (age <= c.peak) return 95;
+
+  if (age < c.peak) {
+    const riseFrom = c.riseFrom ?? c.peak - 5;
+    const riseStart = c.riseStart ?? 65;
+    if (age <= riseFrom) return riseStart;
+    const t = (age - riseFrom) / (c.peak - riseFrom);
+    return Math.round(riseStart + t * (95 - riseStart));
+  }
+  if (age === c.peak) return 95;
   if (age <= c.decline) {
     return Math.max(30, 95 - ((age - c.peak) / (c.decline - c.peak)) * 65);
   }

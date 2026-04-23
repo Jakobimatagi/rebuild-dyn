@@ -4,7 +4,7 @@
  * data into Sleeper-compatible format for the analysis pipeline.
  */
 
-const FF_BASE_URL = import.meta.env.DEV
+const FF_BASE_URL = import.meta.env?.DEV
   ? "/fleaflicker"
   : "/api/fleaflicker";
 
@@ -24,7 +24,7 @@ function camelToSnakeKeys(obj) {
 
 async function fetchFF(endpoint, params = {}) {
   const query = new URLSearchParams(params);
-  const url = import.meta.env.DEV
+  const url = import.meta.env?.DEV
     ? `${FF_BASE_URL}/${endpoint}?sport=NFL&${query}`
     : `${FF_BASE_URL}?path=${endpoint}&${query}`;
   const res = await fetch(url);
@@ -75,7 +75,7 @@ export async function fetchFFLeagueTransactions(leagueId, resultOffset = 0) {
 
 // ─── Player Name Matching ─────────────────────────────────
 
-function normalizeName(name) {
+export function normalizeName(name) {
   if (!name) return "";
   return name
     .toLowerCase()
@@ -84,7 +84,7 @@ function normalizeName(name) {
     .trim();
 }
 
-function buildPlayerLookup(sleeperPlayers) {
+export function buildPlayerLookup(sleeperPlayers) {
   const byNamePos = new Map();
   const byName = new Map();
 
@@ -104,7 +104,7 @@ function buildPlayerLookup(sleeperPlayers) {
   return { byNamePos, byName };
 }
 
-function matchPlayer(ffProPlayer, lookup) {
+export function matchPlayer(ffProPlayer, lookup) {
   if (!ffProPlayer?.name_full) return null;
   const norm = normalizeName(ffProPlayer.name_full);
 
@@ -141,7 +141,7 @@ function resolvePlayerId(ffProPlayer, lookup, sleeperPlayers) {
 
 // ─── Normalization Helpers ────────────────────────────────
 
-function mapSlotToSleeperPos(pos) {
+export function mapSlotToSleeperPos(pos) {
   const elig = pos.eligibility || [];
   const label = pos.label;
 
@@ -173,7 +173,7 @@ function mapSlotToSleeperPos(pos) {
   return map[label] || label;
 }
 
-function buildSleeperRosterPositions(rules) {
+export function buildSleeperRosterPositions(rules) {
   const positions = [];
 
   for (const pos of rules.roster_positions || []) {
@@ -192,7 +192,7 @@ function buildSleeperRosterPositions(rules) {
   return positions;
 }
 
-function buildSleeperScoringSettings(rules) {
+export function buildSleeperScoringSettings(rules) {
   const s = {};
   for (const group of rules.groups || []) {
     for (const rule of group.scoring_rules || []) {
@@ -253,7 +253,7 @@ async function buildFFTradedPicks(leagueId, teamIds) {
 /**
  * Normalize FetchTrades (TRADES_COMPLETED) into Sleeper transaction format.
  */
-function normalizeFFCompletedTrades(trades, lookup, sleeperPlayers) {
+export function normalizeFFCompletedTrades(trades, lookup, sleeperPlayers) {
   return (trades || []).map((trade) => {
     const adds = {};
     const drops = {};
@@ -308,7 +308,7 @@ function normalizeFFCompletedTrades(trades, lookup, sleeperPlayers) {
 /**
  * Normalize FetchLeagueTransactions items (non-trade moves) into Sleeper format.
  */
-function normalizeFFMoveTransactions(items, lookup, sleeperPlayers) {
+export function normalizeFFMoveTransactions(items, lookup, sleeperPlayers) {
   const transactions = [];
 
   for (const item of items) {

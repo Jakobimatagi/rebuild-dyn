@@ -412,6 +412,7 @@ export default function RosterTab({
   onToggleRoom,
   onToggleBars,
   scoringWeights,
+  ageCurves,
   picksByYear,
   picks,
   leagueContext,
@@ -430,6 +431,7 @@ export default function RosterTab({
         <PlayerDeepDiveModal
           player={deepDivePlayer}
           scoringWeights={scoringWeights}
+          ageCurves={ageCurves}
           onClose={() => setDeepDivePlayer(null)}
         />
       )}

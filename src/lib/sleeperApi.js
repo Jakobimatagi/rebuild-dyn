@@ -15,6 +15,48 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 // Seasons from before 2018 are fully settled — cache 30 days to minimize API calls.
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
+// Cache key prefixes that are safe to evict when storage is full.
+// Listed oldest-first as an eviction priority hint.
+const EVICTABLE_PREFIXES = ["sleeper_stats_deep_", "sleeper_stats_"];
+
+/**
+ * Write to localStorage, falling back to evicting the oldest stats cache
+ * entries if the quota is exceeded. Silently gives up if eviction doesn't help
+ * (e.g. mobile Safari with a very small quota).
+ */
+export function safeLocalStorageWrite(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (e) {
+    if (e?.name !== "QuotaExceededError" && e?.code !== 22) return;
+
+    // Collect all evictable keys sorted by their stored timestamp (oldest first).
+    const candidates = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !EVICTABLE_PREFIXES.some((p) => k.startsWith(p))) continue;
+      try {
+        const parsed = JSON.parse(localStorage.getItem(k));
+        candidates.push({ key: k, timestamp: parsed?.timestamp ?? 0 });
+      } catch {
+        candidates.push({ key: k, timestamp: 0 });
+      }
+    }
+    candidates.sort((a, b) => a.timestamp - b.timestamp);
+
+    for (const { key: evictKey } of candidates) {
+      try {
+        localStorage.removeItem(evictKey);
+        localStorage.setItem(key, value);
+        return; // succeeded after eviction
+      } catch {
+        // Keep evicting older entries until write succeeds or we run out
+      }
+    }
+    // All eviction attempts failed — give up silently
+  }
+}
+
 export async function fetchHistoricalStats(year) {
   const cacheKey = `sleeper_stats_${year}`;
   try {
@@ -28,13 +70,7 @@ export async function fetchHistoricalStats(year) {
   }
 
   const data = await fetchSleeper(`/stats/nfl/regular/${year}`).catch(() => ({}));
-
-  try {
-    localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data }));
-  } catch {
-    // ignore cache write issues (quota exceeded etc.)
-  }
-
+  safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), data }));
   return data;
 }
 
@@ -55,13 +91,7 @@ export async function fetchDeepHistoricalStats(year) {
   }
 
   const data = await fetchSleeper(`/stats/nfl/regular/${year}`).catch(() => ({}));
-
-  try {
-    localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data }));
-  } catch {
-    // ignore cache write issues (quota exceeded etc.)
-  }
-
+  safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), data }));
   return data;
 }
 
