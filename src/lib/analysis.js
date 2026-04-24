@@ -1,5 +1,6 @@
 import { DEFAULT_SCORING_WEIGHTS, buildBenchmarks } from './scoringEngine';
 import { buildFantasyCalcContext } from './fantasyCalcBlend';
+import { buildFantasyCalcTradeIndex } from './fantasyCalcTradeIndex';
 import { buildRosterAuditContext } from './rosterAuditApi';
 import { buildRosterSnapshot, classifyLeagueTeams, assignDraftSlots } from './rosterBuilder';
 import { getLeagueRulesContext } from './marketValue';
@@ -44,6 +45,7 @@ export function buildRosterAnalysis(
   rosterAuditValues = [],
   rosterAuditPicks = null,
   sleeperDrafts = [],
+  fantasyCalcTrades = [],
 ) {
   const currentYear = new Date().getFullYear();
   const futureSeasons = [currentYear, currentYear + 1, currentYear + 2];
@@ -73,6 +75,7 @@ export function buildRosterAnalysis(
     lastSeasonYear,
   );
   const fantasyCalcContext = buildFantasyCalcContext(fantasyCalcValues);
+  const marketCompsBySleeperId = buildFantasyCalcTradeIndex(fantasyCalcTrades);
   const raFormat = leagueContext.isSuperflex ? 'sf' : '1qb';
   const rosterAuditContext = buildRosterAuditContext(
     rosterAuditValues,
@@ -198,5 +201,13 @@ export function buildRosterAnalysis(
     tradeSuggestions,
     tradeBlock: myTeam.tradeablePlayers.slice(0, 8),
     leagueActivity,
+    marketCompsBySleeperId,
+    marketCompsSource: {
+      enabled: marketCompsBySleeperId.size > 0,
+      totalPlayers: marketCompsBySleeperId.size,
+      totalTrades: Array.isArray(fantasyCalcTrades) ? fantasyCalcTrades.length : 0,
+      attribution: 'FantasyCalc',
+      url: 'https://www.fantasycalc.com/',
+    },
   };
 }

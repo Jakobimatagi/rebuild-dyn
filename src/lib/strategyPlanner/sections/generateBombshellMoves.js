@@ -34,6 +34,10 @@ import {
   pickFcValue,
 } from "./generateMarqueeMoves";
 import { pickSlotLabel, trendDelta } from "../../marketValue";
+import {
+  getMarketComps,
+  describeMarketComp,
+} from "../../fantasyCalcTradeIndex";
 
 const MIN_RATIO = 0.85;
 const MAX_RATIO = 1.25;
@@ -314,6 +318,13 @@ export function generateBombshellMoves(analysis, path) {
   const userPhase = analysis?.teamPhase?.phase || null;
   const userPicks = analysis?.picks || [];
   const pickOverrides = analysis?.rosterAuditSource?.pickValues || null;
+  const compsIndex = analysis?.marketCompsBySleeperId || null;
+  const compsForPlayer = (player) => {
+    const raw = getMarketComps(compsIndex, player?.id, 3);
+    return raw
+      .map((c) => ({ id: c.id, date: c.date, summary: describeMarketComp(c) }))
+      .filter((c) => c.summary);
+  };
 
   const partners = (analysis?.leagueTeams || []).filter(
     (t) => t.rosterId !== myRosterId,
@@ -412,6 +423,7 @@ export function generateBombshellMoves(analysis, path) {
       moves.push({
         mode: "acquire",
         send: pkg.anchor,
+        sendMarketComps: compsForPlayer(pkg.anchor),
         sendPicks: pkg.sendPicks,
         sendPickLabels: pkg.sendPicks
           .map((pk) => formatPick(pk, userPhase))
@@ -509,6 +521,7 @@ export function generateBombshellMoves(analysis, path) {
       moves.push({
         mode: "liquidate",
         send: anchor,
+        sendMarketComps: compsForPlayer(anchor),
         sendPicks: [],
         sendPickLabels: [],
         sendValue: Math.round(pkg.totalSend),

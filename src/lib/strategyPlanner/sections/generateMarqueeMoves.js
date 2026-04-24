@@ -25,6 +25,10 @@ import {
   pickSlotLabel,
   trendDelta,
 } from "../../marketValue";
+import {
+  getMarketComps,
+  describeMarketComp,
+} from "../../fantasyCalcTradeIndex";
 
 // Re-export so existing planner modules can keep importing from here.
 export { valueOfPickPhase, pickFcValue } from "../../marketValue";
@@ -242,6 +246,7 @@ export function generateMarqueeMoves(analysis, path) {
   const leagueContext = analysis?.leagueContext || {};
   const myRosterId = analysis?.rosterId;
   const pickOverrides = analysis?.rosterAuditSource?.pickValues || null;
+  const compsIndex = analysis?.marketCompsBySleeperId || null;
 
   const sellPool =
     analysis?.tradeablePlayers?.length > 0
@@ -335,9 +340,14 @@ export function generateMarqueeMoves(analysis, path) {
     }
 
     const pickPhase = best.ret.pickPhase;
+    const rawComps = getMarketComps(compsIndex, sellPlayer.id, 3);
+    const sendMarketComps = rawComps
+      .map((c) => ({ id: c.id, date: c.date, summary: describeMarketComp(c) }))
+      .filter((c) => c.summary);
     moves.push({
       send: sellPlayer,
       sendValue,
+      sendMarketComps,
       receive: { player: best.ret.player, picks: best.ret.picks },
       receivePickLabels: (best.ret.picks || [])
         .map((pk) => formatPick(pk, pickPhase))

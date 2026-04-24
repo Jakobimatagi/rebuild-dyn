@@ -1,6 +1,7 @@
 import { styles } from "../../../styles";
 import { getColor } from "../../../lib/analysis";
 import TrendBadge from "./TrendBadge";
+import MarketCompsBlock from "./MarketCompsBlock";
 
 const ACCENT = "#06b6d4"; // cyan — distinct from bombshell purple and marquee red
 
@@ -228,6 +229,11 @@ function HaulCard({ move, index }) {
           {move.rationale}
         </div>
       )}
+
+      <MarketCompsBlock
+        comps={move.sendMarketComps}
+        label={`Recent market comps — ${sendPlayers[0]?.name || "sell piece"}`}
+      />
     </div>
   );
 }

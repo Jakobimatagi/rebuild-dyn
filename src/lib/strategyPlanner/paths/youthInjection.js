@@ -159,7 +159,7 @@ export const youthInjection = {
             p.age >= 22 &&
             p.age <= 25 &&
             (p.depthOrder ?? 9) <= 2 &&
-            (p.score || 0) >= 65 &&
+            (p.score || 0) >= 58 &&
             (p.archetype === "Foundational" ||
               p.archetype === "Mainstay" ||
               p.archetype === "Upside Shot"),

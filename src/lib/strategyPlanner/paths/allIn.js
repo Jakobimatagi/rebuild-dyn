@@ -20,7 +20,7 @@ export const allIn = {
         player.archetype === "Productive Vet" ||
         player.archetype === "Short Term League Winner"),
     sellNow: (player) =>
-      player.age <= 23 && player.score < 60,
+      player.age <= 23 && player.score < 52,
     holdReassess: (player) => player.age >= 24 && player.age <= 27,
   },
   triageRationales: {

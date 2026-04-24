@@ -49,7 +49,7 @@ export const fullTeardown = {
   targetRerank: (sug) => {
     const p = sug.targetPlayer;
     const youthBonus = (25 - (p.age || 25)) * 4;
-    const breakoutBonus = (p.prediction?.breakoutProb || 0) * 20;
+    const breakoutBonus = (p.prediction?.breakoutProb || 0) * 0.2;
     return (sug.fitScore || 0) + youthBonus + breakoutBonus;
   },
   targetReason: (p) =>
@@ -203,7 +203,7 @@ export const fullTeardown = {
       id: "no-young-core",
       match: (analysis) => {
         const young = (analysis.enriched || []).filter(
-          (p) => p.age <= 23 && p.score >= 55,
+          (p) => p.age <= 23 && p.score >= 48,
         );
         return young.length < 2;
       },

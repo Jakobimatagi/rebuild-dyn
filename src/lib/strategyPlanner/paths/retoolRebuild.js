@@ -1,5 +1,7 @@
 // Retool Rebuild (Soft Rebuild) — stay competitive while pivoting younger.
 
+import { getPeakAge } from "../ageBands";
+
 const ELITE = new Set(["Cornerstone", "Foundational"]);
 
 export const retoolRebuild = {
@@ -25,8 +27,17 @@ export const retoolRebuild = {
         (player.tags || []).includes("Ascending")
       );
     },
-    sellNow: (player) => player.age >= 26 && !ELITE.has(player.archetype),
-    holdReassess: (player) => player.age >= 26 && ELITE.has(player.archetype),
+    sellNow: (player, ctx) => {
+      if (ELITE.has(player.archetype)) return false;
+      // Position-aware floor: don't sell a 26yo QB who's still pre-peak.
+      const peak = getPeakAge(player.position, ctx?.analysis?.ageCurves);
+      return player.age >= Math.max(26, peak);
+    },
+    holdReassess: (player, ctx) => {
+      if (!ELITE.has(player.archetype)) return false;
+      const peak = getPeakAge(player.position, ctx?.analysis?.ageCurves);
+      return player.age >= Math.max(26, peak);
+    },
   },
   triageRationales: {
     buildAround: (p) =>
@@ -47,7 +58,7 @@ export const retoolRebuild = {
   targetRerank: (sug) => {
     const p = sug.targetPlayer;
     const downYearBonus = (p.tags || []).includes("Undervalued") ? 10 : 0;
-    const breakoutBonus = (p.prediction?.breakoutProb || 0) * 15;
+    const breakoutBonus = (p.prediction?.breakoutProb || 0) * 0.15;
     return (sug.fitScore || 0) + downYearBonus + breakoutBonus;
   },
   targetReason: (p) => {

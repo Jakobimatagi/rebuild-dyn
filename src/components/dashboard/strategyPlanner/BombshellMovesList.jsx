@@ -1,6 +1,7 @@
 import { styles } from "../../../styles";
 import { getColor } from "../../../lib/analysis";
 import TrendBadge from "./TrendBadge";
+import MarketCompsBlock from "./MarketCompsBlock";
 
 const PHASE_COLORS = {
   contender: "#00f5a0",
@@ -194,6 +195,11 @@ function MoveCard({ move, index }) {
           {move.rationale}
         </div>
       )}
+
+      <MarketCompsBlock
+        comps={move.sendMarketComps}
+        label={`Recent market comps — ${anchor.name}`}
+      />
     </div>
   );
 }
