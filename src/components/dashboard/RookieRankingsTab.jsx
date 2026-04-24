@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchPublicRankingsData } from "../../lib/supabase.js";
 import { TIER_RANK, computeGrade, dynastyScore, deriveTier } from "../../lib/prospectScoring.js";
+import RookieDeepDiveModal from "./RookieDeepDiveModal.jsx";
 
 const POS_COLORS = {
   QB: "bg-rose-500/15 text-rose-300 border-rose-500/30",
@@ -57,6 +58,7 @@ export default function RookieRankingsTab() {
   const [view, setView]           = useState("consensus");
   const [posFilter, setPosFilter] = useState({ QB: true, RB: true, WR: true, TE: true });
   const [yearFilter, setYearFilter] = useState(String(new Date().getFullYear()));
+  const [selectedProspect, setSelectedProspect] = useState(null);
 
   const currentYear = new Date().getFullYear();
   const yearTabs    = [0, 1, 2].map((o) => String(currentYear + o));
@@ -200,7 +202,12 @@ export default function RookieRankingsTab() {
             const comp = p.comparable_player || "";
 
             return (
-              <div key={p.id} className="rounded-xl border border-white/10 bg-slate-900/60 px-5 py-3 flex items-center gap-4">
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setSelectedProspect(p)}
+                className="w-full text-left rounded-xl border border-white/10 bg-slate-900/60 hover:bg-slate-900/80 hover:border-emerald-400/40 transition-colors px-5 py-3 flex items-center gap-4"
+              >
                 {/* Rank number */}
                 <div className="w-8 text-center shrink-0">
                   <span className="text-lg font-bold text-slate-300">{i + 1}</span>
@@ -241,10 +248,20 @@ export default function RookieRankingsTab() {
                     {row.count} analyst{row.count !== 1 ? "s" : ""}
                   </div>
                 )}
-              </div>
+              </button>
             );
           })}
         </div>
+      )}
+
+      {selectedProspect && (
+        <RookieDeepDiveModal
+          prospect={selectedProspect}
+          annotation={annotations[selectedProspect.id] || {}}
+          expertRankings={byProspect?.[selectedProspect.id] || []}
+          experts={experts}
+          onClose={() => setSelectedProspect(null)}
+        />
       )}
     </div>
   );
