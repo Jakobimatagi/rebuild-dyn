@@ -19,7 +19,7 @@ export const softLanding = {
 
   triageRules: {
     buildAround: (player) =>
-      (player.age <= 25 && player.score >= 55) ||
+      (player.age <= 25 && player.score >= 48) ||
       (player.age <= 28 && ELITE_VETS.has(player.archetype)),
     sellNow: (player) =>
       player.age >= 29 && !ELITE_VETS.has(player.archetype),
@@ -43,7 +43,7 @@ export const softLanding = {
     const undervalued =
       (p.tags || []).includes("Undervalued") ||
       p.verdict === "buy" ||
-      (p.prediction?.breakoutProb || 0) >= 0.25;
+      (p.prediction?.breakoutProb || 0) >= 25;
     return undervalued && p.archetype !== "Replaceable";
   },
   targetRerank: (sug) => {
@@ -124,7 +124,7 @@ export const softLanding = {
             p.age <= 25 &&
             ((p.tags || []).includes("Undervalued") ||
               p.verdict === "buy" ||
-              (p.prediction?.breakoutProb || 0) >= 0.25) &&
+              (p.prediction?.breakoutProb || 0) >= 25) &&
             p.archetype !== "Replaceable" &&
             (p.score || 0) >= 45,
         )
@@ -179,7 +179,7 @@ export const softLanding = {
       id: "no-young-foundation",
       match: (analysis) => {
         const young = (analysis.enriched || []).filter(
-          (p) => p.age <= 25 && p.score >= 55,
+          (p) => p.age <= 25 && p.score >= 48,
         );
         return young.length < 3;
       },

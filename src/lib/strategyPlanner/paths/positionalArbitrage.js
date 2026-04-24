@@ -28,7 +28,7 @@ export const positionalArbitrage = {
       return (
         undervalued.includes(player.position) &&
         player.age <= 26 &&
-        player.score >= 55
+        player.score >= 48
       );
     },
     sellNow: (player, ctx) => {

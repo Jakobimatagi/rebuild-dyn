@@ -7,7 +7,7 @@ import Layout from "./components/Layout";
 import LeaguePickerScreen from "./components/LeaguePickerScreen";
 import LoadingScreen from "./components/LoadingScreen";
 import { buildRosterAnalysis, DEFAULT_SCORING_WEIGHTS } from "./lib/analysis";
-import { fetchFantasyCalcValues } from "./lib/fantasyCalcApi";
+import { fetchFantasyCalcValues, fetchFantasyCalcTrades } from "./lib/fantasyCalcApi";
 import {
   fetchRosterAuditValues,
   fetchRosterAuditPicks,
@@ -78,6 +78,7 @@ export default function App() {
       payload.rosterAuditValues,
       payload.rosterAuditPicks,
       payload.sleeperDrafts,
+      payload.fantasyCalcTrades,
     );
   }
 
@@ -149,6 +150,7 @@ export default function App() {
         rosterAuditValues,
         rosterAuditPicks,
         sleeperDrafts,
+        fantasyCalcTrades,
       ] = await Promise.all([
         fetchSleeper(`/league/${league.league_id}/users`),
         fetchSleeper(`/league/${league.league_id}/rosters`),
@@ -180,6 +182,7 @@ export default function App() {
         fetchRosterAuditValues(league).catch(() => []),
         fetchRosterAuditPicks().catch(() => null),
         fetchSleeper(`/league/${league.league_id}/drafts`).catch(() => []),
+        fetchFantasyCalcTrades(league).catch(() => []),
       ]);
 
       const userObj = users.find(
@@ -201,6 +204,7 @@ export default function App() {
         stats22,
         transactions,
         fantasyCalcValues,
+        fantasyCalcTrades,
         rosterAuditValues,
         rosterAuditPicks,
         sleeperDrafts,
@@ -294,12 +298,17 @@ export default function App() {
       );
 
       // Phase 3: Fetch FantasyCalc values using normalized league settings
-      const [fantasyCalcValues, rosterAuditValues, rosterAuditPicks] =
-        await Promise.all([
-          fetchFantasyCalcValues(ffData.league).catch(() => []),
-          fetchRosterAuditValues(ffData.league).catch(() => []),
-          fetchRosterAuditPicks().catch(() => null),
-        ]);
+      const [
+        fantasyCalcValues,
+        fantasyCalcTrades,
+        rosterAuditValues,
+        rosterAuditPicks,
+      ] = await Promise.all([
+        fetchFantasyCalcValues(ffData.league).catch(() => []),
+        fetchFantasyCalcTrades(ffData.league).catch(() => []),
+        fetchRosterAuditValues(ffData.league).catch(() => []),
+        fetchRosterAuditPicks().catch(() => null),
+      ]);
 
       const payload = {
         myRoster: ffData.myRoster,
@@ -311,6 +320,7 @@ export default function App() {
         stats22,
         transactions: ffData.transactions,
         fantasyCalcValues,
+        fantasyCalcTrades,
         rosterAuditValues,
         rosterAuditPicks,
         users: ffData.users,

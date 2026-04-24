@@ -28,6 +28,10 @@ import {
   pickFcValue,
 } from "./generateMarqueeMoves";
 import { pickSlotLabel, trendDelta } from "../../marketValue";
+import {
+  getMarketComps,
+  describeMarketComp,
+} from "../../fantasyCalcTradeIndex";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -409,6 +413,13 @@ export function generateHaulTrades(analysis, path) {
   const myRosterId = analysis?.rosterId;
   const userPhase = analysis?.teamPhase?.phase || null;
   const pickOverrides = analysis?.rosterAuditSource?.pickValues || null;
+  const compsIndex = analysis?.marketCompsBySleeperId || null;
+  const compsForPlayer = (player) => {
+    const raw = getMarketComps(compsIndex, player?.id, 3);
+    return raw
+      .map((c) => ({ id: c.id, date: c.date, summary: describeMarketComp(c) }))
+      .filter((c) => c.summary);
+  };
 
   const partners = (analysis?.leagueTeams || []).filter(
     (t) => t.rosterId !== myRosterId,
@@ -473,6 +484,7 @@ export function generateHaulTrades(analysis, path) {
     moves.push({
       mode: "consolidation",
       sendPlayers: c.sendPlayers,
+      sendMarketComps: compsForPlayer(c.sendPlayers[0]),
       sendPicks: c.sendPicks,
       sendPickLabels: [],
       sendValue: c.sendValues.total,
@@ -499,6 +511,7 @@ export function generateHaulTrades(analysis, path) {
     moves.push({
       mode: "liquidation",
       sendPlayers: [l.anchor],
+      sendMarketComps: compsForPlayer(l.anchor),
       sendPicks: [],
       sendPickLabels: [],
       sendValue: l.anchorValue,
