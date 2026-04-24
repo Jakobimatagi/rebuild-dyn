@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { POSITION_PRIORITY } from "../constants";
 import { styles } from "../styles";
+import AdviceTab from "./dashboard/AdviceTab";
 import GradeKeyModal from "./dashboard/GradeKeyModal";
 import LeagueTab from "./dashboard/LeagueTab";
 import OverviewTab from "./dashboard/OverviewTab";
@@ -30,6 +31,10 @@ export default function Dashboard({
   setShowScoreWeights,
   onConfirmScoreWeights,
   recalculating,
+  aiAdvice: aiAdviceFromAnalyze,
+  aiLoading,
+  aiError,
+  onGetAIAdvice,
 }) {
   const strategyPlannerEnabled = import.meta.env.VITE_ENABLE_STRATEGY_PLANNER === "true";
   const [strategyUnlocked, setStrategyUnlocked] = useState(false);
@@ -149,6 +154,7 @@ export default function Dashboard({
           { key: "strategy", label: "strategy" },
           { key: "rankings", label: "rankings" },
           { key: "rookies", label: "rookie rankings" },
+          { key: "ai", label: "analyze with ai" },
           { key: "league", label: "league" },
           { key: "activity", label: "activity" },
           { key: "docs", label: "Calculation Documentation" },
@@ -233,58 +239,14 @@ export default function Dashboard({
       )}
 
       {activeTab === "strategy" && !strategyPlannerEnabled && !strategyUnlocked && (
-        <div style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          minHeight: 340,
-          padding: "48px 24px",
-          textAlign: "center",
-        }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>🧪</div>
-          <h2 style={{ color: "#fff", margin: "0 0 8px", fontSize: 22 }}>Strategy Planner — Coming Soon</h2>
-          <p style={{ color: "#94a3b8", fontSize: 15, maxWidth: 420, lineHeight: 1.5 }}>
-            Personalized rebuild, retool, and contender playbooks with trade packages,
-            rookie strategy, risk flags, and a full roadmap — powered by blended FantasyCalc
-            + RosterAudit valuations. Stay tuned.
-          </p>
-          <div style={{ marginTop: 24, display: "flex", gap: 8 }}>
-            <input
-              type="password"
-              placeholder="Enter access code"
-              value={unlockInput}
-              onChange={(e) => setUnlockInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && unlockInput === "LetMeIn!") setStrategyUnlocked(true);
-              }}
-              style={{
-                padding: "8px 12px",
-                borderRadius: 6,
-                border: "1px solid #334155",
-                background: "#1e2230",
-                color: "#fff",
-                fontSize: 14,
-                outline: "none",
-              }}
-            />
-            <button
-              onClick={() => { if (unlockInput === "LetMeIn!") setStrategyUnlocked(true); }}
-              style={{
-                padding: "8px 16px",
-                borderRadius: 6,
-                border: "none",
-                background: "#00f5a0",
-                color: "#141722",
-                fontWeight: 700,
-                fontSize: 14,
-                cursor: "pointer",
-              }}
-            >
-              Unlock
-            </button>
-          </div>
-        </div>
+        <PremiumGate
+          icon="🧪"
+          title="Strategy Planner — Coming Soon"
+          description="Personalized rebuild, retool, and contender playbooks with trade packages, rookie strategy, risk flags, and a full roadmap — powered by blended FantasyCalc + RosterAudit valuations. Stay tuned."
+          unlockInput={unlockInput}
+          setUnlockInput={setUnlockInput}
+          onUnlock={setStrategyUnlocked}
+        />
       )}
 
       {activeTab === "strategy" && (strategyPlannerEnabled || strategyUnlocked) && (
@@ -299,6 +261,26 @@ export default function Dashboard({
       )}
 
       {activeTab === "rookies" && <RookieRankingsTab />}
+
+      {activeTab === "ai" && !strategyPlannerEnabled && !strategyUnlocked && (
+        <PremiumGate
+          icon="🤖"
+          title="Analyze with AI — Premium"
+          description="Personalized AI dynasty analysis grounded in current injury, depth-chart, and offseason news. Diagnoses team health, recommends a clear direction, and turns it into concrete sells, buys, and pick strategy."
+          unlockInput={unlockInput}
+          setUnlockInput={setUnlockInput}
+          onUnlock={setStrategyUnlocked}
+        />
+      )}
+
+      {activeTab === "ai" && (strategyPlannerEnabled || strategyUnlocked) && (
+        <AdviceTab
+          aiAdvice={aiAdviceFromAnalyze}
+          aiLoading={aiLoading}
+          aiError={aiError}
+          onGetAIAdvice={onGetAIAdvice}
+        />
+      )}
 
       {activeTab === "league" && (
         <LeagueTab
@@ -317,5 +299,64 @@ export default function Dashboard({
 
       {activeTab === "docs" && <DocumentationTab />}
     </>
+  );
+}
+
+function PremiumGate({ icon, title, description, unlockInput, setUnlockInput, onUnlock }) {
+  const tryUnlock = () => {
+    if (unlockInput === "LetMeIn!") onUnlock(true);
+  };
+
+  return (
+    <div style={{
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      minHeight: 340,
+      padding: "48px 24px",
+      textAlign: "center",
+    }}>
+      <div style={{ fontSize: 48, marginBottom: 16 }}>{icon}</div>
+      <h2 style={{ color: "#fff", margin: "0 0 8px", fontSize: 22 }}>{title}</h2>
+      <p style={{ color: "#94a3b8", fontSize: 15, maxWidth: 420, lineHeight: 1.5 }}>
+        {description}
+      </p>
+      <div style={{ marginTop: 24, display: "flex", gap: 8 }}>
+        <input
+          type="password"
+          placeholder="Enter access code"
+          value={unlockInput}
+          onChange={(e) => setUnlockInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") tryUnlock();
+          }}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 6,
+            border: "1px solid #334155",
+            background: "#1e2230",
+            color: "#fff",
+            fontSize: 14,
+            outline: "none",
+          }}
+        />
+        <button
+          onClick={tryUnlock}
+          style={{
+            padding: "8px 16px",
+            borderRadius: 6,
+            border: "none",
+            background: "#00f5a0",
+            color: "#141722",
+            fontWeight: 700,
+            fontSize: 14,
+            cursor: "pointer",
+          }}
+        >
+          Unlock
+        </button>
+      </div>
+    </div>
   );
 }

@@ -6,6 +6,7 @@ import InputScreen from "./components/InputScreen";
 import Layout from "./components/Layout";
 import LeaguePickerScreen from "./components/LeaguePickerScreen";
 import LoadingScreen from "./components/LoadingScreen";
+import { fetchAiAdvice } from "./lib/aiAdviceApi";
 import { buildRosterAnalysis, DEFAULT_SCORING_WEIGHTS } from "./lib/analysis";
 import { fetchFantasyCalcValues, fetchFantasyCalcTrades } from "./lib/fantasyCalcApi";
 import {
@@ -58,6 +59,23 @@ export default function App() {
   const [analysisPayload, setAnalysisPayload] = useState(null);
   const [collapsedRooms, setCollapsedRooms] = useState({});
   const [expandedBars, setExpandedBars] = useState({});
+  const [aiAdvice, setAiAdvice] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+
+  async function handleGetAIAdvice() {
+    if (!analysis || aiLoading) return;
+    setAiLoading(true);
+    setAiError("");
+    try {
+      const { advice } = await fetchAiAdvice(analysis, selectedLeague);
+      setAiAdvice(advice);
+    } catch (e) {
+      setAiError(e.message || "Failed to generate AI advice.");
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   function computeAnalysis(payload, nextWeights = scoringWeights) {
     return buildRosterAnalysis(
@@ -561,6 +579,10 @@ export default function App() {
           setShowScoreWeights={setShowScoreWeights}
           onConfirmScoreWeights={handleConfirmScoreWeights}
           recalculating={recalculating}
+          aiAdvice={aiAdvice}
+          aiLoading={aiLoading}
+          aiError={aiError}
+          onGetAIAdvice={handleGetAIAdvice}
         />
       </Layout>
       </ErrorBoundary>
