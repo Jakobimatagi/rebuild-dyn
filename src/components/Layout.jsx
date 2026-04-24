@@ -35,6 +35,15 @@ export default function Layout({ children }) {
         <a href="/rookie-rankings" style={linkStyle}>Rookie Rankings</a>
         <span style={{ color: "rgba(255,255,255,0.15)", margin: "0 10px" }}>·</span>
         <a
+          href="https://buymeacoffee.com/batflockff"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={supportLinkStyle}
+        >
+          ♥ Support Hosting
+        </a>
+        <span style={{ color: "rgba(255,255,255,0.15)", margin: "0 10px" }}>·</span>
+        <a
           href="#privacy"
           style={linkStyle}
           onClick={(e) => { e.preventDefault(); setShowPrivacy(true); }}
@@ -67,6 +76,11 @@ const linkStyle = {
   letterSpacing: 1,
   textTransform: "uppercase",
   fontSize: 10,
+};
+
+const supportLinkStyle = {
+  ...linkStyle,
+  color: "rgba(0,245,160,0.85)",
 };
 
 const overlayStyle = {
