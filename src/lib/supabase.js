@@ -198,15 +198,37 @@ export async function deleteExpertRanking(userId, prospectId) {
   if (error) throw error;
 }
 
+// ── Historical comps (drafted WR/RB profiles + NFL outcomes, 2011-2026) ─────
+
+let _historicalCache = null;
+let _historicalPromise = null;
+
+// Fetch historical_players once and memoize. The dataset is small (~1.1k rows)
+// and changes once a year, so a process-lifetime cache is fine.
+export async function fetchHistoricalPlayers() {
+  if (_historicalCache) return _historicalCache;
+  if (_historicalPromise) return _historicalPromise;
+  _historicalPromise = (async () => {
+    const { data, error } = await supabase
+      .from("historical_players")
+      .select("name, position, draft_year, draft_capital, draft_round, draft_pick, forty_time, ras, ten_plus_ppg_seasons, avg_top_finish, metrics");
+    if (error) throw error;
+    _historicalCache = data || [];
+    return _historicalCache;
+  })();
+  return _historicalPromise;
+}
+
 // ── Public rankings page data ─────────────────────────────────────────────────
 // Fetches everything needed without requiring auth
 export async function fetchPublicRankingsData() {
-  const [{ data: pros }, { data: seas }, { data: anns }, { data: rankings }, experts] = await Promise.all([
+  const [{ data: pros }, { data: seas }, { data: anns }, { data: rankings }, experts, historical] = await Promise.all([
     supabase.from("prospects").select("id, name, position, projected_draft_year, draft_capital, comparable_player, athletic"),
     supabase.from("prospect_seasons").select("*"),
     supabase.from("prospect_annotations").select("*"),
     supabase.from("expert_rankings").select("*").order("rank_order", { ascending: true }),
     getExperts(),
+    fetchHistoricalPlayers().catch(() => []),
   ]);
 
   const seasonsByProspect = {};
@@ -252,5 +274,6 @@ export async function fetchPublicRankingsData() {
     byProspect,
     consensusMap,
     experts,
+    historicalPlayers: historical || [],
   };
 }

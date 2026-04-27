@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fetchPublicRankingsData } from "../../lib/supabase.js";
 import { TIER_RANK, computeGrade, dynastyScore, deriveTier } from "../../lib/prospectScoring.js";
+import { buildCompIndex, findCompsByName, summarizeOutcome } from "../../lib/historicalComps.js";
 import RookieDeepDiveModal from "./RookieDeepDiveModal.jsx";
 
 const POS_COLORS = {
@@ -68,6 +69,11 @@ export default function RookieRankingsTab() {
       .then((d) => { setData(d); setLoading(false); })
       .catch((e) => { setError(e.message || "Failed to load."); setLoading(false); });
   }, []);
+
+  const compIndex = useMemo(
+    () => (data?.historicalPlayers ? buildCompIndex(data.historicalPlayers) : null),
+    [data?.historicalPlayers],
+  );
 
   if (loading) return <div className="py-16 text-center text-slate-500 text-sm">Loading rookie rankings…</div>;
   if (error)   return <div className="py-16 text-center text-rose-400 text-sm">{error}</div>;
@@ -218,11 +224,16 @@ export default function RookieRankingsTab() {
                     <span className="font-semibold text-slate-100">{p.name}</span>
                     <Pill pos={p.position} />
                     {displayTier && <TierBadge tier={displayTier} />}
-                    {comp && (
-                      <span className="text-[10px] text-violet-300 bg-violet-500/15 border border-violet-400/30 px-1.5 py-0.5 rounded">
-                        Comp: {comp}
-                      </span>
-                    )}
+                    {comp && (() => {
+                      const named = compIndex ? findCompsByName(compIndex.rows, comp)[0] : null;
+                      const summary = summarizeOutcome(named);
+                      return (
+                        <span className="text-[10px] text-violet-300 bg-violet-500/15 border border-violet-400/30 px-1.5 py-0.5 rounded">
+                          Comp: {comp}
+                          {summary && <span className="text-violet-400/80"> · {summary}</span>}
+                        </span>
+                      );
+                    })()}
                     {ann.declared && (
                       <span className="text-[10px] text-emerald-300 bg-emerald-500/15 border border-emerald-400/40 px-1.5 py-0.5 rounded font-bold uppercase tracking-wide">
                         ✓ Declared
@@ -260,6 +271,7 @@ export default function RookieRankingsTab() {
           annotation={annotations[selectedProspect.id] || {}}
           expertRankings={byProspect?.[selectedProspect.id] || []}
           experts={experts}
+          compIndex={compIndex}
           onClose={() => setSelectedProspect(null)}
         />
       )}

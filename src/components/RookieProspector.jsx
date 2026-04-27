@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { verifyLogin, fetchAllData, upsertProspect, upsertAnnotation, fetchMyRankings, upsertExpertRanking, deleteExpertRanking, fetchExpertRankings } from "../lib/supabase.js";
+import { verifyLogin, fetchAllData, upsertProspect, upsertAnnotation, fetchMyRankings, upsertExpertRanking, deleteExpertRanking, fetchExpertRankings, fetchHistoricalPlayers } from "../lib/supabase.js";
 import { TIER_RANK, computeGrade, deriveTier, dynastyScore, deriveSchool } from "../lib/prospectScoring.js";
+import { buildCompIndex } from "../lib/historicalComps.js";
 import { POS_COLORS, PAGE_SIZE } from "./rookieAdmin/constants.js";
 import { loadSession, saveSession, clearSession, normalizeName, computeCurrentDraftYear, blankSeason, initAddForm, computeValueScore } from "./rookieAdmin/utils.js";
 import { GradeBadge, Pill, TierSelect, CapitalSelect, Pagination, AddPlayerSeasonRow } from "./rookieAdmin/Atoms.jsx";
@@ -33,6 +34,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     rosterJson: "",
     rosterData: rosterDataProp || null,
     rosterParseError: "",
+    compIndex: null,
   });
 
   const update = (patch) => setState((s) => ({ ...s, ...patch }));
@@ -303,6 +305,16 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     // Persist each changed prospect (fire-and-forget with error log)
     normalized.forEach((p) => upsertProspect(p).catch(console.error));
   }, []);
+
+  // ── Historical comps index ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!state.unlocked || state.compIndex) return;
+    let cancelled = false;
+    fetchHistoricalPlayers()
+      .then((rows) => { if (!cancelled) update({ compIndex: buildCompIndex(rows) }); })
+      .catch((e) => console.error("Failed to load historical comps:", e));
+    return () => { cancelled = true; };
+  }, [state.unlocked, state.compIndex]);
 
   // ── Sleeper fetch ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -696,7 +708,8 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                 onAnnotate={(patch) => setAnnotation(x.p.id, patch)}
                 onDeclareYear={(y) => declareWithYear(x.p.id, y)}
                 sleeperDeclared={x.sleeperDeclared}
-                onEdit={() => handleEditProspect(x.p)} />
+                onEdit={() => handleEditProspect(x.p)}
+                compIndex={state.compIndex} />
             ))}
             <Pagination page={page} total={upcomingPages} onChange={(p) => update({ page: p })} />
           </div>
@@ -716,7 +729,8 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                 annotation={x.ann} onAnnotate={(patch) => setAnnotation(x.p.id, patch)}
                 onDeclareYear={(y) => declareWithYear(x.p.id, y)}
                 sleeperDeclared={x.sleeperDeclared}
-                onEdit={() => handleEditProspect(x.p)} />
+                onEdit={() => handleEditProspect(x.p)}
+                compIndex={state.compIndex} />
             ))}
             <Pagination page={page} total={totalPages} onChange={(p) => update({ page: p })} />
           </div>
@@ -754,7 +768,8 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                       annotation={x.ann} onAnnotate={(patch) => setAnnotation(x.p.id, patch)}
                       onDeclareYear={(y) => declareWithYear(x.p.id, y)}
                       sleeperDeclared={x.sleeperDeclared}
-                      onEdit={() => handleEditProspect(x.p)} />
+                      onEdit={() => handleEditProspect(x.p)}
+                      compIndex={state.compIndex} />
                   </div>
                 </div>
               );

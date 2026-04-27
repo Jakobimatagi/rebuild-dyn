@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fetchPublicRankingsData } from "../lib/supabase.js";
 import { TIER_RANK, computeGrade, dynastyScore, deriveTier } from "../lib/prospectScoring.js";
+import { buildCompIndex, findCompsByName, summarizeOutcome } from "../lib/historicalComps.js";
 import RookieDeepDiveModal from "./dashboard/RookieDeepDiveModal.jsx";
 
 const POS_COLORS = {
@@ -58,6 +59,11 @@ export default function RookieRankings() {
       .catch((e) => { setError(e.message || "Failed to load rankings."); setLoading(false); });
   }, []);
 
+  const compIndex = useMemo(
+    () => (data?.historicalPlayers ? buildCompIndex(data.historicalPlayers) : null),
+    [data?.historicalPlayers],
+  );
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -74,7 +80,7 @@ export default function RookieRankings() {
     );
   }
 
-  const { prospects, annotations, byProspect, experts } = data;
+  const { prospects, annotations, byProspect, experts, historicalPlayers } = data;
 
   const rows = prospects
     .filter((p) => {
@@ -167,11 +173,16 @@ export default function RookieRankings() {
                       <span className="font-semibold text-slate-100">{p.name}</span>
                       <Pill pos={p.position} />
                       {tierLabel && <TierBadge tier={tierLabel} />}
-                      {comp && (
-                        <span className="text-[10px] text-violet-300 bg-violet-500/15 border border-violet-400/30 px-1.5 py-0.5 rounded">
-                          Comp: {comp}
-                        </span>
-                      )}
+                      {comp && (() => {
+                        const named = compIndex ? findCompsByName(compIndex.rows, comp)[0] : null;
+                        const summary = summarizeOutcome(named);
+                        return (
+                          <span className="text-[10px] text-violet-300 bg-violet-500/15 border border-violet-400/30 px-1.5 py-0.5 rounded">
+                            Comp: {comp}
+                            {summary && <span className="text-violet-400/80"> · {summary}</span>}
+                          </span>
+                        );
+                      })()}
                     </div>
                     <div className="text-xs text-slate-400 flex gap-3 flex-wrap items-center">
                       {cap && <span className="capitalize"><span className="text-slate-600">NFL:</span> {cap.replace(/_/g, " ")}</span>}
@@ -196,6 +207,7 @@ export default function RookieRankings() {
           annotation={annotations[selectedProspect.id] || {}}
           expertRankings={byProspect?.[selectedProspect.id] || []}
           experts={experts || []}
+          compIndex={compIndex}
           onClose={() => setSelectedProspect(null)}
         />
       )}

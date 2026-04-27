@@ -8,6 +8,11 @@ import {
   deriveTier,
   deriveSchool,
 } from "../../lib/prospectScoring.js";
+import {
+  findCompsByName,
+  rankCompsForProspect,
+  summarizeOutcome,
+} from "../../lib/historicalComps.js";
 import { useModalBehavior } from "../../lib/useModalBehavior.js";
 
 // ---------------------------------------------------------------------------
@@ -494,6 +499,7 @@ export default function RookieDeepDiveModal({
   annotation,
   expertRankings,
   experts,
+  compIndex,
   onClose,
 }) {
   const modalRef = useModalBehavior(onClose);
@@ -526,6 +532,19 @@ export default function RookieDeepDiveModal({
     .slice()
     .sort((a, b) => Number(a.rank_order) - Number(b.rank_order));
   const expertMap = Object.fromEntries((experts || []).map((e) => [e.id, e.username]));
+
+  // Adapt the snake_case modal prospect into the camelCase shape historicalComps expects.
+  const compProspect = {
+    position: prospect.position,
+    athletic,
+    seasons,
+    projectedDraftYear: prospect.projected_draft_year,
+  };
+  const namedComp = compIndex && prospect.comparable_player
+    ? findCompsByName(compIndex.rows, prospect.comparable_player)[0]
+    : null;
+  const namedSummary = summarizeOutcome(namedComp);
+  const knnComps = compIndex ? rankCompsForProspect(compProspect, compIndex, 5) : [];
 
   return createPortal(
     <div
@@ -644,6 +663,9 @@ export default function RookieDeepDiveModal({
                   }}
                 >
                   Comp: {prospect.comparable_player}
+                  {namedSummary && (
+                    <span style={{ color: "rgba(192,132,252,0.7)" }}> · {namedSummary}</span>
+                  )}
                 </span>
               )}
               {ann.declared && (
@@ -783,6 +805,58 @@ export default function RookieDeepDiveModal({
             </div>
           ))}
         </div>
+
+        {/* Historical comps */}
+        {knnComps.length > 0 && (
+          <>
+            {DIVIDER}
+            <SectionLabel>Historical Comps</SectionLabel>
+            <div style={{ fontSize: 11, color: "#a0a8c0", lineHeight: 1.55, marginBottom: 12 }}>
+              Closest profile matches from {prospect.position === "WR" ? "WRs" : "RBs"} drafted 2011–2026,
+              by athletic profile and overlapping production. Outcomes show how each comp's NFL career has played out so far.
+            </div>
+            <div style={{ display: "grid", gap: 6 }}>
+              {knnComps.map(({ row, distance }) => {
+                const ppg = row.ten_plus_ppg_seasons;
+                const fin = row.avg_top_finish;
+                const noOutcome = ppg == null && (fin == null || fin === 0);
+                const outcomeColor =
+                  ppg == null ? "#606878"
+                  : ppg >= 3   ? "#00f5a0"
+                  : ppg >= 1   ? "#7b8cff"
+                  :              "#ff6b35";
+                return (
+                  <div
+                    key={`${row.name}-${row.draft_year}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1.4fr 0.5fr 0.7fr 1.6fr 0.4fr",
+                      gap: 8,
+                      padding: "8px 12px",
+                      background: "rgba(255,255,255,0.03)",
+                      border: "1px solid rgba(255,255,255,0.07)",
+                      borderRadius: 4,
+                      alignItems: "center",
+                      fontSize: 11,
+                    }}
+                  >
+                    <span style={{ color: "#fff", fontWeight: 600 }}>{row.name}</span>
+                    <span style={{ color: "#808898" }}>{row.draft_year}</span>
+                    <span style={{ color: "#a0a8c0" }}>{row.draft_capital || "—"}</span>
+                    <span style={{ color: outcomeColor }}>
+                      {noOutcome
+                        ? "career not yet established"
+                        : `${ppg ?? 0} 10+ PPG seasons${fin && fin > 0 ? ` · avg #${Math.round(fin)} finish` : ""}`}
+                    </span>
+                    <span style={{ color: "#606878", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                      d={distance.toFixed(2)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
 
         {/* Analyst consensus */}
         {rankings.length > 0 && (
