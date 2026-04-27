@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { deriveSchool } from "../../lib/prospectScoring.js";
+import { compsReport } from "../../lib/historicalComps.js";
 import { computeCurrentDraftYear } from "./utils.js";
 import { GradeBadge, Pill, TierSelect, CapitalSelect, StatBar } from "./Atoms.jsx";
 import ProspectStats from "./ProspectStats.jsx";
@@ -7,11 +8,17 @@ import ProspectStats from "./ProspectStats.jsx";
 export default function ProspectCard({
   p, rank, adp, grade, components, valueScore, delta, gold,
   annotation, onAnnotate, onDeclareYear, sleeperDeclared, onEdit,
+  compIndex,
 }) {
   const [expanded, setExpanded]       = useState(false);
   const [pickingYear, setPickingYear] = useState(false);
   const seasons = [...(p.seasons || [])].sort((a, b) => Number(a.season_year) - Number(b.season_year));
   const curYear = computeCurrentDraftYear();
+
+  const comps = useMemo(
+    () => compsReport(p, compIndex, p.comparablePlayer),
+    [p, compIndex],
+  );
 
   return (
     <div className={`rounded-xl border bg-slate-900/60 p-4 ${gold ? "border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.25)]" : "border-white/10"}`}>
@@ -31,7 +38,10 @@ export default function ProspectCard({
               : <span className="text-[10px] uppercase tracking-wide text-slate-400 border border-white/10 px-1.5 py-0.5 rounded">{p.projectedDraftYear} Draft</span>
             }
             {p.comparablePlayer && (
-              <span className="text-[10px] text-violet-300 bg-violet-500/15 border border-violet-400/30 px-1.5 py-0.5 rounded">Comp: {p.comparablePlayer}</span>
+              <span className="text-[10px] text-violet-300 bg-violet-500/15 border border-violet-400/30 px-1.5 py-0.5 rounded">
+                Comp: {p.comparablePlayer}
+                {comps.namedSummary && <span className="text-violet-400/80"> · {comps.namedSummary}</span>}
+              </span>
             )}
           </div>
           <div className="text-xs text-slate-400 flex gap-3 flex-wrap">
@@ -101,7 +111,11 @@ export default function ProspectCard({
         </div>
       </div>
       {expanded && (
-        <div className="mt-4 pt-4 border-t border-white/10 grid md:grid-cols-2 gap-6">
+        <div className="mt-4 pt-4 border-t border-white/10 space-y-6">
+          {comps.knn.length > 0 && (
+            <HistoricalComps comps={comps.knn} />
+          )}
+          <div className="grid md:grid-cols-2 gap-6">
           <div>
             <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-2">Grade Breakdown</div>
             <div className="space-y-1.5">
@@ -143,8 +157,47 @@ export default function ProspectCard({
               })}
             </div>
           </div>
+          </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Historical comps subcomponent ────────────────────────────────────────────
+function HistoricalComps({ comps }) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-2">
+        <div className="text-[10px] uppercase tracking-widest text-slate-500">Historical Comps</div>
+        <div className="text-[10px] text-slate-600">closest profiles · 2011–2026 drafted</div>
+      </div>
+      <div className="space-y-1">
+        {comps.map(({ row, distance }) => {
+          const ppg = row.ten_plus_ppg_seasons;
+          const fin = row.avg_top_finish;
+          const noOutcome = ppg == null && (fin == null || fin === 0);
+          const hitClass =
+            ppg == null ? "text-slate-500"
+            : ppg >= 3   ? "text-emerald-400"
+            : ppg >= 1   ? "text-sky-300"
+            :               "text-rose-400";
+          return (
+            <div key={`${row.name}-${row.draft_year}`}
+                 className="flex items-center gap-3 text-xs px-3 py-1.5 rounded bg-slate-800/40 border border-white/5">
+              <span className="text-slate-200 font-semibold w-44 shrink-0 truncate">{row.name}</span>
+              <span className="text-slate-500 w-12 shrink-0">{row.draft_year}</span>
+              <span className="text-slate-400 w-20 shrink-0">{row.draft_capital || "—"}</span>
+              <span className={`flex-1 ${hitClass}`}>
+                {noOutcome
+                  ? "career not yet established"
+                  : `${ppg ?? 0} 10+ PPG seasons${fin && fin > 0 ? ` · avg #${Math.round(fin)} finish` : ""}`}
+              </span>
+              <span className="text-slate-600 text-[10px] tabular-nums">d={distance.toFixed(2)}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
