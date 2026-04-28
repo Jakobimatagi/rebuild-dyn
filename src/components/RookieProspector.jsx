@@ -141,20 +141,21 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
   }
 
   async function handleSubmitPlayer() {
-    if (!addForm.name.trim()) { setAddFormError("Player name is required."); return; }
+    const cleanName = (addForm.name || "").trim();
+    if (!cleanName) { setAddFormError("Player name is required."); return; }
     setAddFormSaving(true);
     setAddFormError("");
     try {
       const id = addForm.id || `${addForm.position.toLowerCase()}-${Date.now().toString(36)}`;
       const prospect = {
         id,
-        name:               addForm.name.trim(),
+        name:               cleanName,
         position:           addForm.position,
         projectedDraftYear: parseInt(addForm.projectedDraftYear) || computeCurrentDraftYear(),
         draftCapital:       addForm.draftCapital,
-        comparablePlayer:   addForm.comparablePlayer.trim(),
+        comparablePlayer:   (addForm.comparablePlayer || "").trim(),
         athletic:           addForm.athletic || {},
-        seasons:            addForm.seasons.filter((s) => s.season_year),
+        seasons:            (addForm.seasons || []).filter((s) => s.season_year),
       };
       await upsertProspect(prospect);
       const ann = {
@@ -175,7 +176,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
           const byExpert = {};
           allRankings.forEach((r) => { (byExpert[r.user_id] ??= []).push(r); });
 
-          const { total: newGrade } = computeGrade(prospect, undefined, ann.draftCapital || "");
+          const { total: newGrade } = computeGrade(prospect, undefined, ann.draftCapital || "", ann.declared || false);
           const newTierLabel = ann.tier || deriveTier(newGrade, ann.draftCapital || "") || "";
           const newTierRank = newTierLabel ? (TIER_RANK[newTierLabel] ?? 99) : 99;
           const newDs = dynastyScore(newGrade, prospect.position, prospect.seasons);
@@ -194,7 +195,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
               if (!existingP) continue;
               const existingAnn = state.annotations[pid] || {};
               const capKey = existingAnn.draftCapital || existingP.draftCapital || "";
-              const { total: eGrade } = computeGrade(existingP, undefined, capKey);
+              const { total: eGrade } = computeGrade(existingP, undefined, capKey, existingAnn.declared || false);
               const eTierLabel = existingAnn.tier || deriveTier(eGrade, capKey) || "";
               const eTierRank = eTierLabel ? (TIER_RANK[eTierLabel] ?? 99) : 99;
               const eDs = dynastyScore(eGrade, existingP.position, existingP.seasons);
@@ -246,11 +247,12 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
   }
 
   function handleEditProspect(p) {
+    if (!p) return;
     const ann = state.annotations[p.id] || {};
     setAddForm({
-      ...initAddForm(p.position),
+      ...initAddForm(p.position || "WR"),
       id:                 p.id,
-      name:               p.name,
+      name:               p.name               || "",
       projectedDraftYear: String(p.projectedDraftYear || computeCurrentDraftYear()),
       draftCapital:       ann.draftCapital   || p.draftCapital   || "",
       comparablePlayer:   p.comparablePlayer || "",
@@ -259,7 +261,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
       landingSpot:        ann.landingSpot    || "",
       tier:               ann.tier           || "",
       athletic:           p.athletic         || {},
-      seasons:            p.seasons.length > 0 ? p.seasons : [blankSeason(p.position)],
+      seasons:            (p.seasons && p.seasons.length > 0) ? p.seasons : [blankSeason(p.position || "WR")],
     });
     update({ tab: "add" });
   }
@@ -415,7 +417,8 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     const sleeperRank = state.sleeperByName[normalizeName(p.name)]?.rank;
     const ann         = state.annotations[p.id] || {};
     const capitalKey  = ann.draftCapital || p.draftCapital || "";
-    const { total: grade, components } = computeGrade(p, sleeperRank, capitalKey);
+    const declared    = ann.declared || isSleeperDeclared(p);
+    const { total: grade, components } = computeGrade(p, sleeperRank, capitalKey, declared);
     return { p, grade, components, sleeperRank, ann, sleeperDeclared: isSleeperDeclared(p) };
   });
 
@@ -437,7 +440,8 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
       const sleeperRank = state.sleeperByName[normalizeName(p.name)]?.rank;
       const ann         = state.annotations[p.id] || {};
       const capitalKey  = ann.draftCapital || p.draftCapital || "";
-      const { total: grade, components } = computeGrade(p, sleeperRank, capitalKey);
+      const declared    = ann.declared || isSleeperDeclared(p);
+      const { total: grade, components } = computeGrade(p, sleeperRank, capitalKey, declared);
       const suggestedTier = deriveTier(grade, capitalKey);
       const value = computeValueScore(p, grade, sleeperRank, state.rosterData);
       return { p, grade, components, sleeperRank, ann, sleeperDeclared: isSleeperDeclared(p), suggestedTier, value };
@@ -478,7 +482,8 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     .map((p) => {
       const ann        = state.annotations[p.id] || {};
       const capitalKey = ann.draftCapital || p.draftCapital || "";
-      const { total: grade, components } = computeGrade(p, undefined, capitalKey);
+      // Archive entries are by definition declared.
+      const { total: grade, components } = computeGrade(p, undefined, capitalKey, true);
       const tierLabel  = ann.tier || deriveTier(grade, capitalKey) || "";
       return { p, ann, grade, components, tierLabel };
     })
@@ -578,7 +583,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
               <div className="flex flex-wrap gap-3 items-end">
                 <div className="flex-1 min-w-[160px]">
                   <label className="text-[10px] uppercase tracking-wider text-slate-500 block mb-1">Player Name</label>
-                  <input value={addForm.name} onChange={(e) => setFormField("name", e.target.value)}
+                  <input value={addForm.name || ""} onChange={(e) => setFormField("name", e.target.value)}
                     placeholder="e.g. Travis Hunter"
                     className="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400" />
                 </div>

@@ -90,7 +90,12 @@ export default function RookieRankings() {
     .map((p) => {
       const ann        = annotations[p.id] || {};
       const capitalKey = ann.draftCapital || p.draft_capital || "";
-      const grade      = computeGrade({ ...p, draftCapital: capitalKey, athletic: p.athletic || {} }).total;
+      const grade      = computeGrade(
+        { ...p, draftCapital: capitalKey, athletic: p.athletic || {} },
+        undefined,
+        capitalKey,
+        ann.declared || false,
+      ).total;
       const tierLabel  = ann.tier || deriveTier(grade, capitalKey) || "";
       const ds         = dynastyScore(grade, p.position, p.seasons);
       return { p, ann, tierLabel, ds };
