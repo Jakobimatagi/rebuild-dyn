@@ -58,52 +58,84 @@ export function deriveSchool(p) {
   return (sorted[sorted.length - 1].school || p.school || "").trim();
 }
 
-export function computeGrade(prospect, sleeperRank, capitalOverride) {
+// `declared` flag gates pre-NFL combine/pro-day data out of the score for prospects
+// who haven't officially declared. Underclassmen don't have reliable athletic measurables.
+export function computeGrade(prospect, sleeperRank, capitalOverride, declared = false) {
   const school     = deriveSchool(prospect);
   const { position, athletic, draftCapital } = prospect;
   const capitalKey = capitalOverride || draftCapital || "";
   const num = (v) => parseFloat(v) || 0;
 
   if (!prospect.seasons || prospect.seasons.length === 0) {
-    return { total: 40, components: { age: 60, prod: 40, avail: 40, trend: 60, situ: CONFERENCE_SCORES[school] ?? 40 } };
+    return { total: 35, components: { age: 55, prod: 35, avail: 25, trend: 50, situ: CONFERENCE_SCORES[school] ?? 40, athletic: 0, mkt: null, confidence: 50 } };
   }
 
   const sorted = [...prospect.seasons].sort((a, b) => Number(a.season_year) - Number(b.season_year));
   const recent = sorted[sorted.length - 1];
   const prev   = sorted.length >= 2 ? sorted[sorted.length - 2] : null;
 
+  // Age curve: peak at 21–22, penalize too-young (insufficient sample) AND too-old (less upside)
   const ageAtDraft = num(recent.age) || 22;
-  const ageComp = Math.max(15, Math.min(100, 105 - (ageAtDraft - 20) * 15));
+  const ageComp = Math.max(20, Math.min(100,
+    100 - Math.max(0, 21 - ageAtDraft) * 8 - Math.max(0, ageAtDraft - 22) * 14
+  ));
 
+  // Position-specific production. Tighter scales force mid-tier stat lines to score
+  // in the 40s/50s rather than crowding the 70s — that's what makes "good" vs "elite"
+  // visible in the final grade.
   let prodComp = 50;
   if (position === "WR" || position === "TE") {
     const score = (s) => {
-      const ts  = Math.min(100, num(s.target_share_pct) * 3.5);
-      const ypr = Math.min(100, num(s.yards_per_reception) * 6);
-      const cr  = Math.min(100, num(s.catch_rate_pct) * 1.35);
-      return ts * 0.45 + ypr * 0.30 + cr * 0.25;
+      const g    = Math.max(1, num(s.games));
+      const ts   = Math.min(100, num(s.target_share_pct) * 2.5);            // 40% TS = 100, 20% = 50
+      const ypr  = Math.min(100, num(s.yards_per_reception) * 4);           // 25 YPR = 100, 15 = 60
+      const cr   = Math.min(100, num(s.catch_rate_pct) * 1.1);              // 91% CR = 100, 65% = 71
+      const ypg  = Math.min(100, (num(s.receiving_yards) / g) * 0.7);       // 143 yds/g = 100, 80 = 56
+      const tdpg = Math.min(100, (num(s.receiving_tds) / g) * 60);          // 1.67 TD/g = 100, 0.6 = 36
+      const lng  = num(s.longest_reception);
+      const lngComp = lng > 0 ? Math.min(100, lng * 1.1) : 0;               // 91+ yard play = 100
+      const expBonus = lng > 0 ? lngComp * 0.05 : 0;                        // small extra for explosive ability
+      return ts * 0.30 + ypg * 0.22 + ypr * 0.15 + cr * 0.10 + tdpg * 0.18 + lngComp * 0.05 + expBonus;
     };
     prodComp = Math.round(Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60);
   } else if (position === "QB") {
     const score = (s) => {
       const g    = Math.max(1, num(s.games));
-      const cp   = Math.min(100, num(s.completion_pct) * 1.4);
-      const ypa  = Math.min(100, num(s.yards_per_attempt) * 10);
-      const tdpg = Math.min(100, (num(s.passing_tds) / g) * 22);
-      const int_ = Math.max(0, 100 - (num(s.interceptions) / g) * 40);
-      return cp * 0.25 + ypa * 0.40 + tdpg * 0.20 + int_ * 0.15;
+      const att  = Math.max(1, num(s.pass_attempts));
+      const cp   = Math.min(100, num(s.completion_pct) * 1.2);              // 83% CP = 100, 65% = 78
+      const ypa  = Math.min(100, num(s.yards_per_attempt) * 8);             // 12.5 YPA = 100, 8.5 = 68
+      const tdPct  = Math.min(100, (num(s.passing_tds) / att) * 1200);      // 8.3% TD = 100, 5% = 60
+      const intPct = Math.max(0, 100 - (num(s.interceptions) / att) * 2000);// 5% INT = 0, 2% = 60
+      const tdpg = Math.min(100, (num(s.passing_tds) / g) * 22);            // 4.5 TD/g = 100
+      const rtg  = num(s.passer_rating);
+      // Passer rating is the truest single efficiency signal when present (NCAA scale: ~150 is solid, 180+ elite).
+      const rtgComp = rtg > 0 ? Math.min(100, Math.max(0, (rtg - 110) * 1.4 + 40)) : null;
+      const efficiency = rtgComp != null ? rtgComp : (cp * 0.4 + ypa * 0.6);
+      return efficiency * 0.40 + tdPct * 0.18 + tdpg * 0.12 + ypa * 0.15 + intPct * 0.15;
     };
     prodComp = Math.round(Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60);
   } else if (position === "RB") {
     const score = (s) => {
       const g    = Math.max(1, num(s.games));
-      const ypc  = Math.min(100, num(s.yards_per_carry) * 15);
-      const ts   = Math.min(100, num(s.target_share_pct) * 4);
-      const tdpg = Math.min(100, (num(s.total_tds) / g) * 80);
-      return ypc * 0.45 + ts * 0.30 + tdpg * 0.25;
+      const ypc  = Math.min(100, num(s.yards_per_carry) * 12);              // 8.3 YPC = 100, 5.5 = 66
+      const ypg  = Math.min(100, (num(s.rushing_yards) / g) * 0.55);        // 182 yds/g = 100, 100 = 55
+      const ts   = Math.min(100, num(s.target_share_pct) * 5);              // 20% TS for an RB is elite
+      const recPg= Math.min(100, (num(s.receptions) / g) * 22);             // 4.5 rec/g = 100
+      const ruTd = num(s.rushing_tds);
+      const reTd = num(s.receiving_tds);
+      const totalTds = (ruTd + reTd) > 0 ? (ruTd + reTd) : num(s.total_tds);
+      const tdpg = Math.min(100, (totalTds / g) * 65);                      // 1.54 TD/g = 100
+      const lng  = num(s.longest_rush);
+      const lngComp = lng > 0 ? Math.min(100, lng * 1.0) : 0;               // 100-yd run = 100
+      return ypc * 0.25 + ypg * 0.20 + tdpg * 0.20 + ts * 0.10 + recPg * 0.10 + lngComp * 0.05 + ruTd * 1.0;
     };
-    prodComp = Math.round(Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60);
+    prodComp = Math.round(Math.min(100, Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60));
   }
+
+  // Ball-security penalty: lost fumbles per game (caps at -12)
+  const fumblesLost = num(recent.fumbles_lost) || num(recent.fumbles);
+  const fumblesPg   = fumblesLost / Math.max(1, num(recent.games));
+  prodComp = Math.max(0, prodComp - Math.min(12, fumblesPg * 35));
 
   const dcScore = CAPITAL_PROD_SCORES[capitalKey] ?? null;
   if (dcScore != null) prodComp = Math.round(prodComp * 0.40 + dcScore * 0.60);
@@ -113,7 +145,8 @@ export function computeGrade(prospect, sleeperRank, capitalOverride) {
     Math.min(100, sorted.length * 25) * 0.40,
   );
 
-  let trendComp = 60;
+  // Default trend penalizes single-season samples (no growth signal yet)
+  let trendComp = prev ? 60 : 48;
   if (prev) {
     let delta = 0;
     if (position === "WR" || position === "TE") delta = num(recent.target_share_pct) - num(prev.target_share_pct);
@@ -126,8 +159,9 @@ export function computeGrade(prospect, sleeperRank, capitalOverride) {
 
   const situComp = CONFERENCE_SCORES[school] ?? 40;
 
+  // Combine/pro-day data is unreliable until a player declares — gate the bonus.
   let athleticBonus = 0;
-  if (athletic) {
+  if (declared && athletic) {
     const ss  = num(athletic.speedScore);
     const bs  = num(athletic.burstScore);
     const ags = num(athletic.agilityScore);
@@ -136,10 +170,23 @@ export function computeGrade(prospect, sleeperRank, capitalOverride) {
     if (ags > 0) athleticBonus += Math.min(3, Math.max(0, (ags - 95) * 0.15));
   }
 
-  const rawScore = Math.round(
-    ageComp   * 0.35 + prodComp * 0.30 +
-    availComp * 0.15 + trendComp * 0.10 + situComp * 0.10,
-  ) + Math.round(athleticBonus);
+  // Sample-size confidence: 1 season = 0.92, 2 = 0.97, 3+ = 1.0 (light dampening, not heavy)
+  const confidence = Math.min(1.0, 0.86 + sorted.length * 0.06);
+
+  // Production carries the grade. Differentiation comes from what the user enters,
+  // not from age/school context that's similar across most prospects.
+  let rawScore = Math.round((
+    prodComp  * 0.50 +
+    ageComp   * 0.20 +
+    availComp * 0.10 +
+    trendComp * 0.10 +
+    situComp  * 0.10
+  ) * confidence) + Math.round(athleticBonus);
+
+  // Underclassmen with no NFL signal can't easily reach A territory — too speculative.
+  if (!declared && !capitalKey && typeof sleeperRank !== "number") {
+    rawScore = Math.min(78, rawScore);
+  }
 
   let mkt = null;
   let total = Math.min(99, rawScore);
@@ -148,19 +195,25 @@ export function computeGrade(prospect, sleeperRank, capitalOverride) {
     total = Math.min(99, Math.round(rawScore * 0.40 + mkt * 0.60));
   }
 
-  return { total, components: { age: ageComp, prod: prodComp, avail: availComp, trend: trendComp, situ: situComp, athletic: Math.round(athleticBonus), mkt } };
+  return {
+    total,
+    components: {
+      age: ageComp, prod: prodComp, avail: availComp, trend: trendComp, situ: situComp,
+      athletic: Math.round(athleticBonus), mkt, confidence: Math.round(confidence * 100),
+    },
+  };
 }
 
 export function deriveTier(grade, capitalKey) {
   const firstRound   = ["early_1", "mid_1", "late_1"].includes(capitalKey);
   const eliteCapital = ["early_1", "mid_1"].includes(capitalKey);
-  if (grade >= 72 && eliteCapital) return "Foundational";
-  if (grade >= 72 && firstRound)   return "Upside Shot";
-  if (grade >= 72)                 return "Upside Shot";
-  if (grade >= 55 && firstRound)   return "Upside Shot";
-  if (grade >= 55)                 return "Mainstay";
-  if (grade >= 40)                 return "JAG - Developmental";
-  if (grade >= 25)                 return "Serviceable";
+  if (grade >= 78 && eliteCapital) return "Foundational";
+  if (grade >= 78 && firstRound)   return "Upside Shot";
+  if (grade >= 78)                 return "Upside Shot";
+  if (grade >= 62 && firstRound)   return "Upside Shot";
+  if (grade >= 62)                 return "Mainstay";
+  if (grade >= 46)                 return "JAG - Developmental";
+  if (grade >= 30)                 return "Serviceable";
   return "Replaceable";
 }
 

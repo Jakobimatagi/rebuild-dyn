@@ -515,11 +515,12 @@ export default function RookieDeepDiveModal({
   const ageAtDraft = num(recent.age) || 22;
   const school = deriveSchool(prospect);
 
-  const { total: grade, components } = computeGrade({
-    ...prospect,
-    draftCapital: capitalKey,
-    athletic,
-  });
+  const { total: grade, components } = computeGrade(
+    { ...prospect, draftCapital: capitalKey, athletic },
+    undefined,
+    capitalKey,
+    ann.declared || false,
+  );
   const athleticBonus = components.athletic || 0;
   const suggestedTier = deriveTier(grade, capitalKey);
   const tier = ann.tier || suggestedTier;

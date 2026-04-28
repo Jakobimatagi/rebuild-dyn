@@ -144,14 +144,25 @@ export default function ProspectCard({
               {seasons.map((s, i) => {
                 const n = (k) => parseFloat(s[k]) || 0;
                 let line = "";
-                if (p.position === "WR" || p.position === "TE") line = `${n("receptions")} rec · ${n("receiving_yards")} yds · ${n("target_share_pct")}% TS · ${n("receiving_tds")} TDs`;
-                else if (p.position === "QB") line = `${n("completion_pct")}% CP · ${n("yards_per_attempt")} YPA · ${n("passing_tds")} TDs · ${n("interceptions")} INTs`;
-                else if (p.position === "RB") line = `${n("yards_per_carry")} YPC · ${n("total_tds")} TDs · ${n("receptions")} rec · ${n("target_share_pct")}% TS`;
+                if (p.position === "WR" || p.position === "TE") {
+                  const trg = n("targets");
+                  line = `${n("receptions")}${trg ? `/${trg}` : ""} rec · ${n("receiving_yards")} yds · ${n("target_share_pct")}% TS · ${n("receiving_tds")} TDs`;
+                } else if (p.position === "QB") {
+                  const rtg = n("passer_rating");
+                  line = `${n("completion_pct")}% CP · ${n("yards_per_attempt")} YPA${rtg ? ` · ${rtg} RTG` : ""} · ${n("passing_tds")} TDs · ${n("interceptions")} INTs`;
+                } else if (p.position === "RB") {
+                  const ruTd = n("rushing_tds");
+                  const reTd = n("receiving_tds");
+                  const totTd = ruTd + reTd > 0 ? `${ruTd}+${reTd}` : (n("total_tds") || 0);
+                  line = `${n("yards_per_carry")} YPC · ${totTd} TDs · ${n("receptions")} rec · ${n("target_share_pct")}% TS`;
+                }
+                const fumL = n("fumbles_lost");
                 return (
                   <div key={i} className="text-xs flex gap-2">
                     <span className="text-emerald-400 font-semibold w-10 shrink-0">{s.season_year}</span>
                     <span className="text-slate-400">{s.school || deriveSchool(p)} · {n("games")} gms</span>
                     <span className="text-slate-300 truncate">{line}</span>
+                    {fumL > 0 && <span className="text-rose-400/80 text-[10px]">FL {fumL}</span>}
                   </div>
                 );
               })}

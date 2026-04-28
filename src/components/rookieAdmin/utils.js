@@ -28,18 +28,34 @@ export function schoolTier(team) {
 }
 
 export function gradeLetter(score) {
-  if (score >= 72) return "A";
-  if (score >= 55) return "B";
-  if (score >= 40) return "C";
-  if (score >= 25) return "D";
+  if (score >= 78) return "A";
+  if (score >= 62) return "B";
+  if (score >= 46) return "C";
+  if (score >= 30) return "D";
   return "F";
 }
 
 export function blankSeason(position) {
   const base = { season_year: "", age: "", school: "", games: "" };
-  if (position === "QB") return { ...base, pass_attempts: "", passing_yards: "", yards_per_attempt: "", completion_pct: "", passing_tds: "", interceptions: "", rushing_yards: "", rushing_tds: "" };
-  if (position === "RB") return { ...base, rush_attempts: "", rushing_yards: "", yards_per_carry: "", total_tds: "", receptions: "", receiving_yards: "", target_share_pct: "" };
-  return { ...base, receptions: "", receiving_yards: "", yards_per_reception: "", target_share_pct: "", catch_rate_pct: "", receiving_tds: "", special_teams_yards: "" };
+  if (position === "QB") return {
+    ...base,
+    completions: "", pass_attempts: "", completion_pct: "", passing_yards: "", yards_per_attempt: "",
+    passer_rating: "", passing_tds: "", interceptions: "", sacks: "",
+    rushing_yards: "", rushing_tds: "", fumbles_lost: "",
+  };
+  if (position === "RB") return {
+    ...base,
+    rush_attempts: "", rushing_yards: "", yards_per_carry: "", longest_rush: "", rushing_tds: "",
+    targets: "", receptions: "", receiving_yards: "", target_share_pct: "", receiving_tds: "",
+    total_tds: "", fumbles_lost: "",
+  };
+  return {
+    ...base,
+    targets: "", receptions: "", receiving_yards: "", yards_per_reception: "",
+    target_share_pct: "", catch_rate_pct: "", receiving_tds: "", longest_reception: "",
+    rush_attempts: "", rushing_yards: "", rushing_tds: "",
+    special_teams_yards: "", fumbles_lost: "",
+  };
 }
 
 export function initAddForm(position = "WR") {

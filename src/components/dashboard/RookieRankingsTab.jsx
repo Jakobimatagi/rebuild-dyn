@@ -43,10 +43,14 @@ function TierBadge({ tier }) {
 }
 
 function scoreProspect(p, ann) {
+  const capitalKey = ann.draftCapital || p.draft_capital || "";
   const grade = computeGrade(
-    { ...p, draftCapital: ann.draftCapital || p.draft_capital || "", athletic: p.athletic || {} },
+    { ...p, draftCapital: capitalKey, athletic: p.athletic || {} },
+    undefined,
+    capitalKey,
+    ann.declared || false,
   ).total;
-  const suggestedTier = deriveTier(grade, ann.draftCapital || p.draft_capital || "");
+  const suggestedTier = deriveTier(grade, capitalKey);
   const tierLabel = ann.tier || suggestedTier || "";
   const ds = dynastyScore(grade, p.position, p.seasons);
   return { grade, tierLabel, ds };
