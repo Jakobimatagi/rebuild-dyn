@@ -520,6 +520,7 @@ export default function RookieDeepDiveModal({
     undefined,
     capitalKey,
     ann.declared || false,
+    ann.tier || "",
   );
   const athleticBonus = components.athletic || 0;
   const suggestedTier = deriveTier(grade, capitalKey);

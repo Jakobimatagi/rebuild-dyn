@@ -91,7 +91,7 @@ export default function ProspectEditorTab({ prospects, sleeperByName, annotation
           const sleeperRank = sleeperByName[normalizeName(p.name)]?.rank;
           const ann         = annotations[p.id] || {};
           const capitalKey  = ann.draftCapital || p.draftCapital || "";
-          const { total: grade } = computeGrade(p, sleeperRank, capitalKey, ann.declared || false);
+          const { total: grade } = computeGrade(p, sleeperRank, capitalKey, ann.declared || false, ann.tier || "");
           const athOpen     = athleticOpen.has(p.id);
 
           return (
