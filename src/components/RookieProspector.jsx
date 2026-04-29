@@ -7,6 +7,7 @@ import { loadSession, saveSession, clearSession, normalizeName, computeCurrentDr
 import { GradeBadge, Pill, TierSelect, CapitalSelect, Pagination, AddPlayerSeasonRow } from "./rookieAdmin/Atoms.jsx";
 import ProspectCard from "./rookieAdmin/ProspectCard.jsx";
 import ProspectEditorTab from "./rookieAdmin/ProspectEditorTab.jsx";
+import { fetchVsEvaluation } from "../lib/aiVsEvaluateApi.js";
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -43,6 +44,8 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
   const [addForm, setAddForm]           = useState(() => initAddForm());
   const [addFormError, setAddFormError] = useState("");
   const [addFormSaving, setAddFormSaving] = useState(false);
+  const [vsAi, setVsAi] = useState({ loading: false, error: "", result: null, generatedAt: null, cached: false });
+  const [tweetCopied, setTweetCopied] = useState(null);
 
   function setAnnotation(id, patch) {
     setState((s) => {
@@ -483,11 +486,39 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     .sort((a, b) => b.grade - a.grade);
   const compareA = compareForYear(state.compareYearA);
   const compareB = compareForYear(state.compareYearB);
+  const compareMerged = [
+    ...compareA.map((x) => ({ ...x, classYear: state.compareYearA })),
+    ...compareB.map((x) => ({ ...x, classYear: state.compareYearB })),
+  ].sort((a, b) => b.grade - a.grade);
   const compareYearOptions = (() => {
     const set = new Set(state.prospects.map((p) => Number(p.projectedDraftYear)).filter(Boolean));
     draftYearTabs.forEach((y) => set.add(y));
     return Array.from(set).sort((a, b) => a - b);
   })();
+
+  const runVsEvaluation = async (force = false) => {
+    setVsAi({ loading: true, error: "", result: null, generatedAt: null, cached: false });
+    try {
+      const { result, cached, generatedAt } = await fetchVsEvaluation(
+        compareMerged,
+        { a: state.compareYearA, b: state.compareYearB },
+        { force },
+      );
+      setVsAi({ loading: false, error: "", result, generatedAt, cached });
+    } catch (err) {
+      setVsAi({ loading: false, error: String(err.message || err), result: null, generatedAt: null, cached: false });
+    }
+  };
+
+  const copyTweet = async (text, idx) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setTweetCopied(idx);
+      setTimeout(() => setTweetCopied((cur) => (cur === idx ? null : cur)), 1500);
+    } catch {
+      // clipboard write can fail silently in unsupported contexts
+    }
+  };
 
   // Expert-rank-sorted list of all filtered prospects (for My Value tab)
   const rankedAll = [...withGrade]
@@ -784,10 +815,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
 
         {/* VS — class vs class comparison, merged inline */}
         {state.tab === "compare" && (() => {
-          const merged = [
-            ...compareA.map((x) => ({ ...x, classYear: state.compareYearA })),
-            ...compareB.map((x) => ({ ...x, classYear: state.compareYearB })),
-          ].sort((a, b) => b.grade - a.grade);
+          const merged = compareMerged;
           const yearStyle = (y) => y === state.compareYearA
             ? "bg-emerald-500/15 text-emerald-300 border-emerald-400/40"
             : "bg-violet-500/15 text-violet-300 border-violet-400/40";
@@ -804,6 +832,11 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                   className="bg-slate-900 border border-violet-400/40 rounded px-2 py-1 text-sm text-violet-300 outline-none focus:border-violet-400">
                   {compareYearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
                 </select>
+                <button onClick={() => runVsEvaluation(false)}
+                  disabled={vsAi.loading || merged.length === 0}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-md border border-sky-400/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                  {vsAi.loading ? "Analyzing…" : vsAi.result ? "↻ Re-analyze" : "✨ Analyze with AI"}
+                </button>
                 <span className="text-[10px] text-slate-500 ml-auto">
                   <span className="text-emerald-400">{compareA.length}</span> + <span className="text-violet-400">{compareB.length}</span> prospects · raw production grade
                 </span>
@@ -811,6 +844,55 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
               <div className="text-[10px] text-slate-500 px-1 -mt-1">
                 Capital and market signals excluded so already-drafted prospects aren't artificially elevated above underclassmen.
               </div>
+
+              {/* AI evaluation panel */}
+              {vsAi.error && (
+                <div className="rounded-lg border border-rose-400/40 bg-rose-500/10 p-3 text-xs text-rose-200">
+                  <span className="font-semibold">AI error:</span> {vsAi.error}
+                </div>
+              )}
+              {vsAi.result && (
+                <div className="rounded-lg border border-sky-400/30 bg-sky-500/5 p-4 space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-[10px] uppercase tracking-widest text-sky-400 font-semibold">AI Analysis</span>
+                    <div className="flex items-center gap-2">
+                      {vsAi.cached && <span className="text-[10px] text-slate-500">cached · {new Date(vsAi.generatedAt).toLocaleTimeString()}</span>}
+                      <button onClick={() => runVsEvaluation(true)}
+                        disabled={vsAi.loading}
+                        className="text-[10px] text-slate-400 hover:text-slate-200 underline disabled:opacity-40">
+                        regenerate
+                      </button>
+                      <button onClick={() => setVsAi({ loading: false, error: "", result: null, generatedAt: null, cached: false })}
+                        aria-label="Dismiss AI analysis"
+                        className="text-slate-500 hover:text-slate-200 text-sm leading-none">✕</button>
+                    </div>
+                  </div>
+                  {vsAi.result.overview && (
+                    <p className="text-sm text-slate-200 leading-relaxed">{vsAi.result.overview}</p>
+                  )}
+                  {Array.isArray(vsAi.result.tweets) && vsAi.result.tweets.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-[10px] uppercase tracking-widest text-slate-500">Tweets · top {vsAi.result.tweets.length}</div>
+                      {vsAi.result.tweets.map((t, i) => (
+                        <div key={i} className="rounded border border-white/10 bg-slate-900/60 p-3">
+                          <div className="flex items-start justify-between gap-3 mb-1">
+                            <span className="text-xs font-semibold text-slate-100">#{t.rank} · {t.name}</span>
+                            <button onClick={() => copyTweet(t.tweet, i)}
+                              className="text-[10px] font-semibold px-2 py-0.5 rounded border border-white/15 text-slate-400 hover:text-slate-100 hover:border-white/30 shrink-0">
+                              {tweetCopied === i ? "Copied ✓" : "Copy tweet"}
+                            </button>
+                          </div>
+                          <p className="text-sm text-slate-200 whitespace-pre-wrap">{t.tweet}</p>
+                          {t.reasoning && (
+                            <p className="text-[10px] text-slate-500 italic mt-1.5">why: {t.reasoning}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {merged.length === 0 && (
                 <div className="rounded-lg border border-white/10 bg-slate-900/40 p-6 text-center text-xs text-slate-500">
                   No prospects in either class.
