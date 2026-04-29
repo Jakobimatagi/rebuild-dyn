@@ -52,6 +52,27 @@ export const TIER_RANK = Object.fromEntries(
    "JAG - Insurance","JAG - Developmental","Replaceable"].map((t, i) => [t, i])
 );
 
+// User-assigned tier as a grade lever. Stats can't see scouting concerns
+// (decision-making, mobility, scheme fit, NFL projection), so manual tier
+// conviction nudges the final number — JAG/Replaceable buries a prospect
+// the model would otherwise grade fairly on raw production. Negative side
+// is deliberately steeper than positive: stats already reward production,
+// so an "Upside Shot" doesn't need a huge bump, but a "JAG" tag has to
+// override otherwise-fine raw numbers.
+export const TIER_GRADE_NUDGE = {
+  "Cornerstone":              6,
+  "Foundational":             4,
+  "Upside Shot":              2,
+  "Mainstay":                 0,
+  "Productive Vet":           0,
+  "Short Term League Winner": -2,
+  "Short Term Production":    -2,
+  "Serviceable":              -5,
+  "JAG - Insurance":          -10,
+  "JAG - Developmental":      -15,
+  "Replaceable":              -22,
+};
+
 export function deriveSchool(p) {
   if (!p.seasons || !p.seasons.length) return p.school || "";
   const sorted = [...p.seasons].sort((a, b) => Number(a.season_year) - Number(b.season_year));
@@ -60,7 +81,12 @@ export function deriveSchool(p) {
 
 // `declared` flag gates pre-NFL combine/pro-day data out of the score for prospects
 // who haven't officially declared. Underclassmen don't have reliable athletic measurables.
-export function computeGrade(prospect, sleeperRank, capitalOverride, declared = false) {
+// `annTier` is the user-assigned tier (e.g. "Cornerstone") — when set, the underclassman
+// grade cap is lifted, since the user has already expressed a strong opinion on the prospect.
+// `ignoreCapital` strips out post-NFL-draft signals (capital blend, market blend) and the
+// underclass cap, so prospects across draft years can be compared on stats + context alone.
+// Used for the VS class-vs-class view.
+export function computeGrade(prospect, sleeperRank, capitalOverride, declared = false, annTier = "", ignoreCapital = false) {
   const school     = deriveSchool(prospect);
   const { position, athletic, draftCapital } = prospect;
   const capitalKey = capitalOverride || draftCapital || "";
@@ -84,10 +110,13 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
   // in the 40s/50s rather than crowding the 70s — that's what makes "good" vs "elite"
   // visible in the final grade.
   let prodComp = 50;
-  if (position === "WR" || position === "TE") {
+  if (position === "WR") {
     const score = (s) => {
       const g    = Math.max(1, num(s.games));
-      const ts   = Math.min(100, num(s.target_share_pct) * 2.5);            // 40% TS = 100, 20% = 50
+      // TS curve: 20%=50 (anchor), 25%≈72, 28%=85, 32%+=100. Realistic college
+      // ceiling is 32–35%, so old `ts*2.5` (40%=100) bunched elite with very-good.
+      const tsRaw = num(s.target_share_pct);
+      const ts   = Math.min(100, tsRaw * 2.5 + Math.max(0, tsRaw - 20) * 1.875);
       const ypr  = Math.min(100, num(s.yards_per_reception) * 4);           // 25 YPR = 100, 15 = 60
       const cr   = Math.min(100, num(s.catch_rate_pct) * 1.1);              // 91% CR = 100, 65% = 71
       const ypg  = Math.min(100, (num(s.receiving_yards) / g) * 0.7);       // 143 yds/g = 100, 80 = 56
@@ -95,7 +124,25 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
       const lng  = num(s.longest_reception);
       const lngComp = lng > 0 ? Math.min(100, lng * 1.1) : 0;               // 91+ yard play = 100
       const expBonus = lng > 0 ? lngComp * 0.05 : 0;                        // small extra for explosive ability
-      return ts * 0.30 + ypg * 0.22 + ypr * 0.15 + cr * 0.10 + tdpg * 0.18 + lngComp * 0.05 + expBonus;
+      return ts * 0.30 + ypg * 0.17 + ypr * 0.15 + cr * 0.15 + tdpg * 0.18 + lngComp * 0.05 + expBonus;
+    };
+    prodComp = Math.round(Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60);
+  } else if (position === "TE") {
+    const score = (s) => {
+      const g    = Math.max(1, num(s.games));
+      // TE scales: target shares are structurally lower (offense flows through WRs)
+      // and YPG ceilings are ~half of WR. 8%=30, 12%≈52, 18%=85, 22%+=100.
+      const tsRaw = num(s.target_share_pct);
+      const ts   = Math.min(100, Math.max(0, (tsRaw - 8) * 5.5 + 30));
+      const ypr  = Math.min(100, num(s.yards_per_reception) * 4);           // 25 YPR = 100, 15 = 60
+      const cr   = Math.min(100, num(s.catch_rate_pct) * 1.1);              // 91% CR = 100, 65% = 71
+      const ypg  = Math.min(100, (num(s.receiving_yards) / g) * 1.4);       // 71 yds/g = 100, 50 = 70
+      const tdpg = Math.min(100, (num(s.receiving_tds) / g) * 60);          // 1.67 TD/g = 100, 0.6 = 36
+      const lng  = num(s.longest_reception);
+      const lngComp = lng > 0 ? Math.min(100, lng * 1.1) : 0;
+      // TE-tuned weights: trim TS (lower ceiling = less signal), bump CR (drops are
+      // death at TE) and tdpg (red-zone usage is the key separator at the position).
+      return ts * 0.25 + ypg * 0.17 + ypr * 0.15 + cr * 0.18 + tdpg * 0.20 + lngComp * 0.05;
     };
     prodComp = Math.round(Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60);
   } else if (position === "QB") {
@@ -108,8 +155,10 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
       const intPct = Math.max(0, 100 - (num(s.interceptions) / att) * 2000);// 5% INT = 0, 2% = 60
       const tdpg = Math.min(100, (num(s.passing_tds) / g) * 22);            // 4.5 TD/g = 100
       const rtg  = num(s.passer_rating);
-      // Passer rating is the truest single efficiency signal when present (NCAA scale: ~150 is solid, 180+ elite).
-      const rtgComp = rtg > 0 ? Math.min(100, Math.max(0, (rtg - 110) * 1.4 + 40)) : null;
+      // Passer rating curve stretched so elite ratings separate from very-good:
+      // 130≈30, 155≈57, 175≈80, 195+ caps at 100. Prior curve saturated at 155
+      // and bunched everyone from solid → elite at the ceiling.
+      const rtgComp = rtg > 0 ? Math.min(100, Math.max(0, (rtg - 130) * 1.1 + 30)) : null;
       const efficiency = rtgComp != null ? rtgComp : (cp * 0.4 + ypa * 0.6);
       return efficiency * 0.40 + tdPct * 0.18 + tdpg * 0.12 + ypa * 0.15 + intPct * 0.15;
     };
@@ -127,7 +176,7 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
       const tdpg = Math.min(100, (totalTds / g) * 65);                      // 1.54 TD/g = 100
       const lng  = num(s.longest_rush);
       const lngComp = lng > 0 ? Math.min(100, lng * 1.0) : 0;               // 100-yd run = 100
-      return ypc * 0.25 + ypg * 0.20 + tdpg * 0.20 + ts * 0.10 + recPg * 0.10 + lngComp * 0.05 + ruTd * 1.0;
+      return ypc * 0.30 + ypg * 0.20 + tdpg * 0.25 + ts * 0.10 + recPg * 0.10 + lngComp * 0.05;
     };
     prodComp = Math.round(Math.min(100, Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60));
   }
@@ -138,7 +187,7 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
   prodComp = Math.max(0, prodComp - Math.min(12, fumblesPg * 35));
 
   const dcScore = CAPITAL_PROD_SCORES[capitalKey] ?? null;
-  if (dcScore != null) prodComp = Math.round(prodComp * 0.40 + dcScore * 0.60);
+  if (dcScore != null && !ignoreCapital) prodComp = Math.round(prodComp * 0.40 + dcScore * 0.60);
 
   const availComp = Math.round(
     Math.min(100, (num(recent.games) / 13) * 100) * 0.60 +
@@ -155,6 +204,19 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
     if (position === "WR" || position === "TE") trendComp = Math.min(100, Math.max(15, 65 + delta * 2.5));
     else if (position === "QB")                 trendComp = Math.min(100, Math.max(15, 65 + delta * 10));
     else if (position === "RB")                 trendComp = Math.min(100, Math.max(15, 65 + delta * 15));
+
+    // Injury-context floor: a peak season followed by a reduced-games return
+    // year is a high-floor profile, not a genuine decliner. Don't penalize
+    // trend below 55 when the previous season was elite AND the recent season
+    // had clearly reduced availability (Tyson knee-injury case).
+    const recentGames = num(recent.games);
+    const prevGames   = num(prev.games);
+    const reducedAvail = recentGames > 0 && prevGames > 0 && recentGames < prevGames * 0.85;
+    let prevElite = false;
+    if (position === "WR" || position === "TE") prevElite = num(prev.target_share_pct)  >= 25;
+    else if (position === "QB")                 prevElite = num(prev.yards_per_attempt) >= 9;
+    else if (position === "RB")                 prevElite = num(prev.yards_per_carry)   >= 6;
+    if (reducedAvail && prevElite && trendComp < 55) trendComp = 55;
   }
 
   const situComp = CONFERENCE_SCORES[school] ?? 40;
@@ -183,16 +245,28 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
     situComp  * 0.10
   ) * confidence) + Math.round(athleticBonus);
 
-  // Underclassmen with no NFL signal can't easily reach A territory — too speculative.
-  if (!declared && !capitalKey && typeof sleeperRank !== "number") {
+  // User tier conviction adjusts the grade. JAG/Replaceable buries a prospect
+  // whose stats are okay but whom the user has flagged based on tape/scouting.
+  rawScore = Math.max(0, rawScore + (TIER_GRADE_NUDGE[annTier] || 0));
+
+  // Underclassmen with no NFL signal AND no user-assigned tier or comp can't easily
+  // reach A territory — too speculative. A tier or comp is treated as user conviction.
+  // (Skipped in ignoreCapital mode so cross-class VS comparisons aren't asymmetric.)
+  const hasComp = !!(prospect.comparablePlayer || prospect.comparable_player);
+  if (!ignoreCapital && !declared && !capitalKey && typeof sleeperRank !== "number" && !annTier && !hasComp) {
     rawScore = Math.min(78, rawScore);
   }
 
   let mkt = null;
   let total = Math.min(99, rawScore);
   if (typeof sleeperRank === "number") {
-    mkt   = Math.max(5, Math.round(100 - Math.log2(Math.max(1, sleeperRank)) * 10));
-    total = Math.min(99, Math.round(rawScore * 0.40 + mkt * 0.60));
+    mkt = Math.max(5, Math.round(100 - Math.log2(Math.max(1, sleeperRank)) * 10));
+    // Market blend only applies when there's no draft capital and we're not in
+    // ignoreCapital mode. Capital is the post-NFL-draft consensus signal already
+    // baked into prodComp; layering Sleeper's dynasty ADP on top double-counts.
+    if (!capitalKey && !ignoreCapital) {
+      total = Math.min(99, Math.round(rawScore * 0.40 + mkt * 0.60));
+    }
   }
 
   return {
@@ -217,13 +291,23 @@ export function deriveTier(grade, capitalKey) {
   return "Replaceable";
 }
 
+// Per-position prime windows. The `tail` is the number of years past peak before
+// significant decline — RBs cliff hard at 27–28, QBs extend deep into their 30s,
+// so a uniform `+3` tail mis-reads both extremes. 1QB-tuned multipliers; SF would
+// flip QB.mult upward (deferred — see superflex follow-up).
+const POSITION_AGING = {
+  QB: { mult: 0.85, peakAge: 30, tail: 5 },
+  WR: { mult: 1.10, peakAge: 26, tail: 4 },
+  TE: { mult: 0.95, peakAge: 27, tail: 4 },
+  RB: { mult: 0.92, peakAge: 24, tail: 2 },
+};
+
 export function dynastyScore(grade, position, seasons) {
-  const posMult = { WR: 1.10, TE: 0.95, RB: 0.92, QB: 0.80 }[position] ?? 1.0;
+  const cfg = POSITION_AGING[position] ?? { mult: 1.0, peakAge: 26, tail: 3 };
   const sorted  = [...(seasons || [])].sort((a, b) => Number(a.season_year) - Number(b.season_year));
   const recent  = sorted[sorted.length - 1];
   const ageAtDraft = (parseFloat(recent?.age) || 22) + 0.5;
-  const peakAge = { WR: 26, TE: 27, RB: 24, QB: 28 }[position] ?? 26;
-  const primeYears = Math.max(0, peakAge - ageAtDraft + 3);
-  const ageAdj = Math.min(1.20, 0.88 + primeYears * 0.04);
-  return grade * posMult * ageAdj;
+  const primeYears = Math.max(0, cfg.peakAge - ageAtDraft + cfg.tail);
+  const ageAdj = Math.min(1.25, 0.85 + primeYears * 0.04);
+  return grade * cfg.mult * ageAdj;
 }

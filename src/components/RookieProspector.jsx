@@ -22,6 +22,8 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     tab: "board",
     filters: { QB: true, RB: true, WR: true, TE: true },
     yearFilter: String(computeCurrentDraftYear()),
+    compareYearA: computeCurrentDraftYear(),
+    compareYearB: computeCurrentDraftYear() + 1,
     prospects: [],
     sleeperByName: {},
     sleeperLoading: false,
@@ -176,7 +178,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
           const byExpert = {};
           allRankings.forEach((r) => { (byExpert[r.user_id] ??= []).push(r); });
 
-          const { total: newGrade } = computeGrade(prospect, undefined, ann.draftCapital || "", ann.declared || false);
+          const { total: newGrade } = computeGrade(prospect, undefined, ann.draftCapital || "", ann.declared || false, ann.tier || "");
           const newTierLabel = ann.tier || deriveTier(newGrade, ann.draftCapital || "") || "";
           const newTierRank = newTierLabel ? (TIER_RANK[newTierLabel] ?? 99) : 99;
           const newDs = dynastyScore(newGrade, prospect.position, prospect.seasons);
@@ -195,7 +197,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
               if (!existingP) continue;
               const existingAnn = state.annotations[pid] || {};
               const capKey = existingAnn.draftCapital || existingP.draftCapital || "";
-              const { total: eGrade } = computeGrade(existingP, undefined, capKey, existingAnn.declared || false);
+              const { total: eGrade } = computeGrade(existingP, undefined, capKey, existingAnn.declared || false, existingAnn.tier || "");
               const eTierLabel = existingAnn.tier || deriveTier(eGrade, capKey) || "";
               const eTierRank = eTierLabel ? (TIER_RANK[eTierLabel] ?? 99) : 99;
               const eDs = dynastyScore(eGrade, existingP.position, existingP.seasons);
@@ -408,6 +410,9 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
   const filtered = state.prospects.filter((p) => {
     if (!state.filters[p.position]) return false;
     if (p.projectedDraftYear < currentDraftYear) return false;
+    // "all" combines every active draft class so prospects can be ranked head-to-head
+    // as if they were in the same class.
+    if (state.yearFilter === "all") return true;
     const ann = state.annotations[p.id] || {};
     if (ann.declared || isSleeperDeclared(p)) return state.yearFilter === String(currentDraftYear);
     return String(p.projectedDraftYear) === state.yearFilter;
@@ -418,7 +423,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     const ann         = state.annotations[p.id] || {};
     const capitalKey  = ann.draftCapital || p.draftCapital || "";
     const declared    = ann.declared || isSleeperDeclared(p);
-    const { total: grade, components } = computeGrade(p, sleeperRank, capitalKey, declared);
+    const { total: grade, components } = computeGrade(p, sleeperRank, capitalKey, declared, ann.tier || "");
     return { p, grade, components, sleeperRank, ann, sleeperDeclared: isSleeperDeclared(p) };
   });
 
@@ -441,7 +446,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
       const ann         = state.annotations[p.id] || {};
       const capitalKey  = ann.draftCapital || p.draftCapital || "";
       const declared    = ann.declared || isSleeperDeclared(p);
-      const { total: grade, components } = computeGrade(p, sleeperRank, capitalKey, declared);
+      const { total: grade, components } = computeGrade(p, sleeperRank, capitalKey, declared, ann.tier || "");
       const suggestedTier = deriveTier(grade, capitalKey);
       const value = computeValueScore(p, grade, sleeperRank, state.rosterData);
       return { p, grade, components, sleeperRank, ann, sleeperDeclared: isSleeperDeclared(p), suggestedTier, value };
@@ -458,6 +463,31 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
       const bDs = dynastyScore(b.grade, b.p.position, b.p.seasons);
       return bDs - aDs;
     });
+
+  // VS tab: two ranked cohorts pulled from any year, head-to-head.
+  const compareForYear = (year) => state.prospects
+    .filter((p) => state.filters[p.position])
+    .filter((p) => Number(p.projectedDraftYear) === Number(year))
+    .filter((p) => !listQ || p.name.toLowerCase().includes(listQ) || deriveSchool(p).toLowerCase().includes(listQ))
+    .map((p) => {
+      const sleeperRank = state.sleeperByName[normalizeName(p.name)]?.rank;
+      const ann         = state.annotations[p.id] || {};
+      const capitalKey  = ann.draftCapital || p.draftCapital || "";
+      const declared    = ann.declared || isSleeperDeclared(p);
+      // VS uses raw production grade — no capital blend, no Sleeper ADP blend, no
+      // underclass cap. Lets you compare a 2026 declared/drafted player against a
+      // 2027 underclassman on intrinsic stats + age + situ alone.
+      const { total: grade } = computeGrade(p, sleeperRank, capitalKey, declared, ann.tier || "", true);
+      return { p, ann, grade, ds: dynastyScore(grade, p.position, p.seasons), declared, capitalKey };
+    })
+    .sort((a, b) => b.grade - a.grade);
+  const compareA = compareForYear(state.compareYearA);
+  const compareB = compareForYear(state.compareYearB);
+  const compareYearOptions = (() => {
+    const set = new Set(state.prospects.map((p) => Number(p.projectedDraftYear)).filter(Boolean));
+    draftYearTabs.forEach((y) => set.add(y));
+    return Array.from(set).sort((a, b) => a - b);
+  })();
 
   // Expert-rank-sorted list of all filtered prospects (for My Value tab)
   const rankedAll = [...withGrade]
@@ -483,7 +513,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
       const ann        = state.annotations[p.id] || {};
       const capitalKey = ann.draftCapital || p.draftCapital || "";
       // Archive entries are by definition declared.
-      const { total: grade, components } = computeGrade(p, undefined, capitalKey, true);
+      const { total: grade, components } = computeGrade(p, undefined, capitalKey, true, ann.tier || "");
       const tierLabel  = ann.tier || deriveTier(grade, capitalKey) || "";
       return { p, ann, grade, components, tierLabel };
     })
@@ -508,6 +538,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     { id: "add",      label: "Add Player" },
     { id: "upcoming", label: "Upcoming Draft" },
     { id: "board",    label: "Prospect Board" },
+    { id: "compare",  label: "VS" },
     { id: "value",    label: "My Value" },
     { id: "archive",  label: "Archive" },
   ];
@@ -679,18 +710,28 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                 {pos}
               </button>
             ))}
-            <div className="flex items-center gap-1">
-              {draftYearTabs.map((y) => (
-                <button key={y} onClick={() => update({ yearFilter: String(y), page: 1 })}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold border ${state.yearFilter === String(y) ? "border-emerald-400/60 bg-emerald-500/15 text-emerald-200" : "border-white/10 text-slate-400 bg-slate-900/40 hover:text-slate-200"}`}>
-                  {y}
+            {state.tab !== "compare" && (
+              <div className="flex items-center gap-1">
+                {draftYearTabs.map((y) => (
+                  <button key={y} onClick={() => update({ yearFilter: String(y), page: 1 })}
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold border ${state.yearFilter === String(y) ? "border-emerald-400/60 bg-emerald-500/15 text-emerald-200" : "border-white/10 text-slate-400 bg-slate-900/40 hover:text-slate-200"}`}>
+                    {y}
+                  </button>
+                ))}
+                <button onClick={() => update({ yearFilter: "all", page: 1 })}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold border ${state.yearFilter === "all" ? "border-emerald-400/60 bg-emerald-500/15 text-emerald-200" : "border-white/10 text-slate-400 bg-slate-900/40 hover:text-slate-200"}`}>
+                  All
                 </button>
-              ))}
-            </div>
+              </div>
+            )}
             <input value={state.listSearch} onChange={(e) => update({ listSearch: e.target.value, page: 1 })}
               placeholder="Search…"
               className="bg-slate-900 border border-white/10 rounded-md px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-emerald-400 w-44" />
-            <span className="text-xs text-slate-500 ml-auto">{filtered.length} / {state.prospects.length} prospects</span>
+            <span className="text-xs text-slate-500 ml-auto">
+              {state.tab === "compare"
+                ? `${compareA.length + compareB.length} prospects across both classes`
+                : `${filtered.length} / ${state.prospects.length} prospects`}
+            </span>
           </div>
         )}
 
@@ -740,6 +781,68 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
             <Pagination page={page} total={totalPages} onChange={(p) => update({ page: p })} />
           </div>
         )}
+
+        {/* VS — class vs class comparison, merged inline */}
+        {state.tab === "compare" && (() => {
+          const merged = [
+            ...compareA.map((x) => ({ ...x, classYear: state.compareYearA })),
+            ...compareB.map((x) => ({ ...x, classYear: state.compareYearB })),
+          ].sort((a, b) => b.grade - a.grade);
+          const yearStyle = (y) => y === state.compareYearA
+            ? "bg-emerald-500/15 text-emerald-300 border-emerald-400/40"
+            : "bg-violet-500/15 text-violet-300 border-violet-400/40";
+          return (
+            <div className="space-y-2">
+              <div className="flex items-center gap-3 mb-3 flex-wrap">
+                <span className="text-[10px] uppercase tracking-widest text-slate-500">Compare</span>
+                <select value={state.compareYearA} onChange={(e) => update({ compareYearA: parseInt(e.target.value, 10) })}
+                  className="bg-slate-900 border border-emerald-400/40 rounded px-2 py-1 text-sm text-emerald-300 outline-none focus:border-emerald-400">
+                  {compareYearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <span className="text-[10px] text-slate-500">vs</span>
+                <select value={state.compareYearB} onChange={(e) => update({ compareYearB: parseInt(e.target.value, 10) })}
+                  className="bg-slate-900 border border-violet-400/40 rounded px-2 py-1 text-sm text-violet-300 outline-none focus:border-violet-400">
+                  {compareYearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <span className="text-[10px] text-slate-500 ml-auto">
+                  <span className="text-emerald-400">{compareA.length}</span> + <span className="text-violet-400">{compareB.length}</span> prospects · raw production grade
+                </span>
+              </div>
+              <div className="text-[10px] text-slate-500 px-1 -mt-1">
+                Capital and market signals excluded so already-drafted prospects aren't artificially elevated above underclassmen.
+              </div>
+              {merged.length === 0 && (
+                <div className="rounded-lg border border-white/10 bg-slate-900/40 p-6 text-center text-xs text-slate-500">
+                  No prospects in either class.
+                </div>
+              )}
+              {merged.map((x, i) => (
+                <div key={x.p.id} className="rounded-lg border border-white/10 bg-slate-900/60 px-3 py-2 flex items-center gap-3">
+                  <span className="text-base font-bold text-slate-300 w-7 text-right shrink-0 tabular-nums">{i + 1}</span>
+                  <GradeBadge score={x.grade} />
+                  <span className={`text-[10px] uppercase tracking-wide font-bold border px-1.5 py-0.5 rounded shrink-0 ${yearStyle(x.classYear)}`}>
+                    {x.classYear}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-slate-100 font-semibold truncate text-sm">{x.p.name}</span>
+                      <Pill pos={x.p.position} />
+                      {x.ann.tier && (
+                        <span className="text-[9px] uppercase tracking-wide text-slate-300 border border-white/15 px-1.5 py-0.5 rounded">
+                          {x.ann.tier}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-slate-500 truncate">{deriveSchool(x.p) || "—"}</div>
+                  </div>
+                  <div className="text-[10px] text-slate-400 shrink-0 text-right tabular-nums">
+                    <div>DS {Math.round(x.ds)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
 
         {/* My Value — expert rankings with reorder arrows */}
         {state.tab === "value" && (

@@ -95,6 +95,7 @@ export default function RookieRankings() {
         undefined,
         capitalKey,
         ann.declared || false,
+        ann.tier || "",
       ).total;
       const tierLabel  = ann.tier || deriveTier(grade, capitalKey) || "";
       const ds         = dynastyScore(grade, p.position, p.seasons);

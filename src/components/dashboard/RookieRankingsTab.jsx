@@ -49,6 +49,7 @@ function scoreProspect(p, ann) {
     undefined,
     capitalKey,
     ann.declared || false,
+    ann.tier || "",
   ).total;
   const suggestedTier = deriveTier(grade, capitalKey);
   const tierLabel = ann.tier || suggestedTier || "";
