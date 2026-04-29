@@ -3,6 +3,7 @@
     { "source": "/api/fleaflicker", "destination": "/api/fleaflicker" },
     { "source": "/api/rosteraudit", "destination": "/api/rosteraudit" },
     { "source": "/api/ai-analyze", "destination": "/api/ai-analyze" },
+    { "source": "/api/ai-vs-evaluate", "destination": "/api/ai-vs-evaluate" },
     { "source": "/admin/:path*", "destination": "/index.html" }
   ]
 }
