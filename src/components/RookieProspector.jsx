@@ -8,6 +8,7 @@ import { GradeBadge, Pill, TierSelect, CapitalSelect, Pagination, AddPlayerSeaso
 import ProspectCard from "./rookieAdmin/ProspectCard.jsx";
 import ProspectEditorTab from "./rookieAdmin/ProspectEditorTab.jsx";
 import { fetchVsEvaluation } from "../lib/aiVsEvaluateApi.js";
+import { fetchOracleBoardEvaluation } from "../lib/aiOracleBoardApi.js";
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
   const [addFormError, setAddFormError] = useState("");
   const [addFormSaving, setAddFormSaving] = useState(false);
   const [vsAi, setVsAi] = useState({ loading: false, error: "", result: null, generatedAt: null, cached: false });
+  const [boardAi, setBoardAi] = useState({ loading: false, error: "", result: null, generatedAt: null, cached: false });
   const [tweetCopied, setTweetCopied] = useState(null);
 
   function setAnnotation(id, patch) {
@@ -510,6 +512,20 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     }
   };
 
+  const runOracleBoard = async (force = false) => {
+    setBoardAi({ loading: true, error: "", result: null, generatedAt: null, cached: false });
+    try {
+      const { result, cached, generatedAt } = await fetchOracleBoardEvaluation(
+        byGrade,
+        { year: state.yearFilter },
+        { force },
+      );
+      setBoardAi({ loading: false, error: "", result, generatedAt, cached });
+    } catch (err) {
+      setBoardAi({ loading: false, error: String(err.message || err), result: null, generatedAt: null, cached: false });
+    }
+  };
+
   const copyTweet = async (text, idx) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -801,6 +817,71 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                 <p className="text-slate-400">Head to the <button onClick={() => update({ tab: "add" })} className="text-emerald-400 underline">Add Player</button> tab to add your first player.</p>
               </div>
             )}
+
+            {/* ORACLE — class breakdown for the currently filtered Board view */}
+            {byGrade.length > 0 && (
+              <div className="flex items-center gap-2 mb-3">
+                <button onClick={() => runOracleBoard(false)}
+                  disabled={boardAi.loading}
+                  className="text-xs font-bold tracking-wide px-3 py-1.5 rounded-md border border-amber-400/50 bg-gradient-to-r from-amber-500/15 to-violet-500/15 text-amber-200 hover:from-amber-500/25 hover:to-violet-500/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                  {boardAi.loading
+                    ? "ORACLE consulting…"
+                    : boardAi.result
+                    ? "↻ ASK ORACLE AGAIN"
+                    : "✨ ASK ORACLE"}
+                </button>
+                <span className="text-[10px] text-slate-500">
+                  {state.yearFilter === "all" ? "all classes" : `${state.yearFilter} class`} · breaks down the top 10 + tweet copy
+                </span>
+              </div>
+            )}
+            {boardAi.error && (
+              <div className="rounded-lg border border-rose-400/40 bg-rose-500/10 p-3 text-xs text-rose-200">
+                <span className="font-semibold">ORACLE error:</span> {boardAi.error}
+              </div>
+            )}
+            {boardAi.result && (
+              <div className="rounded-lg border border-amber-400/30 bg-gradient-to-br from-amber-500/5 to-violet-500/5 p-4 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="text-[10px] uppercase tracking-widest text-amber-300 font-bold">ORACLE · {state.yearFilter === "all" ? "All Classes" : `${state.yearFilter} Class`}</span>
+                  <div className="flex items-center gap-2">
+                    {boardAi.cached && <span className="text-[10px] text-slate-500">cached · {new Date(boardAi.generatedAt).toLocaleTimeString()}</span>}
+                    <button onClick={() => runOracleBoard(true)}
+                      disabled={boardAi.loading}
+                      className="text-[10px] text-slate-400 hover:text-slate-200 underline disabled:opacity-40">
+                      regenerate
+                    </button>
+                    <button onClick={() => setBoardAi({ loading: false, error: "", result: null, generatedAt: null, cached: false })}
+                      aria-label="Dismiss ORACLE analysis"
+                      className="text-slate-500 hover:text-slate-200 text-sm leading-none">✕</button>
+                  </div>
+                </div>
+                {boardAi.result.overview && (
+                  <p className="text-sm text-slate-200 leading-relaxed">{boardAi.result.overview}</p>
+                )}
+                {Array.isArray(boardAi.result.tweets) && boardAi.result.tweets.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-[10px] uppercase tracking-widest text-slate-500">Tweets · top {boardAi.result.tweets.length}</div>
+                    {boardAi.result.tweets.map((t, i) => (
+                      <div key={`board-${i}`} className="rounded border border-white/10 bg-slate-900/60 p-3">
+                        <div className="flex items-start justify-between gap-3 mb-1">
+                          <span className="text-xs font-semibold text-slate-100">#{t.rank} · {t.name}</span>
+                          <button onClick={() => copyTweet(t.tweet, `board-${i}`)}
+                            className="text-[10px] font-semibold px-2 py-0.5 rounded border border-white/15 text-slate-400 hover:text-slate-100 hover:border-white/30 shrink-0">
+                            {tweetCopied === `board-${i}` ? "Copied ✓" : "Copy tweet"}
+                          </button>
+                        </div>
+                        <p className="text-sm text-slate-200 whitespace-pre-wrap">{t.tweet}</p>
+                        {t.reasoning && (
+                          <p className="text-[10px] text-slate-500 italic mt-1.5">why: {t.reasoning}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {pagedBoard.map((x, i) => (
               <ProspectCard key={x.p.id} p={x.p} rank={(page-1)*PAGE_SIZE+i+1} adp={x.sleeperRank} grade={x.grade} components={x.components}
                 annotation={x.ann} onAnnotate={(patch) => setAnnotation(x.p.id, patch)}
@@ -834,8 +915,12 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                 </select>
                 <button onClick={() => runVsEvaluation(false)}
                   disabled={vsAi.loading || merged.length === 0}
-                  className="text-xs font-semibold px-3 py-1.5 rounded-md border border-sky-400/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-                  {vsAi.loading ? "Analyzing…" : vsAi.result ? "↻ Re-analyze" : "✨ Analyze with AI"}
+                  className="text-xs font-bold tracking-wide px-3 py-1.5 rounded-md border border-amber-400/50 bg-gradient-to-r from-amber-500/15 to-violet-500/15 text-amber-200 hover:from-amber-500/25 hover:to-violet-500/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                  {vsAi.loading
+                    ? "ORACLE consulting…"
+                    : vsAi.result
+                    ? "↻ ASK ORACLE AGAIN"
+                    : "✨ ASK ORACLE"}
                 </button>
                 <span className="text-[10px] text-slate-500 ml-auto">
                   <span className="text-emerald-400">{compareA.length}</span> + <span className="text-violet-400">{compareB.length}</span> prospects · raw production grade
@@ -845,16 +930,16 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                 Capital and market signals excluded so already-drafted prospects aren't artificially elevated above underclassmen.
               </div>
 
-              {/* AI evaluation panel */}
+              {/* ORACLE evaluation panel */}
               {vsAi.error && (
                 <div className="rounded-lg border border-rose-400/40 bg-rose-500/10 p-3 text-xs text-rose-200">
-                  <span className="font-semibold">AI error:</span> {vsAi.error}
+                  <span className="font-semibold">ORACLE error:</span> {vsAi.error}
                 </div>
               )}
               {vsAi.result && (
-                <div className="rounded-lg border border-sky-400/30 bg-sky-500/5 p-4 space-y-3">
+                <div className="rounded-lg border border-amber-400/30 bg-gradient-to-br from-amber-500/5 to-violet-500/5 p-4 space-y-3">
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="text-[10px] uppercase tracking-widest text-sky-400 font-semibold">AI Analysis</span>
+                    <span className="text-[10px] uppercase tracking-widest text-amber-300 font-bold">ORACLE · {state.compareYearA} vs {state.compareYearB}</span>
                     <div className="flex items-center gap-2">
                       {vsAi.cached && <span className="text-[10px] text-slate-500">cached · {new Date(vsAi.generatedAt).toLocaleTimeString()}</span>}
                       <button onClick={() => runVsEvaluation(true)}
@@ -863,7 +948,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                         regenerate
                       </button>
                       <button onClick={() => setVsAi({ loading: false, error: "", result: null, generatedAt: null, cached: false })}
-                        aria-label="Dismiss AI analysis"
+                        aria-label="Dismiss ORACLE analysis"
                         className="text-slate-500 hover:text-slate-200 text-sm leading-none">✕</button>
                     </div>
                   </div>
