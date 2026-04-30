@@ -444,7 +444,12 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     .filter((p) => {
       if (p.projectedDraftYear < currentDraftYear) return false;
       const ann = state.annotations[p.id] || {};
-      return ann.declared || isSleeperDeclared(p);
+      if (!(ann.declared || isSleeperDeclared(p))) return false;
+      // Upcoming tab respects the year tab: a prospect declared for 2027
+      // shouldn't show when the user is browsing the 2028 class. "all" still
+      // collapses every future class into one combined view.
+      if (state.yearFilter === "all") return true;
+      return String(p.projectedDraftYear) === state.yearFilter;
     })
     .map((p) => {
       const sleeperRank = state.sleeperByName[normalizeName(p.name)]?.rank;
@@ -777,6 +782,8 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
             <span className="text-xs text-slate-500 ml-auto">
               {state.tab === "compare"
                 ? `${compareA.length + compareB.length} prospects across both classes`
+                : state.tab === "upcoming"
+                ? `${upcomingAll.length} declared${state.yearFilter !== "all" ? ` for ${state.yearFilter}` : ""}`
                 : `${filtered.length} / ${state.prospects.length} prospects`}
             </span>
           </div>
@@ -787,12 +794,16 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
           <div className="space-y-2">
             {upcomingAll.length > 0 && (
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-slate-500">{upcomingAll.length} declared · sorted by tier → dynasty value</span>
+                <span className="text-xs text-slate-500">
+                  {upcomingAll.length} declared{state.yearFilter !== "all" ? ` for ${state.yearFilter}` : ""} · sorted by tier → dynasty value
+                </span>
               </div>
             )}
             {upcomingAll.length === 0 && (
               <div className="rounded-xl border border-white/10 bg-slate-900/40 p-6 text-center text-slate-400 text-sm">
-                No declared players yet. Sleeper-matched prospects appear here automatically, or click "Declare?" on any prospect card.
+                {state.yearFilter === "all"
+                  ? "No declared players yet. Sleeper-matched prospects appear here automatically, or click \"Declare?\" on any prospect card."
+                  : `No declared players for the ${state.yearFilter} class. Switch to a different year tab or declare more prospects.`}
               </div>
             )}
             {pagedUpcoming.map((x, i) => (
