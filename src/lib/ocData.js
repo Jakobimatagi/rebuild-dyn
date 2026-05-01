@@ -70,19 +70,35 @@ export const OC_DATA = {
   2026: {
     ARI: { name: "Nathaniel Hackett" },
     ATL: { name: "Tommy Rees" },
+    BAL: { name: "Declan Doyle" },
+    BUF: { name: "Pete Carmichael" },
     CAR: { name: "Brad Idzik" },
     CHI: { name: "Press Taylor" },
+    CIN: { name: "Dan Pitcher" },
+    CLE: { name: "Travis Switzer" },
     DAL: { name: "Klayton Adams" },
+    DEN: { name: "Davis Webb" },
     DET: { name: "Drew Petzing" },
     GB : { name: "Adam Stenavich" },
+    HOU: { name: "Nick Caley" },
+    IND: { name: "Jim Bob Cooter" },
+    JAX: { name: "Grant Udinski" },
+    KC : { name: "Eric Bieniemy" },
+    LAC: { name: "Mike McDaniel" },
     LAR: { name: "Nathan Scheelhaase" },
+    LV : { name: "Andrew Janocko" },
+    MIA: { name: "Bobby Slowik" },
     MIN: { name: "Wes Phillips" },
+    NE : { name: "Josh McDaniels" },
     NO : { name: "Doug Nussmeier" },
     NYG: { name: "Matt Nagy" },
+    NYJ: { name: "Frank Reich" },
     PHI: { name: "Sean Mannion" },
+    PIT: { name: "Brian Angelichio" },
     SEA: { name: "Brian Fleury" },
     SF : { name: "Klay Kubiak" },
     TB : { name: "Zac Robinson" },
+    TEN: { name: "Brian Daboll" },
     WAS: { name: "David Blough" },
   },
   2025: {
@@ -262,12 +278,10 @@ export function uniqueOcs(data = OC_DATA) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// ── Override layer (localStorage) ────────────────────────────────────────────
-// Lets the in-app editor add/edit OC entries without rebuilding the seed file.
-// Overrides are layered on top of OC_DATA at read time, so the editor can
-// introduce new years (e.g. 2027) or correct a single team-year without
-// touching ocData.js. To bake overrides into the seed permanently, export the
-// override CSV from the editor and run `npm run import:ocs`.
+// ── Override layer (Supabase-backed, in-memory cache) ────────────────────────
+// The editor reads from Supabase on mount, keeps an in-memory copy for instant
+// reactivity, and writes back to Supabase on every change. The localStorage
+// fallback is kept so the page works offline / before the first fetch resolves.
 
 const OVERRIDES_KEY = "oc_overrides_v1";
 
@@ -282,15 +296,15 @@ export function loadOcOverrides() {
   }
 }
 
-function persistOverrides(overrides) {
+function persistOverridesLocally(overrides) {
   try { localStorage.setItem(OVERRIDES_KEY, JSON.stringify(overrides)); }
-  catch (e) { console.error("Failed to persist OC overrides:", e); }
+  catch (e) { console.error("Failed to persist OC overrides locally:", e); }
 }
 
 /**
- * Set a single team-year override entry. `entry` shape matches OC_DATA values
- * ({ name, partial?, note?, playcaller? }). Pass `null` to remove the override
- * (revert that slot to whatever the seed has).
+ * Pure helper — returns the next overrides object after applying one change.
+ * Also writes to localStorage for offline resilience.
+ * The caller is responsible for persisting to Supabase via upsertOcEntry.
  */
 export function setOcOverride(overrides, year, team, entry) {
   const next = { ...overrides };
@@ -299,24 +313,23 @@ export function setOcOverride(overrides, year, team, entry) {
   if (entry === null) delete next[year][team];
   else next[year][team] = entry;
   if (Object.keys(next[year]).length === 0) delete next[year];
-  persistOverrides(next);
+  persistOverridesLocally(next);
   return next;
 }
 
 /**
- * Add a new year column with no entries. Useful for kicking off a new season's
- * data entry from the editor before any teams are filled in.
+ * Add a new year column. The caller triggers initOcYear in Supabase separately.
  */
 export function addOcYear(overrides, year) {
   const next = { ...overrides };
   if (!next[year]) next[year] = {};
-  persistOverrides(next);
+  persistOverridesLocally(next);
   return next;
 }
 
 /**
- * Merge the static OC_DATA seed with localStorage overrides. Overrides win
- * for any year+team they specify; everything else falls through to the seed.
+ * Merge the static OC_DATA seed with overrides (from Supabase or localStorage).
+ * Overrides win for any year+team they specify.
  */
 export function mergeOcData(overrides) {
   const merged = {};
@@ -330,9 +343,7 @@ export function mergeOcData(overrides) {
 }
 
 /**
- * Stringify overrides as a CSV that the importer can read back. Used by the
- * "Export CSV" button so users can promote in-browser edits to the committed
- * ocData.js seed.
+ * Stringify overrides as a CSV the importer can read back.
  */
 export function overridesToCsv(overrides) {
   const years = Object.keys(overrides || {}).map(Number).sort((a, b) => b - a);

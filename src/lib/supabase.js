@@ -291,3 +291,62 @@ export async function fetchPublicRankingsData() {
     historicalPlayers: historical || [],
   };
 }
+
+// ── OC Entries ────────────────────────────────────────────────────────────────
+// Read/write the `oc_entries` table. Shape per row:
+//   { season, team, name, partial?, playcaller?, note? }
+// Reads return a nested object { [season]: { [team]: entry } } matching OC_DATA.
+
+export async function fetchOcEntries() {
+  const { data, error } = await supabase
+    .from("oc_entries")
+    .select("season, team, name, partial, playcaller, note");
+  if (error) throw error;
+  const result = {};
+  for (const row of data || []) {
+    if (!result[row.season]) result[row.season] = {};
+    const entry = { name: row.name };
+    if (row.partial)   entry.partial   = true;
+    if (row.playcaller) entry.playcaller = row.playcaller;
+    if (row.note)      entry.note      = row.note;
+    result[row.season][row.team] = entry;
+  }
+  return result;
+}
+
+/**
+ * Upsert a single team-season entry. Pass `null` as `entry` to delete the row.
+ */
+export async function upsertOcEntry(season, team, entry) {
+  if (!entry || !entry.name?.trim()) {
+    const { error } = await supabase
+      .from("oc_entries")
+      .delete()
+      .eq("season", season)
+      .eq("team", team);
+    if (error) throw error;
+    return;
+  }
+  const { error } = await supabase.from("oc_entries").upsert({
+    season,
+    team,
+    name:       entry.name.trim(),
+    partial:    entry.partial    || false,
+    playcaller: entry.playcaller || null,
+    note:       entry.note       || null,
+  }, { onConflict: "season,team" });
+  if (error) throw error;
+}
+
+/**
+ * Ensure a season row exists for every NFL team (used when adding a new year).
+ * Only inserts teams that don't already have a DB row.
+ */
+export async function initOcYear(season) {
+  const { error } = await supabase.from("oc_entries").upsert(
+    [{ season, team: "__init__", name: "" }],
+    { onConflict: "season,team", ignoreDuplicates: true }
+  );
+  // Ignore errors on the sentinel row; it's just a year marker.
+  void error;
+}

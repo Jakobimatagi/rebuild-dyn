@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { verifyLogin } from "../lib/supabase.js";
+import { verifyLogin, fetchOcEntries, upsertOcEntry, initOcYear } from "../lib/supabase.js";
 import { fetchSleeper, fetchHistoricalStats } from "../lib/sleeperApi.js";
 import {
   NFL_TEAMS,
@@ -42,9 +42,10 @@ export default function OffensiveCoordinators() {
   const [gateError, setGateError]         = useState("");
   const [signingIn, setSigningIn]         = useState(false);
 
-  // Override layer (localStorage) — merged on top of the static OC_DATA seed
-  // every render. Editor writes through `setOcOverride` / `addOcYear`.
+  // Override layer — seeded from localStorage for instant load, then refreshed
+  // from Supabase once the user is unlocked. Editor writes to both.
   const [overrides, setOverrides] = useState(() => loadOcOverrides());
+  const [dbSyncError, setDbSyncError] = useState("");
   const effectiveOcData = useMemo(() => mergeOcData(overrides), [overrides]);
   const seasons = useMemo(() => ocSeasons(effectiveOcData), [effectiveOcData]);
 
@@ -66,6 +67,23 @@ export default function OffensiveCoordinators() {
     if (session) { setUnlocked(true); setUser(session); }
     setInitLoading(false);
   }, []);
+
+  // ── Fetch OC overrides from Supabase once unlocked ──────────────────────────
+  useEffect(() => {
+    if (!unlocked) return;
+    let cancelled = false;
+    fetchOcEntries()
+      .then((dbOverrides) => {
+        if (cancelled) return;
+        // Merge DB data on top of seed; update localStorage cache too.
+        setOverrides(dbOverrides);
+        try { localStorage.setItem("oc_overrides_v1", JSON.stringify(dbOverrides)); } catch {}
+      })
+      .catch((err) => {
+        if (!cancelled) setDbSyncError("Could not load OC overrides from DB: " + (err.message || err));
+      });
+    return () => { cancelled = true; };
+  }, [unlocked]);
 
   // ── Load player DB once unlocked ────────────────────────────────────────────
   useEffect(() => {
@@ -273,6 +291,11 @@ export default function OffensiveCoordinators() {
             {dataError}
           </div>
         )}
+        {dbSyncError && (
+          <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 p-3 text-xs text-amber-200 mb-4">
+            {dbSyncError}
+          </div>
+        )}
 
         {/* Team Rankings tab — 32-team table for the selected season */}
         {tab === "teams" && (
@@ -321,8 +344,17 @@ export default function OffensiveCoordinators() {
             effectiveOcData={effectiveOcData}
             overrides={overrides}
             nameSuggestions={ocNameSuggestions}
-            onSetOverride={(year, team, entry) => setOverrides(setOcOverride(overrides, year, team, entry))}
-            onAddYear={(year) => { setOverrides(addOcYear(overrides, year)); setSeason(year); }}
+            onSetOverride={(year, team, entry) => {
+              setOverrides(setOcOverride(overrides, year, team, entry));
+              upsertOcEntry(year, team, entry).catch((err) =>
+                setDbSyncError("Failed to save to DB: " + (err.message || err))
+              );
+            }}
+            onAddYear={(year) => {
+              setOverrides(addOcYear(overrides, year));
+              setSeason(year);
+              initOcYear(year).catch(() => {});
+            }}
           />
         )}
       </main>
