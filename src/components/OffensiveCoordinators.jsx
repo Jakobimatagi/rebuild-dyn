@@ -6,7 +6,6 @@ import {
   DIVISIONS,
   ocSeasons,
   uniqueOcs,
-  findOcStints,
   loadOcOverrides,
   setOcOverride,
   addOcYear,
@@ -17,11 +16,12 @@ import {
   FANTASY_POSITIONS,
   buildTeamRoomTotals,
   buildRankMatrix,
-  rankByPosition,
   ordinal,
   rankColor,
 } from "../lib/teamFantasyRanks.js";
 import { fetchHistoricalRoster } from "../lib/historicalRostersApi.js";
+import { getOcSchemes, SCHEMES } from "../lib/ocSchemes.js";
+import { fetchOcAnalysis } from "../lib/aiOcAnalyzeApi.js";
 import { loadSession, saveSession, clearSession } from "./rookieAdmin/utils.js";
 
 const POS_ACCENT = {
@@ -32,6 +32,24 @@ const POS_ACCENT = {
 };
 
 const TEAM_NAME_BY_ABBR = Object.fromEntries(NFL_TEAMS.map((t) => [t.abbr, t.name]));
+
+function SchemeChips({ name, size = "sm" }) {
+  const schemes = getOcSchemes(name);
+  if (schemes.length === 0) return null;
+  const cls = size === "xs"
+    ? "text-[9px] px-1.5 py-0"
+    : "text-[10px] px-2 py-0.5";
+  return (
+    <div className="flex items-center gap-1 flex-wrap">
+      {schemes.map((s) => (
+        <span key={s.key} title={s.desc}
+          className={`${cls} rounded-full border font-semibold uppercase tracking-wide ${s.accent}`}>
+          {s.short}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export default function OffensiveCoordinators() {
   const [unlocked, setUnlocked]       = useState(false);
@@ -50,9 +68,21 @@ export default function OffensiveCoordinators() {
   const seasons = useMemo(() => ocSeasons(effectiveOcData), [effectiveOcData]);
 
   const [season, setSeason] = useState(() => ocSeasons(mergeOcData(loadOcOverrides()))[0]);
-  const [tab, setTab]       = useState("teams"); // teams | coordinators | editor
+  const [tab, setTab]       = useState("teams"); // teams | coordinators | compare | editor
   const [search, setSearch] = useState("");
   const [division, setDivision] = useState("All"); // "All" or a DIVISIONS entry
+
+  // Compare tab — two OC slots
+  const [compareA, setCompareA] = useState(null); // OC object from uniqueOcs()
+  const [compareB, setCompareB] = useState(null);
+
+  // Oracle analysis state
+  const [oracleResult,      setOracleResult]      = useState(null);
+  const [oracleLoading,     setOracleLoading]     = useState(false);
+  const [oracleError,       setOracleError]       = useState("");
+  const [oracleFromCache,   setOracleFromCache]   = useState(false);
+  const [oracleGeneratedAt, setOracleGeneratedAt] = useState(null);
+  const [schemeKeyOpen,     setSchemeKeyOpen]     = useState(false);
 
   // Per-season fantasy data ── lazy-loaded, cached in component state.
   const [players, setPlayers]   = useState(null);
@@ -129,6 +159,45 @@ export default function OffensiveCoordinators() {
 
   const ocsBySeason = effectiveOcData[season] || {};
   const allOcs = useMemo(() => uniqueOcs(effectiveOcData), [effectiveOcData]);
+
+  // Reset oracle when season changes
+  useEffect(() => { setOracleResult(null); setOracleError(""); }, [season]);
+
+  async function askOracle({ force = false } = {}) {
+    if (!matrix) return;
+    setOracleLoading(true);
+    setOracleError("");
+    try {
+      const teams = NFL_TEAMS.map((t) => {
+        const oc = ocsBySeason[t.abbr];
+        const schemes = oc?.name ? getOcSchemes(oc.name).map((s) => s.short) : [];
+        const m = matrix[t.abbr] || {};
+        return {
+          team:    t.name,
+          abbr:    t.abbr,
+          division: t.division,
+          oc:      oc?.name || "Unknown",
+          schemes,
+          QB:      m.QB?.rank   ?? null,
+          RB:      m.RB?.rank   ?? null,
+          WR:      m.WR?.rank   ?? null,
+          TE:      m.TE?.rank   ?? null,
+          QB_ppg:  m.QB?.ppg   != null ? +m.QB.ppg.toFixed(1) : null,
+          RB_ppg:  m.RB?.ppg   != null ? +m.RB.ppg.toFixed(1) : null,
+          WR_ppg:  m.WR?.ppg   != null ? +m.WR.ppg.toFixed(1) : null,
+          TE_ppg:  m.TE?.ppg   != null ? +m.TE.ppg.toFixed(1) : null,
+        };
+      });
+      const { result, cached, generatedAt } = await fetchOcAnalysis(teams, season, { force });
+      setOracleResult(result);
+      setOracleFromCache(cached);
+      setOracleGeneratedAt(generatedAt);
+    } catch (err) {
+      setOracleError(err.message || "Oracle failed");
+    } finally {
+      setOracleLoading(false);
+    }
+  }
   // Names available for the editor's autocomplete — every distinct OC ever
   // entered (seed or override). Used as the <datalist> source.
   const ocNameSuggestions = useMemo(() => allOcs.map((o) => o.name), [allOcs]);
@@ -238,6 +307,10 @@ export default function OffensiveCoordinators() {
             className={`py-3 text-sm font-semibold border-b-2 ${tab === "coordinators" ? "border-emerald-400 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
             Coordinators
           </button>
+          <button onClick={() => setTab("compare")}
+            className={`py-3 text-sm font-semibold border-b-2 ${tab === "compare" ? "border-violet-400 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
+            Compare
+          </button>
           <button onClick={() => setTab("editor")}
             className={`py-3 text-sm font-semibold border-b-2 ${tab === "editor" ? "border-emerald-400 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
             Editor
@@ -248,7 +321,7 @@ export default function OffensiveCoordinators() {
       <main className="max-w-6xl mx-auto px-6 py-6">
         {/* Filter bar — Coordinators tab is a flat list across all years, so
             the season selector is hidden there. Editor has its own year UI. */}
-        {tab !== "coordinators" && tab !== "editor" && (
+        {tab !== "coordinators" && tab !== "editor" && tab !== "compare" && (
           <div className="flex flex-wrap items-center gap-2 mb-4">
             <span className="text-[10px] uppercase tracking-widest text-slate-500 mr-1">Season</span>
             {seasons.map((y) => (
@@ -270,9 +343,33 @@ export default function OffensiveCoordinators() {
             <input value={search} onChange={(e) => setSearch(e.target.value)}
               placeholder="Search team or coordinator…"
               className="bg-slate-900 border border-white/10 rounded-md px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-emerald-400 w-64 ml-2" />
+            <button onClick={() => setSchemeKeyOpen((o) => !o)}
+              className="text-[10px] text-slate-400 hover:text-slate-200 border border-white/10 px-2 py-1 rounded-md ml-1">
+              {schemeKeyOpen ? "Hide Scheme Key" : "Scheme Key"}
+            </button>
+            {matrix && (
+              <button onClick={() => askOracle()} disabled={oracleLoading}
+                className="text-[10px] text-amber-300 hover:text-amber-100 border border-amber-400/30 bg-amber-500/5 px-2 py-1 rounded-md disabled:opacity-40">
+                {oracleLoading ? "Analyzing…" : "✦ Oracle"}
+              </button>
+            )}
             <span className="text-xs text-slate-500 ml-auto">
               {dataLoading ? "loading stats…" : matrix ? "stats ready" : "—"}
             </span>
+          </div>
+        )}
+        {/* Scheme key legend */}
+        {schemeKeyOpen && tab !== "coordinators" && tab !== "editor" && tab !== "compare" && (
+          <div className="rounded-xl border border-white/10 bg-slate-900/60 p-4 mb-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {Object.entries(SCHEMES).map(([key, s]) => (
+              <div key={key} className="flex items-start gap-2 p-2 rounded-lg bg-slate-900/40">
+                <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase shrink-0 ${s.accent}`}>{s.short}</span>
+                <div>
+                  <div className="text-[11px] font-semibold text-slate-200">{s.label}</div>
+                  <div className="text-[10px] text-slate-500 leading-tight mt-0.5">{s.desc}</div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
         {tab === "coordinators" && (
@@ -299,17 +396,29 @@ export default function OffensiveCoordinators() {
 
         {/* Team Rankings tab — 32-team table for the selected season */}
         {tab === "teams" && (
-          <TeamRankingsTable
-            teams={filteredTeams}
-            ocs={ocsBySeason}
-            allOcs={allOcs}
-            matrix={matrix}
-            loading={!matrix && !dataError}
-            onOcClick={(name) => {
-              const oc = allOcs.find((o) => o.name.toLowerCase() === name.toLowerCase());
-              if (oc) setOcModal(oc);
-            }}
-          />
+          <>
+            {(oracleLoading || oracleResult || oracleError) && (
+              <OcOraclePanel
+                result={oracleResult}
+                loading={oracleLoading}
+                error={oracleError}
+                fromCache={oracleFromCache}
+                generatedAt={oracleGeneratedAt}
+                onRefresh={() => askOracle({ force: true })}
+              />
+            )}
+            <TeamRankingsTable
+              teams={filteredTeams}
+              ocs={ocsBySeason}
+              allOcs={allOcs}
+              matrix={matrix}
+              loading={!matrix && !dataError}
+              onOcClick={(name) => {
+                const oc = allOcs.find((o) => o.name.toLowerCase() === name.toLowerCase());
+                if (oc) setOcModal(oc);
+              }}
+            />
+          </>
         )}
 
         {/* Coordinator history modal */}
@@ -329,6 +438,22 @@ export default function OffensiveCoordinators() {
         {tab === "coordinators" && (
           <CoordinatorsList
             ocs={filteredOcs}
+            players={players}
+            statsByYear={statsByYear}
+            rosterByYear={rosterByYear}
+            setStats={setStats}
+            setRoster={setRoster}
+          />
+        )}
+
+        {/* Compare tab — side-by-side OC skill profiles */}
+        {tab === "compare" && (
+          <OcCompareTab
+            allOcs={allOcs}
+            ocA={compareA}
+            ocB={compareB}
+            onSelectA={setCompareA}
+            onSelectB={setCompareB}
             players={players}
             statsByYear={statsByYear}
             rosterByYear={rosterByYear}
@@ -358,6 +483,94 @@ export default function OffensiveCoordinators() {
           />
         )}
       </main>
+    </div>
+  );
+}
+
+// ── Oracle Panel ─────────────────────────────────────────────────────────────
+function OcOraclePanel({ result, loading, error, fromCache, generatedAt, onRefresh }) {
+  if (error) {
+    return (
+      <div className="rounded-xl border border-rose-400/30 bg-rose-500/5 px-4 py-3 mb-4 flex items-center justify-between">
+        <span className="text-xs text-rose-300">{error}</span>
+        <button onClick={onRefresh} className="text-[10px] text-slate-400 hover:text-slate-200 border border-white/10 px-2 py-1 rounded ml-3">Retry</button>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-amber-400/20 bg-amber-500/5 p-4 mb-4 flex items-center gap-3">
+        <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
+        <span className="text-sm text-amber-200">ORACLE is analyzing the coordinator landscape…</span>
+      </div>
+    );
+  }
+
+  if (!result) return null;
+
+  return (
+    <div className="rounded-xl border border-amber-400/20 bg-amber-500/5 p-5 mb-4 space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] uppercase tracking-widest text-amber-400">✦ Oracle Analysis</span>
+          {fromCache && generatedAt && (
+            <span className="text-[9px] text-slate-500 border border-white/10 px-1.5 py-0.5 rounded">
+              cached · {new Date(generatedAt).toLocaleDateString()}
+            </span>
+          )}
+        </div>
+        <button onClick={onRefresh}
+          className="text-[10px] text-slate-500 hover:text-slate-300 border border-white/10 px-2 py-1 rounded">
+          Refresh ↺
+        </button>
+      </div>
+
+      {/* Overview */}
+      {result.overview && (
+        <p className="text-sm text-slate-200 leading-relaxed">{result.overview}</p>
+      )}
+
+      {/* Winners + Losers */}
+      <div className="grid sm:grid-cols-2 gap-3">
+        {result.winners?.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-[10px] uppercase tracking-widest text-emerald-400 mb-1">Winners</div>
+            {result.winners.map((w, i) => (
+              <div key={i} className="rounded-lg border border-emerald-400/20 bg-emerald-500/5 px-3 py-2">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-xs font-semibold text-emerald-200">{w.name}</span>
+                  {w.team && <span className="text-[9px] text-slate-500 border border-white/10 px-1 rounded">{w.team}</span>}
+                </div>
+                <div className="text-[11px] text-slate-400 leading-snug">{w.reason}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {result.losers?.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-[10px] uppercase tracking-widest text-rose-400 mb-1">Losers</div>
+            {result.losers.map((l, i) => (
+              <div key={i} className="rounded-lg border border-rose-400/20 bg-rose-500/5 px-3 py-2">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-xs font-semibold text-rose-200">{l.name}</span>
+                  {l.team && <span className="text-[9px] text-slate-500 border border-white/10 px-1 rounded">{l.team}</span>}
+                </div>
+                <div className="text-[11px] text-slate-400 leading-snug">{l.reason}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Scheme Watch */}
+      {result.scheme_watch && (
+        <div className="rounded-lg border border-violet-400/20 bg-violet-500/5 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-widest text-violet-400 mb-1">Scheme Watch</div>
+          <div className="text-[11px] text-slate-300 leading-snug">{result.scheme_watch}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -427,9 +640,10 @@ function TeamRankingsTable({ teams, ocs, matrix, loading, onOcClick }) {
                         className="text-slate-200 hover:text-emerald-300 hover:underline text-left transition-colors">
                         {row.oc.name}
                       </button>
-                      {(row.oc.partial || row.oc.note) && (
-                        <div className="text-[10px] text-slate-500 mt-0.5">{row.oc.note}</div>
-                      )}
+                      <div className="mt-0.5 flex items-center gap-1 flex-wrap">
+                        <SchemeChips name={row.oc.name} size="xs" />
+                        {row.oc.note && <span className="text-[10px] text-slate-500">{row.oc.note}</span>}
+                      </div>
                     </div>
                   ) : (
                     <span className="text-slate-600 text-xs">—</span>
@@ -515,13 +729,22 @@ function OcHistoryModal({ oc, players, statsByYear, rosterByYear, setStats, setR
         {/* Header */}
         <div className="px-6 py-4 border-b border-white/10 shrink-0 pr-12">
           <div className="text-[10px] uppercase tracking-widest text-emerald-400 mb-0.5">OC History</div>
-          <h2 className="text-xl font-bold text-slate-100">{oc.name}</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-xl font-bold text-slate-100">{oc.name}</h2>
+            <SchemeChips name={oc.name} />
+          </div>
           <div className="text-xs text-slate-500 mt-0.5">
             {oc.stints.map((s) => `${s.year} ${s.team}`).join(" · ")}
           </div>
         </div>
         {/* Body — scrollable */}
         <div className="overflow-y-auto flex-1 divide-y divide-white/5">
+          <OcSkillProfile
+            oc={oc}
+            players={players}
+            statsByYear={statsByYear}
+            rosterByYear={rosterByYear}
+          />
           {oc.stints.map((s) => (
             <CoordinatorStintRow
               key={`${s.year}-${s.team}`}
@@ -571,7 +794,10 @@ function CoordinatorsList({ ocs, players, statsByYear, rosterByYear, setStats, s
             <button onClick={() => setExpanded(isOpen ? null : key)}
               className="w-full px-5 py-3 flex items-center justify-between hover:bg-slate-900">
               <div className="text-left">
-                <div className="font-semibold text-slate-100">{oc.name}</div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="font-semibold text-slate-100">{oc.name}</div>
+                  <SchemeChips name={oc.name} />
+                </div>
                 <div className="text-[11px] text-slate-500 mt-0.5">
                   {oc.stints.map((s) => `${s.year} ${s.team}`).join(" · ")}
                 </div>
@@ -580,6 +806,12 @@ function CoordinatorsList({ ocs, players, statsByYear, rosterByYear, setStats, s
             </button>
             {isOpen && (
               <div className="border-t border-white/10 bg-slate-950/40">
+                <OcSkillProfile
+                  oc={oc}
+                  players={players}
+                  statsByYear={statsByYear}
+                  rosterByYear={rosterByYear}
+                />
                 {oc.stints.map((s) => (
                   <CoordinatorStintRow key={`${s.year}-${s.team}`}
                     stint={s} players={players}
@@ -647,6 +879,221 @@ function CoordinatorStintRow({ stint, players, stats, roster }) {
   );
 }
 
+// ── Skill Profile ────────────────────────────────────────────────────────────
+// Aggregate view across all of an OC's stints: a radar chart of average rank
+// per position room, and a season-by-season heatmap showing how each room
+// performed under them. Lets you spot specialists vs generalists, and see
+// whether they're trending up or scheme-dependent on prior personnel.
+
+const RADAR_COLOR_PRIMARY  = { stroke: "rgb(52,211,153)",  fill: "rgba(52,211,153,0.22)" };  // emerald
+const RADAR_COLOR_COMPARE  = { stroke: "rgb(168,85,247)",  fill: "rgba(168,85,247,0.18)" };  // violet
+
+/**
+ * Aggregate an OC's stints into the shape needed for the radar/heatmap views.
+ * Returns null when `oc` is undefined. Stints with all-zero PPG are flagged
+ * `played: false` and excluded from averages so unplayed seasons (e.g. current
+ * year before Week 1) don't dilute the profile.
+ */
+function useOcAggregate(oc, players, statsByYear, rosterByYear) {
+  return useMemo(() => {
+    if (!oc) return null;
+    const stintRanks = oc.stints.map((s) => {
+      if (!players || !statsByYear[s.year] || !rosterByYear[s.year]) {
+        return { stint: s, ranks: null, played: false };
+      }
+      const totals = buildTeamRoomTotals(players, statsByYear[s.year], rosterByYear[s.year]);
+      const matrix = buildRankMatrix(totals);
+      const ranks = matrix?.[s.team] || null;
+      const played = !!ranks && FANTASY_POSITIONS.some((pos) => (ranks[pos]?.ppg || 0) > 0);
+      return { stint: s, ranks, played };
+    });
+    const loaded = stintRanks.filter((r) => r.ranks);
+    const played = stintRanks.filter((r) => r.played);
+    const avgByPos = {};
+    FANTASY_POSITIONS.forEach((pos) => {
+      const ranks = played.map((r) => r.ranks[pos]?.rank).filter(Number.isFinite);
+      avgByPos[pos] = ranks.length
+        ? { avg: ranks.reduce((a, b) => a + b, 0) / ranks.length, count: ranks.length }
+        : null;
+    });
+    let specialty = null;
+    FANTASY_POSITIONS.forEach((pos) => {
+      const a = avgByPos[pos];
+      if (!a) return;
+      if (!specialty || a.avg < specialty.avg) specialty = { pos, avg: a.avg };
+    });
+    // Strength: rank 1 → 1.0, rank 32 → 0. Linear inversion.
+    const radarValues = FANTASY_POSITIONS.map((pos) => {
+      const a = avgByPos[pos];
+      if (!a) return 0;
+      return Math.max(0, Math.min(1, (33 - a.avg) / 32));
+    });
+    const sortedStints = [...stintRanks].sort((a, b) => a.stint.year - b.stint.year);
+    return { stintRanks, loaded, played, avgByPos, specialty, radarValues, sortedStints };
+  }, [oc, players, statsByYear, rosterByYear]);
+}
+
+function OcSkillProfile({ oc, players, statsByYear, rosterByYear }) {
+  const agg = useOcAggregate(oc, players, statsByYear, rosterByYear);
+  if (!agg) return null;
+  const { loaded, played, avgByPos, specialty, radarValues, sortedStints } = agg;
+
+  if (loaded.length === 0) {
+    return (
+      <div className="px-5 py-4 border-b border-white/10 bg-slate-950/40 text-xs text-slate-500">
+        Loading skill profile…
+      </div>
+    );
+  }
+
+  if (played.length === 0) {
+    return (
+      <div className="px-5 py-4 border-b border-white/10 bg-slate-950/40 text-xs text-slate-500">
+        Skill profile pending — no completed seasons yet for this coordinator.
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-5 py-4 border-b border-white/10 bg-gradient-to-b from-slate-950/60 to-slate-900/30">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="text-[10px] uppercase tracking-widest text-emerald-400">Skill Profile</div>
+            <SchemeChips name={oc.name} size="xs" />
+          </div>
+          <div className="text-[11px] text-slate-500 mt-0.5">
+            Across {played.length} of {oc.stints.length} stint{oc.stints.length === 1 ? "" : "s"}
+            {played.length < loaded.length && <> · {loaded.length - played.length} pending</>}
+            {specialty && (
+              <> · Specialty: <span className={`font-semibold ${POS_ACCENT[specialty.pos]}`}>{specialty.pos}</span> (avg {ordinal(Math.round(specialty.avg))})</>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="grid md:grid-cols-[280px_1fr] gap-4 items-start">
+        <SkillRadar
+          datasets={[{ values: radarValues, color: RADAR_COLOR_PRIMARY.stroke, fillColor: RADAR_COLOR_PRIMARY.fill }]}
+          avgByPos={avgByPos}
+        />
+        <SkillHeatmap stintRanks={sortedStints} />
+      </div>
+    </div>
+  );
+}
+
+function SkillRadar({ datasets = [], avgByPos }) {
+  const size = 280;
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = size / 2 - 50;
+  const n = FANTASY_POSITIONS.length;
+  const angle = (i) => (Math.PI * 2 * i) / n - Math.PI / 2;
+  const point = (i, v) => [cx + Math.cos(angle(i)) * r * v, cy + Math.sin(angle(i)) * r * v];
+  const ringPts = (level) => Array.from({ length: n }, (_, i) => point(i, level).join(",")).join(" ");
+
+  return (
+    <svg width={size} height={size} className="mx-auto block" aria-label="Skill profile radar">
+      {[0.25, 0.5, 0.75, 1].map((level) => (
+        <polygon key={level} points={ringPts(level)}
+          fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={1} />
+      ))}
+      {Array.from({ length: n }).map((_, i) => {
+        const [x, y] = point(i, 1);
+        return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="rgba(255,255,255,0.06)" />;
+      })}
+      {datasets.map((d, di) => {
+        const dataPts = d.values.map((v, i) => point(i, v).join(",")).join(" ");
+        return (
+          <g key={di}>
+            <polygon points={dataPts} fill={d.fillColor} stroke={d.color} strokeWidth={2} />
+            {d.values.map((v, i) => {
+              const [x, y] = point(i, v);
+              return <circle key={i} cx={x} cy={y} r={3} fill={d.color} />;
+            })}
+          </g>
+        );
+      })}
+      {FANTASY_POSITIONS.map((pos, i) => {
+        const [lx, ly] = point(i, 1.18);
+        const a = avgByPos?.[pos];
+        // Stack the sub-label vertically below the position label so the
+        // horizontal axes (RB right, TE left) don't overlap with the avg text.
+        return (
+          <g key={pos}>
+            <text x={lx} y={ly} fontSize={12} fontWeight={700}
+              textAnchor="middle" dominantBaseline="middle"
+              className={POS_ACCENT[pos]} fill="currentColor">{pos}</text>
+            {avgByPos && (
+              <text x={lx} y={ly + 14} fontSize={10}
+                textAnchor="middle" dominantBaseline="middle" fill="rgb(100,116,139)">
+                {a ? `${ordinal(Math.round(a.avg))} avg` : "—"}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function SkillHeatmap({ stintRanks }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs border-separate border-spacing-x-1 border-spacing-y-1">
+        <thead>
+          <tr>
+            <th className="text-left pr-2 pb-1 w-10"></th>
+            {stintRanks.map((sr) => (
+              <th key={`${sr.stint.year}-${sr.stint.team}`}
+                className="text-center font-normal pb-1 whitespace-nowrap min-w-[52px]">
+                <div className="text-[11px] font-semibold text-slate-300">{sr.stint.year}</div>
+                <div className="text-[10px] text-slate-500">{sr.stint.team}</div>
+                {sr.stint.partial && (
+                  <div className="text-[9px] uppercase text-amber-400/80 mt-0.5">partial</div>
+                )}
+                {sr.ranks && !sr.played && (
+                  <div className="text-[9px] uppercase text-slate-500 mt-0.5">pending</div>
+                )}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {FANTASY_POSITIONS.map((pos) => (
+            <tr key={pos}>
+              <td className={`text-[10px] uppercase font-bold pr-2 ${POS_ACCENT[pos]}`}>{pos}</td>
+              {stintRanks.map((sr) => {
+                const r = sr.played ? sr.ranks?.[pos] : null;
+                return (
+                  <td key={`${sr.stint.year}-${sr.stint.team}-${pos}`} className="p-0">
+                    <div className={`rounded-md border text-center py-1.5 px-1 ${heatCellBg(r?.rank)}`}>
+                      <div className={`text-xs font-bold ${rankColor(r?.rank)}`}>
+                        {r ? ordinal(r.rank) : "—"}
+                      </div>
+                      {r && (
+                        <div className="text-[9px] text-slate-500 mt-0.5">{r.ppg.toFixed(1)}</div>
+                      )}
+                    </div>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function heatCellBg(rank) {
+  if (!rank) return "border-white/5 bg-slate-900/40";
+  if (rank <= 8)  return "border-emerald-400/30 bg-emerald-500/10";
+  if (rank <= 16) return "border-sky-400/30 bg-sky-500/10";
+  if (rank <= 24) return "border-amber-400/30 bg-amber-500/10";
+  return "border-rose-400/30 bg-rose-500/10";
+}
+
 function TopContributors({ ranks }) {
   return (
     <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -664,6 +1111,220 @@ function TopContributors({ ranks }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ── OC Compare Tab ────────────────────────────────────────────────────────────
+// Pick two coordinators and see their skill profiles side by side: overlaid
+// radar chart (emerald = A, violet = B) + separate heatmaps.
+function OcCompareTab({ allOcs, ocA, ocB, onSelectA, onSelectB, players, statsByYear, rosterByYear, setStats, setRoster }) {
+  const aggA = useOcAggregate(ocA, players, statsByYear, rosterByYear);
+  const aggB = useOcAggregate(ocB, players, statsByYear, rosterByYear);
+
+  // Kick off missing season fetches for both selected OCs
+  useEffect(() => {
+    [ocA, ocB].forEach((oc) => {
+      if (!oc || !players) return;
+      oc.stints.forEach((s) => {
+        if (!statsByYear[s.year]) {
+          fetchHistoricalStats(s.year).then((data) => {
+            setStats((prev) => prev[s.year] ? prev : { ...prev, [s.year]: data || {} });
+          }).catch(console.error);
+        }
+        if (!rosterByYear[s.year]) {
+          fetchHistoricalRoster(s.year).then((data) => {
+            setRoster((prev) => prev[s.year] ? prev : { ...prev, [s.year]: data || {} });
+          }).catch(console.error);
+        }
+      });
+    });
+  }, [ocA, ocB, players, statsByYear, rosterByYear, setStats, setRoster]);
+
+  const datasets = [];
+  if (aggA?.played.length) datasets.push({ values: aggA.radarValues, color: RADAR_COLOR_PRIMARY.stroke, fillColor: RADAR_COLOR_PRIMARY.fill });
+  if (aggB?.played.length) datasets.push({ values: aggB.radarValues, color: RADAR_COLOR_COMPARE.stroke,  fillColor: RADAR_COLOR_COMPARE.fill  });
+
+  // Merged avgByPos for the shared axis labels — show both averages
+  const mergedAvgByPos = {};
+  FANTASY_POSITIONS.forEach((pos) => {
+    mergedAvgByPos[pos] = aggA?.avgByPos?.[pos] || aggB?.avgByPos?.[pos] || null;
+  });
+
+  return (
+    <div className="space-y-6">
+      {/* Picker row */}
+      <div className="grid sm:grid-cols-2 gap-4">
+        <OcPicker label="Coordinator A" accent="emerald" allOcs={allOcs} selected={ocA} onSelect={onSelectA} />
+        <OcPicker label="Coordinator B" accent="violet"  allOcs={allOcs} selected={ocB} onSelect={onSelectB} />
+      </div>
+
+      {/* Nothing selected yet */}
+      {!ocA && !ocB && (
+        <div className="rounded-xl border border-white/10 bg-slate-900/40 p-12 text-center text-slate-500 text-sm">
+          Pick two coordinators above to compare their career skill profiles.
+        </div>
+      )}
+
+      {/* Overlaid radar */}
+      {(ocA || ocB) && (
+        <div className="rounded-xl border border-white/10 bg-slate-900/40 p-6">
+          <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-4">Radar Overlay</div>
+
+          {/* Legend */}
+          <div className="flex items-center gap-4 mb-4 flex-wrap">
+            {ocA && (
+              <div className="flex items-center gap-1.5 text-xs text-slate-300">
+                <span className="w-3 h-3 rounded-full bg-emerald-400 inline-block" />
+                <span className="font-semibold text-emerald-300">{ocA.name}</span>
+                <SchemeChips name={ocA.name} size="xs" />
+              </div>
+            )}
+            {ocB && (
+              <div className="flex items-center gap-1.5 text-xs text-slate-300">
+                <span className="w-3 h-3 rounded-full bg-violet-400 inline-block" />
+                <span className="font-semibold text-violet-300">{ocB.name}</span>
+                <SchemeChips name={ocB.name} size="xs" />
+              </div>
+            )}
+          </div>
+
+          {datasets.length > 0 ? (
+            <div className="flex justify-center">
+              <SkillRadar datasets={datasets} avgByPos={mergedAvgByPos} />
+            </div>
+          ) : (
+            <div className="text-center text-slate-500 text-xs py-8">
+              Stats loading — expand each coordinator to trigger data fetch.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Side-by-side stat grids */}
+      {(ocA || ocB) && (
+        <div className="grid sm:grid-cols-2 gap-4">
+          <ComparePanel oc={ocA} agg={aggA} accent="emerald" />
+          <ComparePanel oc={ocB} agg={aggB} accent="violet"  />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OcPicker({ label, accent, allOcs, selected, onSelect }) {
+  const [query, setQuery] = useState(selected?.name || "");
+  const accentClasses = accent === "violet"
+    ? { border: "focus:border-violet-400", badge: "border-violet-400/40 text-violet-300 bg-violet-500/10", clear: "hover:text-violet-300" }
+    : { border: "focus:border-emerald-400", badge: "border-emerald-400/40 text-emerald-300 bg-emerald-500/10", clear: "hover:text-emerald-300" };
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return allOcs.slice(0, 12);
+    return allOcs.filter((o) => o.name.toLowerCase().includes(q)).slice(0, 12);
+  }, [allOcs, query]);
+
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => { setQuery(selected?.name || ""); }, [selected]);
+
+  return (
+    <div className="relative">
+      <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">{label}</div>
+      {selected ? (
+        <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${accentClasses.badge} text-sm`}>
+          <span className="font-semibold flex-1">{selected.name}</span>
+          <SchemeChips name={selected.name} size="xs" />
+          <button onClick={() => { onSelect(null); setQuery(""); }}
+            className={`text-slate-500 ${accentClasses.clear} ml-1 text-base leading-none`}>✕</button>
+        </div>
+      ) : (
+        <div className="relative">
+          <input
+            value={query}
+            onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setTimeout(() => setOpen(false), 150)}
+            placeholder="Search coordinator…"
+            className={`w-full bg-slate-900 border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 outline-none ${accentClasses.border}`}
+          />
+          {open && filtered.length > 0 && (
+            <div className="absolute top-full left-0 right-0 mt-1 z-20 rounded-lg border border-white/10 bg-slate-900 shadow-xl overflow-hidden max-h-52 overflow-y-auto">
+              {filtered.map((oc) => (
+                <button key={oc.name} onMouseDown={() => { onSelect(oc); setOpen(false); }}
+                  className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-800 flex items-center gap-2">
+                  <span className="flex-1">{oc.name}</span>
+                  <SchemeChips name={oc.name} size="xs" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ComparePanel({ oc, agg, accent }) {
+  const accentLabel = accent === "violet" ? "text-violet-400" : "text-emerald-400";
+  const accentPos   = accent === "violet" ? "border-violet-400/20 bg-violet-500/5" : "border-emerald-400/20 bg-emerald-500/5";
+
+  if (!oc) {
+    return (
+      <div className="rounded-xl border border-white/10 bg-slate-900/30 p-6 flex items-center justify-center text-slate-600 text-sm min-h-40">
+        No coordinator selected
+      </div>
+    );
+  }
+
+  if (!agg || agg.loaded.length === 0) {
+    return (
+      <div className="rounded-xl border border-white/10 bg-slate-900/30 p-6 flex items-center justify-center text-slate-500 text-sm min-h-40">
+        Loading stats…
+      </div>
+    );
+  }
+
+  return (
+    <div className={`rounded-xl border border-white/10 bg-slate-900/40 overflow-hidden`}>
+      <div className={`px-4 py-3 border-b border-white/10 ${accentPos}`}>
+        <div className={`text-[10px] uppercase tracking-widest ${accentLabel} mb-0.5`}>
+          {accent === "violet" ? "Coordinator B" : "Coordinator A"}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="font-bold text-slate-100">{oc.name}</div>
+          <SchemeChips name={oc.name} size="xs" />
+        </div>
+        <div className="text-[11px] text-slate-500 mt-0.5">
+          {agg.played.length} season{agg.played.length !== 1 ? "s" : ""} of data
+          {agg.specialty && (
+            <> · Specialty: <span className={`font-semibold ${POS_ACCENT[agg.specialty.pos]}`}>{agg.specialty.pos}</span></>
+          )}
+        </div>
+      </div>
+      <div className="p-3">
+        {/* Avg rank per position */}
+        <div className="grid grid-cols-4 gap-2 mb-3">
+          {FANTASY_POSITIONS.map((pos) => {
+            const a = agg.avgByPos[pos];
+            return (
+              <div key={pos} className="rounded-lg border border-white/5 bg-slate-900/60 px-2 py-2 text-center">
+                <div className={`text-[10px] uppercase font-bold ${POS_ACCENT[pos]}`}>{pos}</div>
+                {a ? (
+                  <>
+                    <div className={`text-base font-bold ${rankColor(Math.round(a.avg))}`}>{ordinal(Math.round(a.avg))}</div>
+                    <div className="text-[9px] text-slate-500">{a.count} stints</div>
+                  </>
+                ) : (
+                  <div className="text-slate-600 text-xs mt-1">—</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {/* Heatmap */}
+        <SkillHeatmap stintRanks={agg.sortedStints} />
+      </div>
     </div>
   );
 }
