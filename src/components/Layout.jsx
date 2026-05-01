@@ -28,6 +28,10 @@ export default function Layout({ children }) {
   return (
     <div style={styles.app}>
       <div style={styles.grid} />
+      <nav style={topBarStyle}>
+        <a href="/admin/rookie-prospector" style={adminLinkStyle}>Admin · Rookies</a>
+        <a href="/admin/oc-rankings" style={adminLinkStyle}>Admin · OCs</a>
+      </nav>
       <div className="dyn-content" style={styles.content}>
         {children}
       </div>
@@ -52,14 +56,35 @@ export default function Layout({ children }) {
         </a>
         <span style={{ color: "rgba(255,255,255,0.15)", margin: "0 10px" }}>·</span>
         <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}>© {new Date().getFullYear()} Dynasty Advisor</span>
-        <span style={{ color: "rgba(255,255,255,0.15)", margin: "0 10px" }}>·</span>
-        <a href="/admin/rookie-prospector" style={{ ...linkStyle, color: "rgba(255,255,255,0.2)" }}>Admin</a>
       </footer>
 
       {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
     </div>
   );
 }
+
+const topBarStyle = {
+  position: "fixed",
+  top: 12,
+  right: 16,
+  zIndex: 50,
+  display: "flex",
+  gap: 8,
+};
+
+const adminLinkStyle = {
+  color: "rgba(0,245,160,0.85)",
+  textDecoration: "none",
+  letterSpacing: 1,
+  textTransform: "uppercase",
+  fontSize: 10,
+  fontWeight: 600,
+  padding: "6px 10px",
+  border: "1px solid rgba(0,245,160,0.35)",
+  borderRadius: 6,
+  background: "rgba(8,12,20,0.7)",
+  backdropFilter: "blur(6px)",
+};
 
 const footerStyle = {
   position: "relative",
