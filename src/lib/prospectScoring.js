@@ -160,7 +160,16 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
       // and bunched everyone from solid → elite at the ceiling.
       const rtgComp = rtg > 0 ? Math.min(100, Math.max(0, (rtg - 130) * 1.1 + 30)) : null;
       const efficiency = rtgComp != null ? rtgComp : (cp * 0.4 + ypa * 0.6);
-      return efficiency * 0.40 + tdPct * 0.18 + tdpg * 0.12 + ypa * 0.15 + intPct * 0.15;
+      // Catchable-rate (% of throws on-target) is pure QB accuracy independent
+      // of drops or hero catches. When entered, it displaces 0.10 from the
+      // efficiency bucket so QBs aren't credited/penalized for receiver play.
+      // 65%=0, 75%=50, 82%=85, 85%+=100 — separates elite from very-good.
+      const ctchRaw = num(s.catchable_rate_pct);
+      const ctchComp = ctchRaw > 0 ? Math.min(100, Math.max(0, (ctchRaw - 65) * 5)) : null;
+      if (ctchComp == null) {
+        return efficiency * 0.40 + tdPct * 0.18 + tdpg * 0.12 + ypa * 0.15 + intPct * 0.15;
+      }
+      return efficiency * 0.30 + ctchComp * 0.10 + tdPct * 0.18 + tdpg * 0.12 + ypa * 0.15 + intPct * 0.15;
     };
     prodComp = Math.round(Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60);
   } else if (position === "RB") {
