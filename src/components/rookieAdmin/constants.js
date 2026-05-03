@@ -54,6 +54,7 @@ export const SEASON_COLS = {
     { key: "passing_yards",      label: "PYds",  w: 56  },
     { key: "yards_per_attempt",  label: "YPA",   w: 46  },
     { key: "passer_rating",      label: "RTG",   w: 48  },
+    { key: "catchable_rate_pct", label: "Ctch%", w: 52  },
     { key: "passing_tds",        label: "TDs",   w: 40  },
     { key: "interceptions",      label: "INTs",  w: 40  },
     { key: "sacks",              label: "Sck",   w: 40  },

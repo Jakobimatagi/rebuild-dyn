@@ -21,11 +21,13 @@ export default function ProspectStats({ p }) {
   }
   if (p.position === "QB") {
     const rtg = n("passer_rating");
+    const ctch = n("catchable_rate_pct");
     return (
       <div className="flex gap-4 text-xs text-slate-400 mt-1 flex-wrap">
         <span>CP: <span className="text-sky-300 font-semibold">{fmt(n("completion_pct"))}%</span></span>
         <span>YPA: <span className="text-slate-200">{fmt(n("yards_per_attempt"))}</span></span>
         {rtg > 0 && <span>RTG: <span className="text-slate-200">{fmt(rtg)}</span></span>}
+        {ctch > 0 && <span>Ctch: <span className="text-slate-200">{fmt(ctch)}%</span></span>}
         <span>TDs: <span className="text-slate-200">{n("passing_tds") || "—"}</span></span>
         <span>INTs: <span className="text-rose-300">{n("interceptions") || "—"}</span></span>
       </div>
