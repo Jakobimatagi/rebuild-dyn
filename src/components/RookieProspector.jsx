@@ -7,6 +7,7 @@ import { loadSession, saveSession, clearSession, normalizeName, computeCurrentDr
 import { GradeBadge, Pill, TierSelect, CapitalSelect, Pagination, AddPlayerSeasonRow } from "./rookieAdmin/Atoms.jsx";
 import ProspectCard from "./rookieAdmin/ProspectCard.jsx";
 import ProspectEditorTab from "./rookieAdmin/ProspectEditorTab.jsx";
+import DraftPlanTab from "./rookieAdmin/DraftPlanTab.jsx";
 import { fetchVsEvaluation } from "../lib/aiVsEvaluateApi.js";
 import { fetchOracleBoardEvaluation } from "../lib/aiOracleBoardApi.js";
 
@@ -587,12 +588,13 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
   const upcomingPages = Math.ceil(upcomingAll.length / PAGE_SIZE);
 
   const TABS = [
-    { id: "add",      label: "Add Player" },
-    { id: "upcoming", label: "Upcoming Draft" },
-    { id: "board",    label: "Prospect Board" },
-    { id: "compare",  label: "VS" },
-    { id: "value",    label: "My Value" },
-    { id: "archive",  label: "Archive" },
+    { id: "add",       label: "Add Player" },
+    { id: "upcoming",  label: "Upcoming Draft" },
+    { id: "board",     label: "Prospect Board" },
+    { id: "compare",   label: "VS" },
+    { id: "value",     label: "My Value" },
+    { id: "draftplan", label: "Draft Plan" },
+    { id: "archive",   label: "Archive" },
   ];
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -755,7 +757,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
         )}
 
         {/* Board / Value / Upcoming share the filter bar */}
-        {state.tab !== "add" && (
+        {state.tab !== "add" && state.tab !== "draftplan" && (
           <div className="flex flex-wrap items-center gap-2 mb-4">
             {["QB","RB","WR","TE"].map((pos) => (
               <button key={pos} onClick={() => update({ filters: { ...state.filters, [pos]: !state.filters[pos] } })}
@@ -1063,6 +1065,11 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
             })}
             <Pagination page={page} total={rankedAllPages} onChange={(p) => update({ page: p })} />
           </div>
+        )}
+
+        {/* Draft Plan — league-aware rookie pick planner */}
+        {state.tab === "draftplan" && (
+          <DraftPlanTab prospects={state.prospects} annotations={state.annotations} user={state.user} />
         )}
 
         {/* Archive — declared prospects from past draft classes */}

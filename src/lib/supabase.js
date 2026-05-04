@@ -340,6 +340,59 @@ export async function upsertOcEntry(season, team, entry) {
   if (error) throw error;
 }
 
+// ── Rookie Draft Plans ────────────────────────────────────────────────────────
+// One plan per (user_id, league_id, season). `picks` stores
+// { [pickKey]: prospectId } and `prospect_snapshot` freezes the prospect's
+// plan-time grade so retrospective grading isn't disrupted by later edits.
+
+export async function fetchDraftPlans(userId, leagueId) {
+  const { data, error } = await supabase
+    .from("rookie_draft_plans")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("league_id", leagueId)
+    .order("season", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function fetchDraftPlan(userId, leagueId, season) {
+  const { data, error } = await supabase
+    .from("rookie_draft_plans")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("league_id", leagueId)
+    .eq("season", Number(season))
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+export async function upsertDraftPlan(plan) {
+  const { error } = await supabase.from("rookie_draft_plans").upsert({
+    user_id:           plan.userId,
+    league_id:         plan.leagueId,
+    league_name:       plan.leagueName  || null,
+    team_name:         plan.teamName    || null,
+    roster_id:         plan.rosterId    ?? null,
+    season:            Number(plan.season),
+    picks:             plan.picks             || {},
+    prospect_snapshot: plan.prospectSnapshot  || {},
+    notes:             plan.notes ?? null,
+  }, { onConflict: "user_id,league_id,season" });
+  if (error) throw error;
+}
+
+export async function deleteDraftPlan(userId, leagueId, season) {
+  const { error } = await supabase
+    .from("rookie_draft_plans")
+    .delete()
+    .eq("user_id", userId)
+    .eq("league_id", leagueId)
+    .eq("season", Number(season));
+  if (error) throw error;
+}
+
 /**
  * Ensure a season row exists for every NFL team (used when adding a new year).
  * Only inserts teams that don't already have a DB row.
