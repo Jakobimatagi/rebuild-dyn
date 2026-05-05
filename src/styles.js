@@ -113,14 +113,16 @@ export const styles = {
     whiteSpace: "nowrap",
   }),
   tab: (active) => ({
-    padding: "10px 18px",
+    padding: "10px 14px",
     fontSize: 10,
-    letterSpacing: 2,
+    letterSpacing: 1.5,
     textTransform: "uppercase",
     border: "none",
     background: "transparent",
     color: active ? "#00f5a0" : "#c3c9dd",
     borderBottom: active ? "2px solid #00f5a0" : "2px solid transparent",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
   }),
   playerRow: {
     display: "flex",
