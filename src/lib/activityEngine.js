@@ -359,6 +359,25 @@ function buildTeamActivityData(transactions, moves, rosters, users, effectiveSea
     }
   }
 
+  // Win-rate percentile per team (proxy for "did activity help the team?").
+  // Uses current-season wins/losses from roster settings. Teams with no games
+  // recorded (e.g. offseason) receive a neutral score of 50.
+  const winRates = {};
+  for (const r of claimedRosters) {
+    const w = r.settings?.wins ?? 0;
+    const l = r.settings?.losses ?? 0;
+    const t = r.settings?.ties ?? 0;
+    const played = w + l + t;
+    winRates[String(r.roster_id)] = played > 0 ? (w + t * 0.5) / played : null;
+  }
+  const sortedRates = Object.values(winRates).filter((v) => v != null).sort((a, b) => a - b);
+  const winRateScore = (rid) => {
+    const rate = winRates[String(rid)];
+    if (rate == null || sortedRates.length <= 1) return 50;
+    const rank = sortedRates.filter((r) => r <= rate).length;
+    return Math.round((rank / sortedRates.length) * 100);
+  };
+
   // Compute league averages for relative scoring
   const allStats = Object.values(stats);
   const avgTradesPerSeason =
@@ -401,12 +420,16 @@ function buildTeamActivityData(transactions, moves, rosters, users, effectiveSea
       clamp(s.partners.size / Math.max(1, numTeams - 1), 0, 1) * 100
     );
 
-    const teamActivityScore = Math.round(
+    // Base activity score (75%) blended with win-rate performance (25%).
+    // This rewards activity that actually produces results for the team.
+    const activityBase = Math.round(
       tradeActivityScore * 0.4 +
         faActivityScore * 0.25 +
         pickRateScore * 0.2 +
         diversityScore * 0.15
     );
+    const perfScore = winRateScore(s.rosterId);
+    const teamActivityScore = Math.round(activityBase * 0.75 + perfScore * 0.25);
 
     return {
       rosterId: s.rosterId,
@@ -520,8 +543,12 @@ export function buildLeagueActivity(transactions, rosters, users, players) {
     activeTraderCount,
   };
 
+  const GRADE_RANK = { A: 5, B: 4, C: 3, D: 2, F: 1 };
   const teams = buildTeamActivityData(trades, moves, claimedRosters, users, effectiveSeasons, players)
-    .sort((a, b) => b.teamActivityScore - a.teamActivityScore);
+    .sort((a, b) => {
+      const gDiff = (GRADE_RANK[b.grade.grade] ?? 0) - (GRADE_RANK[a.grade.grade] ?? 0);
+      return gDiff !== 0 ? gDiff : b.teamActivityScore - a.teamActivityScore;
+    });
 
   return {
     overallScore,
