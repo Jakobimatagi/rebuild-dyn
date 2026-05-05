@@ -218,6 +218,10 @@ export function buildSleeperScoringSettings(rules) {
 /**
  * Fetch FetchTeamPicks for every team and build Sleeper-format tradedPicks.
  * Each entry: { roster_id (original slot), owner_id (current holder), season, round }
+ *
+ * Also returns the set of seasons that any team still has picks in. Once a
+ * rookie draft completes, FetchTeamPicks stops returning picks for that
+ * season — we use that as the signal that the draft is done.
  */
 async function buildFFTradedPicks(leagueId, teamIds) {
   const allPickResponses = await Promise.all(
@@ -226,9 +230,12 @@ async function buildFFTradedPicks(leagueId, teamIds) {
 
   const seen = new Set();
   const tradedPicks = [];
+  const seasonsWithPicks = new Set();
 
   for (const resp of allPickResponses) {
     for (const pick of resp.picks || []) {
+      if (pick.season != null) seasonsWithPicks.add(String(pick.season));
+
       const ownedBy = pick.owned_by?.id;
       const originalOwner = pick.original_owner?.id;
       if (!ownedBy || !originalOwner || ownedBy === originalOwner) continue;
@@ -247,7 +254,7 @@ async function buildFFTradedPicks(leagueId, teamIds) {
     }
   }
 
-  return tradedPicks;
+  return { tradedPicks, seasonsWithPicks };
 }
 
 /**
@@ -485,7 +492,16 @@ export async function loadFleaflickerLeague(leagueId, teamId, sleeperPlayers) {
   }
 
   // Phase 2: Fetch all team picks for traded picks data
-  const tradedPicks = await buildFFTradedPicks(leagueId, teamIds);
+  const { tradedPicks, seasonsWithPicks } = await buildFFTradedPicks(
+    leagueId,
+    teamIds,
+  );
+
+  // If no team owns any picks for the current calendar year, the rookie draft
+  // for that season has already completed (Fleaflicker drops drafted picks).
+  const currentYear = String(new Date().getFullYear());
+  const currentDraftComplete =
+    seasonsWithPicks.size > 0 && !seasonsWithPicks.has(currentYear);
 
   // Normalize transactions
   const tradeTransactions = normalizeFFCompletedTrades(
@@ -502,5 +518,13 @@ export async function loadFleaflickerLeague(leagueId, teamId, sleeperPlayers) {
     (a, b) => (b.created || 0) - (a.created || 0),
   );
 
-  return { league, myRoster, users, rosters, tradedPicks, transactions };
+  return {
+    league,
+    myRoster,
+    users,
+    rosters,
+    tradedPicks,
+    transactions,
+    currentDraftComplete,
+  };
 }

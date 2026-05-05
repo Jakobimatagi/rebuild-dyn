@@ -422,6 +422,7 @@ export default function RosterTab({
   raPickValues,
   posRanks,
   isSuperflex,
+  hideDraftCapital,
 }) {
   const [deepDivePlayer, setDeepDivePlayer] = useState(null);
 
@@ -972,7 +973,7 @@ export default function RosterTab({
       <FlexRoom byPos={byPos} leagueContext={leagueContext} setDeepDivePlayer={setDeepDivePlayer} />
 
       {/* Draft Capital Section */}
-      {picks && picks.length > 0 && (() => {
+      {!hideDraftCapital && picks && picks.length > 0 && (() => {
         const currentYear = String(new Date().getFullYear());
         const phaseByRosterId = new Map(
           (leagueTeams || []).map((t) => [t.rosterId, t.teamPhase?.phase || "retool"]),

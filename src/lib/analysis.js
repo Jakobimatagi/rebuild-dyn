@@ -8,6 +8,7 @@ import { buildTradeMarket, buildTradeSuggestions, evaluateTrade } from './tradeE
 import { buildPredictionContext } from './predictionEngine';
 import { buildLeagueActivity } from './activityEngine';
 import { assignPositionRanks as _assignPositionRanks } from './playerGrading';
+import { buildDraftRecap } from './draftRecap';
 
 // Re-exports — consumers that import from 'analysis' still work unchanged.
 export { DEFAULT_SCORING_WEIGHTS, draftTierLabel } from './scoringEngine';
@@ -46,9 +47,29 @@ export function buildRosterAnalysis(
   rosterAuditPicks = null,
   sleeperDrafts = [],
   fantasyCalcTrades = [],
+  currentDraftStatus = null, // 'complete' | 'incomplete' | null (auto-detect)
+  recentDraft = null,
+  recentDraftPicks = [],
+  allCompletedDrafts = [],
+  allDraftPicksMap = {},
 ) {
   const currentYear = new Date().getFullYear();
-  const futureSeasons = [currentYear, currentYear + 1, currentYear + 2];
+  // Sleeper's `season` field on a draft can be the upcoming NFL season (2026)
+  // or the prior offseason year (2025) depending on how the league was set up.
+  // Match by recency instead: any completed draft whose start_time is within
+  // the last ~9 months is treated as the league's current rookie draft.
+  const NINE_MONTHS_MS = 9 * 30 * 24 * 60 * 60 * 1000;
+  const sleeperDraftComplete = sleeperDrafts.some(
+    (d) =>
+      d.status === "complete" &&
+      d.start_time &&
+      Date.now() - Number(d.start_time) < NINE_MONTHS_MS,
+  );
+  const draftComplete =
+    currentDraftStatus === "complete" ||
+    (currentDraftStatus !== "incomplete" && sleeperDraftComplete);
+  const baseYear = draftComplete ? currentYear + 1 : currentYear;
+  const futureSeasons = [baseYear, baseYear + 1, baseYear + 2];
   const userById = new Map(
     users.map((user) => [
       user.user_id,
@@ -125,10 +146,10 @@ export function buildRosterAnalysis(
 
   // Extract draft order from Sleeper drafts endpoint.
   // The drafts array may contain multiple drafts; find the one for the
-  // upcoming season (currentYear) with a draft_order set.
+  // next upcoming season (baseYear) with a draft_order set.
   let knownDraftSlots = null;
   if (sleeperDrafts?.length) {
-    const targetSeason = String(currentYear);
+    const targetSeason = String(baseYear);
     const draft = sleeperDrafts.find(
       (d) => String(d.season) === targetSeason && d.draft_order,
     ) || sleeperDrafts.find((d) => d.draft_order);
@@ -175,6 +196,35 @@ export function buildRosterAnalysis(
     players,
   );
 
+  const rostersByIdForRecap = new Map(
+    leagueTeams.map((t) => [
+      t.rosterId,
+      { label: t.label, phase: t.teamPhase?.phase || "retool" },
+    ]),
+  );
+  const recapSharedParams = {
+    rostersById: rostersByIdForRecap,
+    fcByPlayerId: fantasyCalcContext.bySleeperId,
+    raByPlayerId: rosterAuditContext.bySleeperId,
+    raPickValues: rosterAuditContext.pickValues,
+    leagueContext,
+    tradeMarket,
+  };
+  const draftRecap = buildDraftRecap({
+    draft: recentDraft,
+    picks: recentDraftPicks,
+    ...recapSharedParams,
+  });
+
+  // Build recaps for every completed draft so the UI can offer a season switcher.
+  const allDraftRecaps = allCompletedDrafts
+    .map((draft) => buildDraftRecap({
+      draft,
+      picks: allDraftPicksMap[draft.draft_id] || [],
+      ...recapSharedParams,
+    }))
+    .filter(Boolean);
+
   return {
     ...myTeam,
     isSuperflex: leagueContext.isSuperflex,
@@ -209,5 +259,7 @@ export function buildRosterAnalysis(
       attribution: 'FantasyCalc',
       url: 'https://www.fantasycalc.com/',
     },
+    draftRecap,
+    allDraftRecaps,
   };
 }

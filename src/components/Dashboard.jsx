@@ -10,6 +10,7 @@ import ScoreWeightsModal from "./dashboard/ScoreWeightsModal";
 import TradeTab from "./dashboard/TradeTab";
 import LeagueActivityTab from "./dashboard/LeagueActivityTab";
 import DocumentationTab from "./dashboard/DocumentationTab";
+import DraftRecapTab from "./dashboard/DraftRecapTab";
 import RankingsTab from "./dashboard/RankingsTab";
 import StrategyPlannerTab from "./dashboard/StrategyPlannerTab";
 import RookieRankingsTab from "./dashboard/RookieRankingsTab";
@@ -143,21 +144,26 @@ export default function Dashboard({
         aria-label="Dashboard sections"
         style={{
           display: "flex",
+          flexWrap: "wrap",
+          gap: "0 0",
           borderBottom: "1px solid rgba(255,255,255,0.08)",
           marginBottom: 32,
         }}
       >
         {[
-          { key: "overview", label: "overview" },
-          { key: "roster", label: "roster" },
-          { key: "trades", label: "trades" },
-          { key: "strategy", label: "strategy" },
-          { key: "rankings", label: "rankings" },
-          { key: "rookies", label: "rookie rankings" },
-          { key: "ai", label: "analyze with ai" },
-          { key: "league", label: "league" },
-          { key: "activity", label: "activity" },
-          { key: "docs", label: "Calculation Documentation" },
+          { key: "overview",  label: "Overview" },
+          { key: "roster",    label: "Roster" },
+          ...(analysis.draftRecap || analysis.allDraftRecaps?.length > 0
+            ? [{ key: "recap", label: "Draft" }]
+            : []),
+          { key: "trades",    label: "Trades" },
+          { key: "strategy",  label: "Strategy" },
+          { key: "rankings",  label: "Rankings" },
+          { key: "rookies",   label: "Rookies" },
+          { key: "ai",        label: "AI" },
+          { key: "league",    label: "League" },
+          { key: "activity",  label: "Activity" },
+          { key: "docs",      label: "Docs" },
         ].map((tab) => (
           <button
             key={tab.key}
@@ -219,6 +225,21 @@ export default function Dashboard({
           raPickValues={rosterAuditSource?.pickValues}
           posRanks={analysis.posRanks}
           isSuperflex={analysis.leagueContext?.isSuperflex}
+          hideDraftCapital={!!analysis.draftRecap}
+        />
+      )}
+
+      {activeTab === "recap" && (analysis.draftRecap || analysis.allDraftRecaps?.length > 0) && (
+        <DraftRecapTab
+          draftRecap={analysis.draftRecap}
+          allDraftRecaps={analysis.allDraftRecaps || []}
+          myRosterId={analysis.rosterId}
+          picksByYear={picksByYear}
+          picks={picks}
+          leagueContext={leagueContext}
+          tradeMarket={tradeMarket}
+          leagueTeams={analysis.leagueTeams}
+          raPickValues={rosterAuditSource?.pickValues}
         />
       )}
 

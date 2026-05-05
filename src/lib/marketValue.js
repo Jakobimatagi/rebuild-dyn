@@ -285,6 +285,59 @@ export function pickFcValue(
 
 export const PHASE_TO_SLOT = { rebuild: "early", retool: "mid", contender: "late" };
 
+/**
+ * Slot value for a COMPLETED rookie draft pick where the exact slot is known.
+ * Uses RA early/mid/late anchors (when available) interpolated to the exact
+ * slot position, so 1.04 ≠ 1.10 while still being RA-calibrated.
+ * Falls back to a static curve when RA data isn't present.
+ *
+ * `totalSlots` = total picks per round (= number of league teams).
+ * `raPickValues` = the pickValues map from rosterAuditApi (optional).
+ * `season`       = the draft year string, e.g. "2026".
+ */
+export function pickSlotValueExact(round, slot, totalSlots, leagueContext, raPickValues, season) {
+  const slots = Math.max(2, totalSlots || 12);
+  const fraction = (slot - 1) / (slots - 1); // 0 = first pick, 1 = last pick
+
+  // --- RA path: interpolate between early / mid / late anchors ---
+  if (raPickValues && season) {
+    const yr = String(season);
+    const raEarly = raPickValues[`${yr}-${round}-early`];
+    const raMid   = raPickValues[`${yr}-${round}-mid`];
+    const raLate  = raPickValues[`${yr}-${round}-late`];
+
+    if (raEarly != null && raMid != null && raLate != null) {
+      // Treat early=fraction 0, mid=fraction 0.5, late=fraction 1
+      let raVal;
+      if (fraction <= 0.5) {
+        raVal = raEarly + (raMid - raEarly) * (fraction / 0.5);
+      } else {
+        raVal = raMid + (raLate - raMid) * ((fraction - 0.5) / 0.5);
+      }
+      return Math.max(50, Math.round(raVal));
+    }
+  }
+
+  // --- Static fallback curve ---
+  let base;
+  if (round === 1) {
+    base = Math.round(7500 - fraction * 4700); // 7 500 (1.01) → 2 800 (last)
+  } else if (round === 2) {
+    base = Math.round(1800 - fraction * 1100); // 1 800 → 700
+  } else if (round === 3) {
+    base = Math.round(600 - fraction * 400);   // 600 → 200
+  } else if (round === 4) {
+    base = Math.round(220 - fraction * 120);   // 220 → 100
+  } else {
+    base = 100;
+  }
+
+  if (round === 1 && leagueContext?.isSuperflex) base = Math.round(base * 1.18);
+  if (round === 1 && leagueContext?.tePremium)   base = Math.round(base * 1.05);
+
+  return Math.max(50, base);
+}
+
 export function getPickValue(pick, ownerPhase, raPickValues, leagueContext, tradeMarket) {
   if (raPickValues && pick?.round) {
     if (pick.slot != null) {

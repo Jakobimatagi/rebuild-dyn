@@ -19,10 +19,26 @@ import {
 } from "./lib/fleaflickerApi";
 import {
   fetchDeepHistoricalStats,
+  fetchDraftPicks,
   fetchHistoricalStats,
   fetchLeagueTransactions,
   fetchSleeper,
 } from "./lib/sleeperApi";
+
+const NINE_MONTHS_MS = 9 * 30 * 24 * 60 * 60 * 1000;
+
+function pickRecentCompletedDraft(drafts = []) {
+  return (
+    drafts
+      .filter(
+        (d) =>
+          d.status === "complete" &&
+          d.start_time &&
+          Date.now() - Number(d.start_time) < NINE_MONTHS_MS,
+      )
+      .sort((a, b) => Number(b.start_time) - Number(a.start_time))[0] || null
+  );
+}
 
 export default function App() {
   const [platform, setPlatform] = useState(
@@ -97,6 +113,11 @@ export default function App() {
       payload.rosterAuditPicks,
       payload.sleeperDrafts,
       payload.fantasyCalcTrades,
+      payload.currentDraftComplete ? "complete" : null,
+      payload.recentDraft,
+      payload.recentDraftPicks,
+      payload.allCompletedDrafts,
+      payload.allDraftPicksMap,
     );
   }
 
@@ -212,6 +233,38 @@ export default function App() {
       const myRoster = rosters.find((r) => r.owner_id === userObj.user_id);
       if (!myRoster) throw new Error("Roster not found.");
 
+      const recentDraft = pickRecentCompletedDraft(sleeperDrafts);
+
+      // Fetch picks for all completed drafts (most recent 5) so the recap tab
+      // can offer a season switcher. recentDraftPicks is kept for compat.
+      const allCompletedDrafts = [...sleeperDrafts]
+        .filter((d) => d.status === "complete" && d.start_time)
+        .sort((a, b) => Number(b.start_time) - Number(a.start_time))
+        .slice(0, 5);
+      const allDraftPicksResults = await Promise.all(
+        allCompletedDrafts.map((d) => fetchDraftPicks(d.draft_id).catch(() => [])),
+      );
+      const allDraftPicksMap = {};
+      allCompletedDrafts.forEach((d, i) => {
+        allDraftPicksMap[d.draft_id] = allDraftPicksResults[i];
+      });
+      const recentDraftPicks = recentDraft
+        ? (allDraftPicksMap[recentDraft.draft_id] || [])
+        : [];
+
+      console.log("[draft-debug] /league/<id>/drafts:", sleeperDrafts);
+      console.log("[draft-debug] selected recent draft:", recentDraft);
+      console.log(
+        "[draft-debug] picks fetched for that draft:",
+        recentDraftPicks.length,
+        recentDraftPicks,
+      );
+      console.log(
+        "[draft-debug] /league/<id>/traded_picks:",
+        tradedPicks.length,
+        tradedPicks,
+      );
+
       const payload = {
         myRoster,
         players,
@@ -226,6 +279,10 @@ export default function App() {
         rosterAuditValues,
         rosterAuditPicks,
         sleeperDrafts,
+        recentDraft,
+        recentDraftPicks,
+        allCompletedDrafts,
+        allDraftPicksMap,
         users,
         rosters,
         lastSeason,
@@ -333,6 +390,7 @@ export default function App() {
         players,
         league: ffData.league,
         tradedPicks: ffData.tradedPicks,
+        currentDraftComplete: ffData.currentDraftComplete,
         stats24,
         stats23,
         stats22,

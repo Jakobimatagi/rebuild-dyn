@@ -95,6 +95,11 @@ export async function fetchDeepHistoricalStats(year) {
   return data;
 }
 
+export async function fetchDraftPicks(draftId) {
+  if (!draftId) return [];
+  return fetchSleeper(`/draft/${draftId}/picks`).catch(() => []);
+}
+
 async function fetchLeagueTransactionsForSeason(leagueId, maxWeek = 18) {
   const weeks = Array.from({ length: maxWeek }, (_, index) => index + 1);
   const responses = await Promise.all(
