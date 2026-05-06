@@ -641,6 +641,37 @@ export default function RosterTab({
                               {p.prediction.trajectory.label}
                             </span>
                           )}
+                          {p.ocOutlook && Math.abs(p.ocOutlook.multiplierPct) >= 1.5 && (() => {
+                            const oc = p.ocOutlook;
+                            const tone =
+                              oc.multiplier >= 0.04 ? "#00f5a0" :
+                              oc.multiplier <= -0.04 ? "#ff6b35" :
+                              "#ffd84d";
+                            const arrow = oc.delta == null
+                              ? null
+                              : oc.delta > 0 ? "▲" : oc.delta < 0 ? "▼" : "•";
+                            const sign = (n) => (n > 0 ? "+" : "");
+                            const body = oc.delta != null
+                              ? `${arrow} ${sign(oc.delta)}${oc.delta.toFixed(1)} PPG`
+                              : `${sign(oc.multiplierPct)}${oc.multiplierPct.toFixed(1)}% env`;
+                            return (
+                              <span
+                                title={`OC: ${oc.ocName} — ${sign(oc.multiplierPct)}${oc.multiplierPct.toFixed(1)}% Year-1 adjust`}
+                                style={{
+                                  fontSize: 9,
+                                  color: tone,
+                                  background: `${tone}18`,
+                                  border: `1px solid ${tone}44`,
+                                  borderRadius: 3,
+                                  padding: "2px 6px",
+                                  letterSpacing: 0.3,
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                OC {body}
+                              </span>
+                            );
+                          })()}
                           <span
                             style={{
                               ...styles.tag(

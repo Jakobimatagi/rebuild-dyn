@@ -1,6 +1,7 @@
 import { ARCHETYPE_DESC, ARCHETYPE_META } from "../../constants";
 import { getColor, getVerdict } from "../../lib/analysis";
 import { AGE_CURVES_FALLBACK } from "../../lib/scoringEngine";
+import { SCHEMES } from "../../lib/ocSchemes";
 import { useModalBehavior } from "../../lib/useModalBehavior";
 import { styles } from "../../styles";
 
@@ -384,6 +385,157 @@ function ScoreMathTable({ components, internalScore, score, fantasyCalcNormalize
 // Prediction section
 // ---------------------------------------------------------------------------
 
+function OcOutlookSection({ outlook, pos }) {
+  if (!outlook) return null;
+  const {
+    ocName, ocPartial, schemes,
+    multiplier, multiplierPct,
+    baselinePpg, projectedPpg, delta,
+    stintHistory, isFirstYearOC,
+  } = outlook;
+
+  const tone =
+    multiplier >= 0.04 ? "#00f5a0" :
+    multiplier <= -0.04 ? "#ff6b35" :
+    "#ffd84d";
+
+  const arrow = delta == null ? null : delta > 0 ? "▲" : delta < 0 ? "▼" : "•";
+  const sign = (n) => (n > 0 ? "+" : "");
+
+  return (
+    <>
+      {DIVIDER}
+      <SectionLabel>OC Outlook (Year 1)</SectionLabel>
+
+      <div
+        style={{
+          padding: "12px 14px",
+          background: "rgba(255,255,255,0.03)",
+          border: "1px solid rgba(255,255,255,0.07)",
+          borderLeft: `3px solid ${tone}`,
+          borderRadius: 4,
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <span style={{ fontSize: 11, color: "#fff", fontWeight: 700 }}>{ocName}</span>
+          {ocPartial && (
+            <span style={{ fontSize: 9, color: "#ff6b35", letterSpacing: 1 }}>partial-season</span>
+          )}
+          {isFirstYearOC && (
+            <span style={{ fontSize: 9, color: "#a0a8c0", letterSpacing: 1 }}>1st year as OC</span>
+          )}
+          {(schemes || []).map((key) => {
+            const meta = SCHEMES[key];
+            if (!meta) return null;
+            return (
+              <span
+                key={key}
+                style={{
+                  fontSize: 9,
+                  letterSpacing: 1,
+                  padding: "2px 7px",
+                  borderRadius: 2,
+                  background: "rgba(255,255,255,0.04)",
+                  border: "1px solid rgba(255,255,255,0.10)",
+                  color: "#c0c8e0",
+                }}
+                title={meta.desc}
+              >
+                {meta.short || meta.label}
+              </span>
+            );
+          })}
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: baselinePpg != null ? "1fr 1fr 1fr" : "1fr 1fr",
+            gap: 8,
+            marginBottom: stintHistory.length ? 12 : 0,
+          }}
+        >
+          {baselinePpg != null && (
+            <Stat label={`Baseline PPG`} value={baselinePpg.toFixed(1)} color="#a0a8c0" />
+          )}
+          {projectedPpg != null ? (
+            <Stat
+              label="Projected PPG"
+              value={projectedPpg.toFixed(1)}
+              color={tone}
+              hint={delta != null ? `${arrow} ${sign(delta)}${delta.toFixed(1)}` : null}
+            />
+          ) : (
+            <Stat label="Year-1 Env." value={`${sign(multiplierPct)}${multiplierPct.toFixed(1)}%`} color={tone} hint="no PPG baseline (rookie / no games)" />
+          )}
+          <Stat
+            label="OC Adjust"
+            value={`${sign(multiplierPct)}${multiplierPct.toFixed(1)}%`}
+            color={tone}
+          />
+        </div>
+
+        {stintHistory.length > 0 ? (
+          <div>
+            <div style={{ fontSize: 9, color: "#606878", letterSpacing: 2, marginBottom: 6 }}>
+              {ocName.toUpperCase()} · {pos} ROOM RANK HISTORY (of 32)
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {stintHistory.map((s, i) => {
+                const rankColor =
+                  s.rank <= 8 ? "#00f5a0" :
+                  s.rank <= 16 ? "#ffd84d" :
+                  s.rank <= 24 ? "#c084fc" :
+                  "#ff6b35";
+                return (
+                  <span
+                    key={`${s.year}-${s.team}-${i}`}
+                    title={`${s.year} ${s.team} — ${pos} room ${s.ppg} PPG`}
+                    style={{
+                      fontSize: 10,
+                      padding: "3px 8px",
+                      borderRadius: 2,
+                      background: `${rankColor}12`,
+                      border: `1px solid ${rankColor}30`,
+                      color: rankColor,
+                    }}
+                  >
+                    {s.year} {s.team} · #{s.rank}
+                    {s.partial && <span style={{ marginLeft: 4, opacity: 0.6 }}>*</span>}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 10, color: "#808898", lineHeight: 1.5 }}>
+            No prior coordinator history to lean on — outlook leans on scheme tags only and includes a small first-year discount.
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function Stat({ label, value, color, hint }) {
+  return (
+    <div
+      style={{
+        textAlign: "center",
+        padding: "8px 6px",
+        background: "rgba(255,255,255,0.03)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: 4,
+      }}
+    >
+      <div style={{ fontSize: 9, color: "#606878", marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color }}>{value}</div>
+      {hint && <div style={{ fontSize: 9, color: "#808898", marginTop: 2 }}>{hint}</div>}
+    </div>
+  );
+}
+
 function PredictionSection({ prediction }) {
   if (!prediction) return null;
   const { projections, trajectory, dynastyOutlook, breakoutProb, bustRisk, comps, keyInsights } = prediction;
@@ -645,6 +797,7 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, ageCurves,
     peakPctile, currentPctile, pctileLast, pctilePrev, pctileOlder,
     marketValue, fantasyCalcValue, fantasyCalcRank, fantasyCalcTrend,
     prediction,
+    ocOutlook,
   } = player;
 
   const verdictColor = getColor(verdict);
@@ -886,6 +1039,8 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, ageCurves,
             </div>
           ))}
         </div>
+
+        {ocOutlook && <OcOutlookSection outlook={ocOutlook} pos={position} />}
 
         {DIVIDER}
 

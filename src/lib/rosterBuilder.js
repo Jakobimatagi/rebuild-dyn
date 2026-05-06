@@ -18,6 +18,7 @@ import {
   estimatePickValue,
 } from "./marketValue";
 import { buildPlayerPrediction } from "./predictionEngine";
+import { buildPlayerOcOutlook } from "./ocAdjustment";
 
 // ---------------------------------------------------------------------------
 // Own/acquired draft picks for a roster
@@ -421,6 +422,7 @@ export function buildRosterSnapshot(
   lastSeasonYear,
   predictionContext = null,
   rosterAuditContext = null,
+  ocOutlookContext = null,
 ) {
   const playerIds = roster.players || [];
   const picks = buildRosterPicks(
@@ -590,6 +592,10 @@ export function buildRosterSnapshot(
 
       if (predictionContext) {
         enrichedPlayer.prediction = buildPlayerPrediction(enrichedPlayer, predictionContext);
+      }
+
+      if (ocOutlookContext) {
+        enrichedPlayer.ocOutlook = buildPlayerOcOutlook(enrichedPlayer, ocOutlookContext);
       }
 
       return enrichedPlayer;

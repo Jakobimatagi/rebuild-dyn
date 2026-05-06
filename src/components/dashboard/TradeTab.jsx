@@ -1,7 +1,8 @@
 import { useState, useMemo, useCallback } from "react";
 import { POSITION_PRIORITY } from "../../constants";
-import { evaluateTrade } from "../../lib/tradeEngine";
+import { evaluateTrade, simulateTrade, buildTradeRationale, suggestBalancingAsset } from "../../lib/tradeEngine";
 import { estimatePickValue } from "../../lib/marketValue";
+import { rankLabel } from "../../lib/playerGrading";
 import { styles } from "../../styles";
 
 // ---------------------------------------------------------------------------
@@ -63,6 +64,62 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
       tradeMarket,
     );
   }, [sideA, sideB, teamA, teamB, teamPhase, playerMarketMap, leagueContext, tradeMarket]);
+
+  const rationaleA = useMemo(() => {
+    if (!sideA.length || !sideB.length || !teamA || !teamB) return null;
+    return buildTradeRationale({
+      ownTeam: teamA,
+      partnerTeam: teamB,
+      outgoing: sideA,
+      incoming: sideB,
+      leagueContext,
+    });
+  }, [sideA, sideB, teamA, teamB, leagueContext]);
+
+  const rationaleB = useMemo(() => {
+    if (!sideA.length || !sideB.length || !teamA || !teamB) return null;
+    return buildTradeRationale({
+      ownTeam: teamB,
+      partnerTeam: teamA,
+      outgoing: sideB,
+      incoming: sideA,
+      leagueContext,
+    });
+  }, [sideA, sideB, teamA, teamB, leagueContext]);
+
+  const balance = useMemo(() => {
+    if (!result || !sideA.length || !sideB.length) return null;
+    return suggestBalancingAsset({
+      sideA,
+      sideB,
+      teamA,
+      teamB,
+      valueA: result.sideAValue,
+      valueB: result.sideBValue,
+      leagueContext,
+      tradeMarket,
+      playerMarketMap,
+    });
+  }, [result, sideA, sideB, teamA, teamB, leagueContext, tradeMarket, playerMarketMap]);
+
+  const simulation = useMemo(() => {
+    if (!sideA.length || !sideB.length || !teamA || !teamB) return null;
+    if (!leagueTeams?.length) return null;
+    try {
+      return simulateTrade(
+        teamA,
+        teamB,
+        sideA,
+        sideB,
+        leagueTeams,
+        leagueContext,
+        playerMarketMap,
+      );
+    } catch (err) {
+      console.error("simulateTrade failed", err);
+      return null;
+    }
+  }, [sideA, sideB, teamA, teamB, leagueTeams, leagueContext, playerMarketMap]);
 
   if (!leagueTeams?.length) return null;
 
@@ -307,6 +364,465 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
           </div>
         </div>
       )}
+
+      {(rationaleA || rationaleB) && (
+        <TradeRationale
+          teamA={teamA}
+          teamB={teamB}
+          rationaleA={rationaleA}
+          rationaleB={rationaleB}
+        />
+      )}
+
+      {balance && <BalanceSuggestion balance={balance} />}
+
+      {simulation && <PostTradeImpact simulation={simulation} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Per-side rationale — what's good/bad for each team given their phase, the
+// archetypes involved, PPG, OC outlook, and roster needs.
+// ---------------------------------------------------------------------------
+
+function PHASE_TONE(phase) {
+  return phase === "contender"
+    ? "#00f5a0"
+    : phase === "rebuild"
+    ? "#ff6b35"
+    : "#ffd84d";
+}
+
+function RationaleColumn({ team, rationale, accent }) {
+  if (!rationale) return null;
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 8,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 11,
+            color: accent,
+            fontWeight: 700,
+            letterSpacing: 0.3,
+          }}
+        >
+          {team?.label}
+        </span>
+        <span
+          style={{
+            fontSize: 9,
+            letterSpacing: 1.5,
+            padding: "1px 7px",
+            borderRadius: 2,
+            color: PHASE_TONE(rationale.ownPhase),
+            background: `${PHASE_TONE(rationale.ownPhase)}18`,
+            border: `1px solid ${PHASE_TONE(rationale.ownPhase)}44`,
+          }}
+        >
+          {rationale.ownPhase}
+        </span>
+      </div>
+
+      {rationale.positives.length > 0 && (
+        <div style={{ marginBottom: rationale.concerns.length ? 8 : 0 }}>
+          <div style={{ fontSize: 9, color: "#00f5a0", letterSpacing: 1.5, marginBottom: 4 }}>
+            WHY IT WORKS
+          </div>
+          {rationale.positives.map((line, i) => (
+            <div
+              key={`pos-${i}`}
+              style={{ fontSize: 10, color: "#d1d7ea", lineHeight: 1.55, marginBottom: 3 }}
+            >
+              <span style={{ color: "#00f5a0", marginRight: 6 }}>+</span>
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rationale.concerns.length > 0 && (
+        <div>
+          <div style={{ fontSize: 9, color: "#ff6b35", letterSpacing: 1.5, marginBottom: 4 }}>
+            WATCH OUT
+          </div>
+          {rationale.concerns.map((line, i) => (
+            <div
+              key={`con-${i}`}
+              style={{ fontSize: 10, color: "#d1d7ea", lineHeight: 1.55, marginBottom: 3 }}
+            >
+              <span style={{ color: "#ff6b35", marginRight: 6 }}>−</span>
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rationale.positives.length === 0 && rationale.concerns.length === 0 && (
+        <div style={{ fontSize: 10, color: "#808898", lineHeight: 1.5 }}>
+          Neutral on both sides — neither phase nor positional fit moves the needle.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TradeRationale({ teamA, teamB, rationaleA, rationaleB }) {
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        padding: 14,
+        background: "rgba(255,255,255,0.025)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        borderRadius: 4,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: 2.5,
+          color: "#c0c8e0",
+          textTransform: "uppercase",
+          marginBottom: 12,
+          fontWeight: 600,
+        }}
+      >
+        Why each side might want this
+      </div>
+      <div
+        className="dyn-grid-2"
+        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}
+      >
+        <RationaleColumn team={teamA} rationale={rationaleA} accent="#ffd84d" />
+        <RationaleColumn team={teamB} rationale={rationaleB} accent="#00f5a0" />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Suggested balancing add — closes the fairness gap with the cleanest single
+// asset (player or pick) the underpaying side could throw in.
+// ---------------------------------------------------------------------------
+
+function BalanceSuggestion({ balance }) {
+  const sign = balance.gap > 0 ? "" : "";
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        padding: 14,
+        background: "rgba(255,216,77,0.05)",
+        border: "1px solid rgba(255,216,77,0.20)",
+        borderRadius: 4,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: 2.5,
+          color: "#ffd84d",
+          textTransform: "uppercase",
+          marginBottom: 8,
+          fontWeight: 600,
+        }}
+      >
+        Balance the trade
+      </div>
+      <div style={{ fontSize: 11, color: "#d1d7ea", marginBottom: 10, lineHeight: 1.5 }}>
+        Value gap of <strong style={{ color: "#ffd84d" }}>{Math.abs(balance.gap)}</strong>{" "}
+        favors <strong style={{ color: "#fff" }}>{balance.receivingTeam}</strong>.{" "}
+        <strong style={{ color: "#fff" }}>{balance.addingTeam}</strong> could add one of:
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {balance.options.map((opt, i) => {
+          const tone = opt.partnerFit ? "#00f5a0" : "#c0c8e0";
+          return (
+            <div
+              key={`${opt.type}-${i}-${opt.label}`}
+              style={{
+                padding: "8px 12px",
+                background: "rgba(255,255,255,0.03)",
+                border: `1px solid ${tone}33`,
+                borderRadius: 3,
+                minWidth: 180,
+              }}
+            >
+              <div style={{ fontSize: 10, color: tone, fontWeight: 700 }}>
+                {opt.label}
+              </div>
+              <div style={{ fontSize: 9, color: "#a0a8c0", marginTop: 4, letterSpacing: 0.3 }}>
+                worth ~{opt.value} pts
+                {opt.partnerFit && (
+                  <span style={{ color: "#00f5a0", marginLeft: 6 }}>· fits their need</span>
+                )}
+              </div>
+              <div style={{ fontSize: 9, color: "#808898", marginTop: 2 }}>
+                new gap: {opt.newAbsGap}
+              </div>
+            </div>
+          );
+        })}
+        {!balance.options.length && (
+          <div style={{ fontSize: 10, color: "#808898" }}>
+            No clean single-asset balance found — consider restructuring the package.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Post-Trade Impact — shows what a proposed trade does to each team's phase,
+// position-room ranks, and roster needs/surplus.
+// ---------------------------------------------------------------------------
+
+function PhaseDeltaCard({ side }) {
+  const before = side.teamPhase.before;
+  const after = side.teamPhase.after;
+  const scoreDelta = side.teamPhase.scoreDelta;
+  const ppgDelta = side.teamPhase.starterPpgDelta;
+  const phaseChanged = side.teamPhase.phaseChanged;
+
+  const PHASE_COLOR = {
+    contender: "#00f5a0",
+    retool:    "#ffd84d",
+    rebuild:   "#ff6b35",
+  };
+
+  const sign = (n) => (n > 0 ? "+" : "");
+
+  return (
+    <div
+      style={{
+        padding: "10px 12px",
+        background: "rgba(255,255,255,0.03)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: 4,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          color: "#c8cfe3",
+          letterSpacing: 1.5,
+          marginBottom: 8,
+          fontWeight: 600,
+        }}
+      >
+        {side.label.toUpperCase()}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <span
+          style={{
+            fontSize: 10,
+            padding: "2px 8px",
+            borderRadius: 2,
+            color: PHASE_COLOR[before?.phase] || "#a0a8c0",
+            background: `${PHASE_COLOR[before?.phase] || "#888"}18`,
+            border: `1px solid ${PHASE_COLOR[before?.phase] || "#888"}44`,
+            letterSpacing: 1,
+          }}
+        >
+          {before?.phase || "—"} {before?.score ?? "—"}
+        </span>
+        <span style={{ fontSize: 11, color: "#606878" }}>→</span>
+        <span
+          style={{
+            fontSize: 10,
+            padding: "2px 8px",
+            borderRadius: 2,
+            color: PHASE_COLOR[after?.phase] || "#a0a8c0",
+            background: `${PHASE_COLOR[after?.phase] || "#888"}18`,
+            border: `1px solid ${PHASE_COLOR[after?.phase] || "#888"}44`,
+            letterSpacing: 1,
+            fontWeight: phaseChanged ? 700 : 400,
+          }}
+        >
+          {after?.phase || "—"} {after?.score ?? "—"}
+        </span>
+        {phaseChanged && (
+          <span style={{ fontSize: 9, color: "#ffd84d", letterSpacing: 1 }}>PHASE SHIFT</span>
+        )}
+      </div>
+
+      <div style={{ fontSize: 10, color: "#a0a8c0" }}>
+        Phase score:{" "}
+        <span style={{ color: scoreDelta > 0 ? "#00f5a0" : scoreDelta < 0 ? "#ff6b35" : "#a0a8c0" }}>
+          {sign(scoreDelta)}{scoreDelta.toFixed(0)}
+        </span>
+        {Number.isFinite(ppgDelta) && Math.abs(ppgDelta) >= 0.05 && (
+          <>
+            {" · Starter PPG: "}
+            <span style={{ color: ppgDelta > 0 ? "#00f5a0" : "#ff6b35" }}>
+              {sign(ppgDelta)}{ppgDelta.toFixed(1)}
+            </span>
+          </>
+        )}
+        {" · Avg score: "}
+        <span style={{ color: side.avgScore.delta > 0 ? "#00f5a0" : side.avgScore.delta < 0 ? "#ff6b35" : "#a0a8c0" }}>
+          {sign(side.avgScore.delta)}{side.avgScore.delta.toFixed(1)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function PosRankDeltaRow({ side }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(4, 1fr)",
+        gap: 6,
+      }}
+    >
+      {["QB", "RB", "WR", "TE"].map((pos) => {
+        const r = side.posRanks[pos];
+        const before = r.before;
+        const after = r.after;
+        const delta = r.delta;
+        const tone =
+          delta == null ? "#606878" :
+          delta > 0 ? "#00f5a0" :
+          delta < 0 ? "#ff6b35" :
+          "#a0a8c0";
+        return (
+          <div
+            key={pos}
+            style={{
+              textAlign: "center",
+              padding: "6px 4px",
+              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: 3,
+            }}
+          >
+            <div style={{ fontSize: 9, color: "#606878", letterSpacing: 1 }}>{pos}</div>
+            <div style={{ fontSize: 11, color: "#d1d7ea", marginTop: 2 }}>
+              {before != null ? rankLabel(before) : "—"} → {after != null ? rankLabel(after) : "—"}
+            </div>
+            <div style={{ fontSize: 10, color: tone, marginTop: 2 }}>
+              {delta == null
+                ? "—"
+                : delta === 0
+                ? "no change"
+                : delta > 0
+                ? `▲ ${delta}`
+                : `▼ ${Math.abs(delta)}`}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function NeedSurplusDelta({ side }) {
+  const lines = [];
+  if (side.needs.resolved.length) {
+    lines.push({
+      label: "Needs resolved",
+      items: side.needs.resolved,
+      color: "#00f5a0",
+    });
+  }
+  if (side.needs.opened.length) {
+    lines.push({
+      label: "New holes",
+      items: side.needs.opened,
+      color: "#ff6b35",
+    });
+  }
+  if (side.weakRooms.opened.length) {
+    lines.push({
+      label: "Rooms now weak",
+      items: side.weakRooms.opened,
+      color: "#ff6b35",
+    });
+  }
+  if (side.weakRooms.resolved.length) {
+    lines.push({
+      label: "Rooms patched",
+      items: side.weakRooms.resolved,
+      color: "#00f5a0",
+    });
+  }
+  if (!lines.length) return null;
+
+  return (
+    <div style={{ marginTop: 8, fontSize: 10, color: "#a0a8c0", lineHeight: 1.6 }}>
+      {lines.map(({ label, items, color }) => (
+        <div key={label}>
+          <span style={{ color }}>{label}: </span>
+          {items.join(", ")}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PostTradeImpact({ simulation }) {
+  return (
+    <div
+      style={{
+        marginTop: 16,
+        padding: 16,
+        background: "rgba(123,140,255,0.04)",
+        border: "1px solid rgba(123,140,255,0.18)",
+        borderRadius: 4,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: 2.5,
+          color: "#7b8cff",
+          textTransform: "uppercase",
+          marginBottom: 12,
+          fontWeight: 600,
+        }}
+      >
+        What If? — Post-Trade Impact
+      </div>
+
+      <div
+        className="dyn-grid-2"
+        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}
+      >
+        <PhaseDeltaCard side={simulation.teamA} />
+        <PhaseDeltaCard side={simulation.teamB} />
+      </div>
+
+      <div style={{ fontSize: 9, color: "#606878", letterSpacing: 1.5, marginBottom: 6 }}>
+        POSITION ROOM RANKS · LEAGUE
+      </div>
+      <div className="dyn-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 10, color: "#ffd84d", marginBottom: 4 }}>
+            {simulation.teamA.label}
+          </div>
+          <PosRankDeltaRow side={simulation.teamA} />
+          <NeedSurplusDelta side={simulation.teamA} />
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: "#00f5a0", marginBottom: 4 }}>
+            {simulation.teamB.label}
+          </div>
+          <PosRankDeltaRow side={simulation.teamB} />
+          <NeedSurplusDelta side={simulation.teamB} />
+        </div>
+      </div>
     </div>
   );
 }

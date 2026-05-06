@@ -2,8 +2,14 @@
  * tradeEngine.js
  * Trade market calibration, offer-package building, and suggestion ranking.
  */
-import { POSITION_PRIORITY } from "../constants";
+import { POSITION_PRIORITY, IDEAL_PROPORTION } from "../constants";
 import { estimatePickValue } from "./marketValue";
+import {
+  classifyLeagueTeams,
+  getRosterNeeds,
+  getRosterSurplusPositions,
+} from "./rosterBuilder";
+import { assignPositionRanks } from "./playerGrading";
 
 // ---------------------------------------------------------------------------
 // Asset helpers
@@ -546,6 +552,535 @@ export function evaluateTrade(
       phaseAdj: teamBPhaseAdj,
       verdict: teamBNet >= -3 ? "good" : "overpay",
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Per-side rationale — explains *for each team* what's good (positives) and
+// what should give them pause (concerns) about the proposed deal. The rules
+// are intentionally phase-aware: "good" for a contender is "won't help" for a
+// rebuilder, and vice versa. Uses PPG, archetype tags, position needs/surplus,
+// and OC outlook so the bullets feel grounded in the data, not generic.
+// ---------------------------------------------------------------------------
+
+const PRODUCTIVE_VET_ARCHETYPES = new Set([
+  "Productive Vet",
+  "Short Term League Winner",
+  "Cornerstone",
+  "Foundational",
+]);
+
+export function buildTradeRationale({
+  ownTeam,
+  partnerTeam,
+  outgoing,   // assets this team SENDS
+  incoming,   // assets this team RECEIVES
+  leagueContext, // eslint-disable-line no-unused-vars
+}) {
+  const positives = [];
+  const concerns = [];
+
+  if (!ownTeam) return { positives, concerns };
+
+  const ownPhase = ownTeam.teamPhase?.phase || "retool";
+  const ownNeeds = new Set(ownTeam.needs || []);
+  const ownSurplus = new Set(ownTeam.surplusPositions || []);
+  const partnerPhase = partnerTeam?.teamPhase?.phase || "retool";
+
+  const incomingPlayers = (incoming || []).filter((a) => a.type === "player");
+  const outgoingPlayers = (outgoing || []).filter((a) => a.type === "player");
+  const incomingPicks = (incoming || []).filter((a) => a.type === "pick");
+  const outgoingPicks = (outgoing || []).filter((a) => a.type === "pick");
+
+  // ── Positives — incoming players ──────────────────────────────────────
+  for (const p of incomingPlayers) {
+    const ppg = parseFloat(p.ppg) || 0;
+    const archetype = p.archetype || "—";
+
+    if (ownNeeds.has(p.position)) {
+      positives.push(
+        `Fills your ${p.position} need: ${p.name} (${archetype}${ppg ? `, ${ppg.toFixed(1)} PPG` : ""}).`,
+      );
+    }
+
+    if (archetype === "Cornerstone" || archetype === "Foundational") {
+      positives.push(
+        `Acquires a ${archetype} — ${p.name}, age ${p.age}. Long-term core piece.`,
+      );
+    } else if (
+      ownPhase === "contender" &&
+      PRODUCTIVE_VET_ARCHETYPES.has(archetype) &&
+      ppg >= 11
+    ) {
+      positives.push(
+        `Plug-and-play starter for the title push: ${p.name} averaged ${ppg.toFixed(1)} PPG.`,
+      );
+    } else if (ownPhase === "rebuild" && p.age <= 23) {
+      positives.push(
+        `Young upside for the rebuild: ${p.name} (age ${p.age}, ${archetype}).`,
+      );
+    } else if (
+      ownPhase === "retool" &&
+      (archetype === "Upside Shot" || archetype === "Mainstay" || archetype === "Foundational")
+    ) {
+      positives.push(
+        `${p.name} (${archetype}) fits a retool window — productive without aging out.`,
+      );
+    }
+
+    if (p.ocOutlook && Math.abs(p.ocOutlook.multiplierPct) >= 2.5 && p.ocOutlook.multiplierPct > 0) {
+      positives.push(
+        `${p.team} OC outlook bumps ${p.name}'s Year-1 environment +${p.ocOutlook.multiplierPct.toFixed(1)}%.`,
+      );
+    }
+  }
+
+  // ── Positives — incoming picks ────────────────────────────────────────
+  if (incomingPicks.length) {
+    const earlyCount = incomingPicks.filter((p) => p.round <= 2).length;
+    if (ownPhase === "rebuild") {
+      positives.push(
+        earlyCount > 0
+          ? `${earlyCount} early pick${earlyCount > 1 ? "s" : ""} accelerate the rebuild.`
+          : `Picks add youth and flexibility to the rebuild.`,
+      );
+    } else if (ownPhase === "retool" && earlyCount > 0) {
+      positives.push(`${earlyCount} early pick${earlyCount > 1 ? "s" : ""} keep the retool optionality alive.`);
+    }
+  }
+
+  // ── Positives — outgoing assets (cashing in / shedding) ──────────────
+  for (const p of outgoingPlayers) {
+    const archetype = p.archetype || "—";
+    if (ownPhase === "rebuild" && p.age >= 28) {
+      positives.push(`Cashes in aging ${p.name} (age ${p.age}) before further decline.`);
+    } else if (
+      ownPhase === "rebuild" &&
+      (archetype === "Productive Vet" || archetype === "Short Term League Winner")
+    ) {
+      positives.push(`Sells ${archetype} ${p.name} at peak value to a contender.`);
+    } else if (ownSurplus.has(p.position) && archetype !== "Cornerstone") {
+      positives.push(`${p.name} comes from your surplus at ${p.position}.`);
+    }
+  }
+
+  // ── Concerns — outgoing assets ────────────────────────────────────────
+  for (const p of outgoingPlayers) {
+    const archetype = p.archetype || "—";
+    const ppg = parseFloat(p.ppg) || 0;
+    if (archetype === "Cornerstone") {
+      concerns.push(`Dealing a Cornerstone (${p.name}) — long-term identity loss.`);
+    } else if (
+      ownPhase === "contender" &&
+      ppg >= 12 &&
+      !ownSurplus.has(p.position)
+    ) {
+      concerns.push(
+        `${p.name} (${ppg.toFixed(1)} PPG) is part of your active lineup — needs a replacement plan.`,
+      );
+    } else if (
+      ownPhase === "rebuild" &&
+      p.age <= 23 &&
+      (archetype === "Foundational" || archetype === "Upside Shot")
+    ) {
+      concerns.push(
+        `Trading young upside (${p.name}, age ${p.age}) cuts against the rebuild.`,
+      );
+    }
+  }
+
+  // ── Concerns — incoming assets that don't fit phase ──────────────────
+  for (const p of incomingPlayers) {
+    const ppg = parseFloat(p.ppg) || 0;
+    if (ownPhase === "rebuild" && p.age >= 29) {
+      concerns.push(`Adding age-${p.age} ${p.name} doesn't fit the rebuild timeline.`);
+    } else if (
+      ownPhase === "contender" &&
+      p.age <= 21 &&
+      ppg < 6 &&
+      p.archetype !== "Foundational"
+    ) {
+      concerns.push(`${p.name} is unproven — won't help this year's lineup.`);
+    }
+  }
+
+  // ── Concerns — outgoing picks during a rebuild ───────────────────────
+  if (outgoingPicks.length && ownPhase === "rebuild") {
+    const earlyOut = outgoingPicks.filter((p) => p.round <= 2).length;
+    if (earlyOut > 0) {
+      concerns.push(
+        `Trading ${earlyOut} early pick${earlyOut > 1 ? "s" : ""} during a rebuild is a high-cost route.`,
+      );
+    }
+  }
+
+  // Phase-mismatch nudge — buyer/seller alignment is the cleanest deals
+  if (
+    (ownPhase === "contender" && partnerPhase === "rebuild") ||
+    (ownPhase === "rebuild" && partnerPhase === "contender")
+  ) {
+    positives.unshift(
+      ownPhase === "contender"
+        ? `Partner is rebuilding — they have the youth/picks you can't grow yourself.`
+        : `Partner is contending — they'll pay a premium for the win-now help.`,
+    );
+  }
+
+  // Dedupe + cap
+  const dedupe = (arr) => Array.from(new Set(arr)).slice(0, 5);
+  return {
+    ownPhase,
+    partnerPhase,
+    positives: dedupe(positives),
+    concerns: dedupe(concerns),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Suggested balancing asset — propose the cleanest single-asset add that
+// closes the fairness gap. Considers partner's positional needs and prefers
+// candidates that don't overshoot the gap by much. Returns up to 3 options.
+// ---------------------------------------------------------------------------
+
+export function suggestBalancingAsset({
+  sideA,
+  sideB,
+  teamA,
+  teamB,
+  valueA,
+  valueB,
+  leagueContext,
+  tradeMarket,
+  playerMarketMap,
+}) {
+  if (!teamA || !teamB) return null;
+  const gap = (valueB || 0) - (valueA || 0);
+  if (Math.abs(gap) <= 3) return null; // already fair
+
+  const adderIsA = gap > 0;
+  const adder = adderIsA ? teamA : teamB;
+  const partner = adderIsA ? teamB : teamA;
+  const need = Math.abs(gap);
+
+  const inTrade = new Set([
+    ...(sideA || []).map((a) => (a.type === "pick" ? `pick:${a.label}` : `player:${a.id}`)),
+    ...(sideB || []).map((a) => (a.type === "pick" ? `pick:${a.label}` : `player:${a.id}`)),
+  ]);
+
+  const partnerNeeds = new Set(partner.needs || []);
+
+  const candidates = [];
+
+  for (const p of adder.tradeablePlayers || []) {
+    const key = `player:${p.id}`;
+    if (inTrade.has(key)) continue;
+    const value = getAssetTradeValue(
+      { ...p, type: "player" },
+      playerMarketMap,
+      leagueContext,
+      tradeMarket,
+    );
+    if (value <= 0) continue;
+    candidates.push({
+      type: "player",
+      asset: { ...p, type: "player" },
+      value,
+      partnerFit: partnerNeeds.has(p.position),
+      label: `${p.name} (${p.position}, ${p.score})`,
+    });
+  }
+
+  for (const pick of adder.picks || []) {
+    if (pick.round > 4) continue;
+    const key = `pick:${pick.label}`;
+    if (inTrade.has(key)) continue;
+    const value = estimatePickValue(pick, leagueContext, tradeMarket);
+    if (value <= 0) continue;
+    candidates.push({
+      type: "pick",
+      asset: { ...pick, type: "pick", value },
+      value,
+      partnerFit: false,
+      label: pick.label,
+    });
+  }
+
+  if (!candidates.length) return null;
+
+  // Score: prefer assets that close the gap with minimum overshoot,
+  // bonus for partner positional fit, mild penalty for big overshoots.
+  for (const c of candidates) {
+    const distance = Math.abs(c.value - need);
+    let score = -distance + (c.partnerFit ? 6 : 0);
+    if (c.value > need + 12) score -= (c.value - need - 12) * 0.5;
+    if (c.value < need - 12) score -= (need - c.value - 12) * 0.3;
+    c.score = score;
+  }
+  candidates.sort((a, b) => b.score - a.score);
+
+  // Filter out candidates that wildly overshoot the gap — those would just
+  // flip the trade in the other direction, not balance it.
+  const usable = candidates.filter(
+    (c) => c.value <= need + 18 && c.value >= need - 18,
+  );
+
+  const top = (usable.length ? usable : candidates).slice(0, 3);
+
+  const newGap = (c) =>
+    Math.abs((adderIsA ? valueA + c.value : valueA) - (adderIsA ? valueB : valueB + c.value));
+
+  return {
+    side: adderIsA ? "A" : "B",
+    addingTeam: adder.label,
+    receivingTeam: partner.label,
+    gap: Math.round(gap),
+    options: top.map((c) => ({
+      type: c.type,
+      label: c.label,
+      value: Math.round(c.value),
+      partnerFit: c.partnerFit,
+      newAbsGap: Math.round(newGap(c)),
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// What-If trade simulation
+// ---------------------------------------------------------------------------
+
+function projectRosterAfterTrade(
+  team,
+  outgoingAssets,
+  incomingAssets,
+  leagueContext,
+  playerMarketMap,
+) {
+  const outgoingPlayerIds = new Set(
+    outgoingAssets.filter((a) => a.type === "player").map((a) => String(a.id)),
+  );
+  const outgoingPickKeys = new Set(
+    outgoingAssets.filter((a) => a.type === "pick").map((a) => a.label),
+  );
+
+  // Build new enriched player list — drop outgoing, append full incoming objects.
+  const newEnriched = team.enriched.filter(
+    (p) => !outgoingPlayerIds.has(String(p.id)),
+  );
+  for (const asset of incomingAssets) {
+    if (asset.type !== "player") continue;
+    const full = playerMarketMap.get(String(asset.id)) || asset;
+    newEnriched.push(full);
+  }
+
+  // Rebuild byPos sorted by score, mirroring buildRosterSnapshot.
+  const newByPos = {};
+  for (const pos of POSITION_PRIORITY) {
+    newByPos[pos] = newEnriched
+      .filter((p) => p.position === pos)
+      .sort((a, b) => b.score - a.score);
+  }
+
+  // Proportions, needs, and surplus all derive from byPos + total score.
+  const totalScore =
+    newEnriched.reduce((sum, p) => sum + (p.score || 0), 0) || 1;
+  const newProportions = {};
+  for (const pos of POSITION_PRIORITY) {
+    const posScore = newByPos[pos].reduce((sum, p) => sum + (p.score || 0), 0);
+    const actual = posScore / totalScore;
+    const ideal = IDEAL_PROPORTION[pos];
+    newProportions[pos] = {
+      actual: Math.round(actual * 100),
+      ideal: Math.round(ideal * 100),
+      delta: Math.round((actual - ideal) * 100),
+    };
+  }
+
+  // Weak rooms: same heuristic as rosterBuilder.
+  const newWeakRooms = POSITION_PRIORITY.filter((pos) => {
+    const room = newByPos[pos];
+    if (room.length < 2) return true;
+    const buyCount = room.filter((p) => p.verdict === "buy").length;
+    if (buyCount === 0) return true;
+    const avg = room.reduce((s, p) => s + (p.score || 0), 0) / room.length;
+    if (avg < 45) return true;
+    if (buyCount <= 1 && avg < 58) return true;
+    return false;
+  });
+
+  const newNeeds = getRosterNeeds(newByPos, newProportions);
+  const newSurplus = getRosterSurplusPositions(
+    newByPos,
+    newProportions,
+    leagueContext.isSuperflex,
+  );
+
+  // Picks: drop outgoing labels, append incoming.
+  const newPicks = team.picks
+    .filter((p) => !outgoingPickKeys.has(p.label))
+    .slice();
+  for (const asset of incomingAssets) {
+    if (asset.type !== "pick") continue;
+    newPicks.push({
+      season: asset.season,
+      round: asset.round,
+      isOwn: false,
+      label: asset.label,
+    });
+  }
+
+  const avgScore = newEnriched.length
+    ? Math.round(
+        newEnriched.reduce((s, p) => s + (p.score || 0), 0) / newEnriched.length,
+      )
+    : 0;
+  const avgAge = newEnriched.length
+    ? (
+        newEnriched.reduce((s, p) => s + (p.age || 0), 0) / newEnriched.length
+      ).toFixed(1)
+    : "N/A";
+
+  // Return a *clone* with the new derived fields. Drop teamPhase + posRanks
+  // so classifyLeagueTeams / assignPositionRanks recompute cleanly when called
+  // against the simulated league.
+  return {
+    ...team,
+    enriched: newEnriched,
+    byPos: newByPos,
+    proportions: newProportions,
+    weakRooms: newWeakRooms,
+    needs: newNeeds,
+    surplusPositions: newSurplus,
+    picks: newPicks,
+    avgScore,
+    avgAge,
+    teamPhase: null,
+    posRanks: undefined,
+  };
+}
+
+function buildPosRanksDelta(beforePosRanks, afterPosRanks) {
+  const out = {};
+  for (const pos of POSITION_PRIORITY) {
+    const b = beforePosRanks?.[pos];
+    const a = afterPosRanks?.[pos];
+    out[pos] = {
+      before: b?.rank ?? null,
+      after: a?.rank ?? null,
+      // Positive delta = improvement (rank went DOWN, e.g. 8 → 3 = +5).
+      delta:
+        b?.rank != null && a?.rank != null ? b.rank - a.rank : null,
+      beforeColor: b?.color ?? null,
+      afterColor: a?.color ?? null,
+      qualityBefore: b?.quality ?? null,
+      qualityAfter: a?.quality ?? null,
+    };
+  }
+  return out;
+}
+
+function diffNeedsSurplus(beforeArr, afterArr) {
+  const before = new Set(beforeArr || []);
+  const after = new Set(afterArr || []);
+  const resolved = [...before].filter((p) => !after.has(p));
+  const opened = [...after].filter((p) => !before.has(p));
+  return { resolved, opened, before: [...before], after: [...after] };
+}
+
+/**
+ * Simulate a proposed trade and return the post-trade phase + position-rank
+ * deltas for both sides.
+ *
+ * sideA = assets going FROM team A to team B (outgoing for A, incoming for B).
+ * sideB = assets going FROM team B to team A.
+ *
+ * The rest of the league is held fixed — non-participating teams contribute
+ * their existing rosters to the simulated league for league-relative ranking.
+ * We shallow-clone every team in the simulated league so classifyLeagueTeams
+ * and assignPositionRanks (which mutate) don't corrupt the live state.
+ */
+export function simulateTrade(
+  teamA,
+  teamB,
+  sideA,
+  sideB,
+  leagueTeams,
+  leagueContext,
+  playerMarketMap,
+) {
+  if (!teamA || !teamB) return null;
+  if ((!sideA?.length && !sideB?.length)) return null;
+
+  const projectedA = projectRosterAfterTrade(
+    teamA,
+    sideA,
+    sideB,
+    leagueContext,
+    playerMarketMap,
+  );
+  const projectedB = projectRosterAfterTrade(
+    teamB,
+    sideB,
+    sideA,
+    leagueContext,
+    playerMarketMap,
+  );
+
+  // Build the simulated league: every team gets a shallow clone so the
+  // mutators below don't write into live objects.
+  const simLeague = leagueTeams.map((t) => {
+    if (t.rosterId === teamA.rosterId) return projectedA;
+    if (t.rosterId === teamB.rosterId) return projectedB;
+    return { ...t, teamPhase: null, posRanks: undefined };
+  });
+
+  classifyLeagueTeams(simLeague, leagueContext);
+  assignPositionRanks(simLeague, leagueContext.isSuperflex);
+
+  const simA = simLeague.find((t) => t.rosterId === teamA.rosterId);
+  const simB = simLeague.find((t) => t.rosterId === teamB.rosterId);
+
+  const buildSide = (before, after) => ({
+    rosterId: before.rosterId,
+    label: before.label,
+    teamPhase: {
+      before: before.teamPhase
+        ? {
+            phase: before.teamPhase.phase,
+            score: before.teamPhase.score,
+            starterPPG: before.teamPhase.starterPPG,
+          }
+        : null,
+      after: after.teamPhase
+        ? {
+            phase: after.teamPhase.phase,
+            score: after.teamPhase.score,
+            starterPPG: after.teamPhase.starterPPG,
+          }
+        : null,
+      scoreDelta:
+        (after.teamPhase?.score ?? 0) - (before.teamPhase?.score ?? 0),
+      starterPpgDelta:
+        (after.teamPhase?.starterPPG ?? 0) -
+        (before.teamPhase?.starterPPG ?? 0),
+      phaseChanged:
+        before.teamPhase?.phase !== after.teamPhase?.phase,
+    },
+    posRanks: buildPosRanksDelta(before.posRanks, after.posRanks),
+    needs: diffNeedsSurplus(before.needs, after.needs),
+    surplus: diffNeedsSurplus(before.surplusPositions, after.surplusPositions),
+    weakRooms: diffNeedsSurplus(before.weakRooms, after.weakRooms),
+    avgScore: {
+      before: parseFloat(before.avgScore) || 0,
+      after: parseFloat(after.avgScore) || 0,
+      delta:
+        (parseFloat(after.avgScore) || 0) -
+        (parseFloat(before.avgScore) || 0),
+    },
+  });
+
+  return {
+    teamA: buildSide(teamA, simA),
+    teamB: buildSide(teamB, simB),
   };
 }
 
