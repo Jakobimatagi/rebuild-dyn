@@ -9,6 +9,7 @@ import { buildPredictionContext } from './predictionEngine';
 import { buildLeagueActivity } from './activityEngine';
 import { assignPositionRanks as _assignPositionRanks } from './playerGrading';
 import { buildDraftRecap } from './draftRecap';
+import { buildOcOutlookContext } from './ocAdjustment';
 
 // Re-exports — consumers that import from 'analysis' still work unchanged.
 export { DEFAULT_SCORING_WEIGHTS, draftTierLabel } from './scoringEngine';
@@ -120,6 +121,21 @@ export function buildRosterAnalysis(
 
   const sourceRosters = rosters.length ? rosters : [myRoster];
 
+  // OC outlook context — keyed by NFL team abbr → per-position multiplier and
+  // stint history for the upcoming NFL season's coordinator. Pass `null`
+  // historicalRoster falls through to current player.team in teamFantasyRanks
+  // (acceptable approximation; caveats in ocAdjustment.js).
+  const ocTargetSeason = lastSeasonYear + 1;
+  const ocOutlookContext = buildOcOutlookContext({
+    targetSeason: ocTargetSeason,
+    statsByYear: [
+      { year: lastSeasonYear,     stats: stats24 },
+      { year: lastSeasonYear - 1, stats: stats23 },
+      { year: lastSeasonYear - 2, stats: stats22 },
+    ],
+    players,
+  });
+
   const leagueTeams = sourceRosters.map((roster) =>
     buildRosterSnapshot(
       roster,
@@ -138,6 +154,7 @@ export function buildRosterAnalysis(
       lastSeasonYear,
       predictionContext,
       rosterAuditContext,
+      ocOutlookContext,
     ),
   );
 
@@ -261,5 +278,10 @@ export function buildRosterAnalysis(
     },
     draftRecap,
     allDraftRecaps,
+    ocOutlook: {
+      targetSeason: ocTargetSeason,
+      enabled: !!ocOutlookContext,
+      byTeam: ocOutlookContext || {},
+    },
   };
 }
