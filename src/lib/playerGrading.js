@@ -21,6 +21,17 @@ export function getColor(verdict) {
   );
 }
 
+// Stash player: young, didn't play, no production. Held for dynasty upside,
+// not a contributor to the current room. Excluded from grading so a future-
+// looking bench piece doesn't get slotted as a "starter" via dynasty score.
+function isStashPlayer(player) {
+  if (!player) return false;
+  const yearsExp = Number(player.yearsExp ?? 99);
+  const gp24 = Number(player.gp24 ?? 17);
+  const cur = Number(player.currentPctile ?? 0);
+  return yearsExp <= 2 && gp24 < 8 && cur < 25;
+}
+
 // Computes the raw quality of a position room — production-tilted blend of
 // dynasty value and actual 2024 PPG, weighted near-flat across the
 // starter+flex+depth pool. Returns a number (0-100) used to rank rooms
@@ -36,12 +47,15 @@ export function getColor(verdict) {
 export function computeRoomQuality(players, pos = null, isSuperflex = null) {
   if (!players.length) return null;
 
+  const graded = players.filter((p) => !isStashPlayer(p));
+  if (!graded.length) return null;
+
   const keepCount = pos && isSuperflex !== null
     ? getKeepCount(pos, isSuperflex)
-    : players.length;
+    : graded.length;
 
   // byPos is pre-sorted descending by score in rosterBuilder.
-  const core = players.slice(0, keepCount);
+  const core = graded.slice(0, keepCount);
 
   let weightedSum = 0;
   let weightTotal = 0;
@@ -140,11 +154,13 @@ export function computePositionGrade(players, pos, isSuperflex) {
   const weights = GRADE_SLOT_WEIGHTS[key];
   if (!weights) return null;
 
+  const graded = (players || []).filter((p) => !isStashPlayer(p));
+
   let weightedSum = 0;
   let weightTotal = 0;
   for (let i = 0; i < weights.length; i++) {
     const w = weights[i];
-    weightedSum += slotQuality(players?.[i], pos, i) * w;
+    weightedSum += slotQuality(graded[i], pos, i) * w;
     weightTotal += w;
   }
   const raw = weightTotal > 0 ? weightedSum / weightTotal : 0;
