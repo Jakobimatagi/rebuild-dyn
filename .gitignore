@@ -4,6 +4,7 @@ dist/
 
 # Local Claude settings (contain machine-specific paths)
 .claude/settings.local.json
+.claude/worktrees/
 
 # Local env files — secrets stay out of the repo
 .env
