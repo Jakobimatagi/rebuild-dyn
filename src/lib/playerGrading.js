@@ -21,15 +21,21 @@ export function getColor(verdict) {
   );
 }
 
-// Stash player: young, didn't play, no production. Held for dynasty upside,
-// not a contributor to the current room. Excluded from grading so a future-
-// looking bench piece doesn't get slotted as a "starter" via dynasty score.
+// Stash player: young (≤2 yrs exp) and below the position's "real contributor"
+// PPG floor. Held for dynasty upside, not anchoring the current room. Excluded
+// from grading so a future-looking bench piece doesn't get slotted as a
+// "starter" via dynasty score. Position-aware floors reject WR4-tier output
+// regardless of how many games were played.
+const STASH_PPG_FLOOR = { QB: 14, RB: 8, WR: 8, TE: 5 };
+
 function isStashPlayer(player) {
   if (!player) return false;
   const yearsExp = Number(player.yearsExp ?? 99);
-  const gp24 = Number(player.gp24 ?? 17);
-  const cur = Number(player.currentPctile ?? 0);
-  return yearsExp <= 2 && gp24 < 8 && cur < 25;
+  if (yearsExp > 2) return false;
+  const floor = STASH_PPG_FLOOR[player.position];
+  if (floor == null) return false;
+  const ppg = parseFloat(player.ppg ?? 0) || 0;
+  return ppg < floor;
 }
 
 // Computes the raw quality of a position room — production-tilted blend of
