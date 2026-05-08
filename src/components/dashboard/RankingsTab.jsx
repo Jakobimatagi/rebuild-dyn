@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { buildMarketPulse } from "../../lib/marketPulse";
 import { styles } from "../../styles";
 
 const POSITIONS = ["ALL", "QB", "RB", "WR", "TE"];
@@ -57,6 +58,8 @@ export default function RankingsTab({ rosterAuditSource }) {
     return list.slice(0, 200);
   }, [rankings, posFilter]);
 
+  const pulse = useMemo(() => buildMarketPulse(rankings), [rankings]);
+
   if (!rosterAuditSource?.enabled || rankings.length === 0) {
     return (
       <div style={{ ...styles.card, textAlign: "center", padding: 40, color: "#8a91a8" }}>
@@ -87,6 +90,8 @@ export default function RankingsTab({ rosterAuditSource }) {
         </a>
         {" "}· {rosterAuditSource.totalPlayers} players
       </div>
+
+      {pulse && <MarketPulsePanel pulse={pulse} />}
 
       {/* Position filter */}
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
@@ -249,3 +254,218 @@ const tdStyle = {
   padding: "8px 10px",
   whiteSpace: "nowrap",
 };
+
+// ---------------------------------------------------------------------------
+// Market Pulse panel — value-weighted position/tier deltas + biggest movers
+// ---------------------------------------------------------------------------
+
+function fmtSigned(n, decimals = 1) {
+  const v = Number(n) || 0;
+  const sign = v > 0 ? "+" : "";
+  return `${sign}${v.toFixed(decimals)}`;
+}
+
+function pulseTone(v) {
+  if (v >= 1) return "#00f5a0";
+  if (v >= 0.25) return "#7ed56f";
+  if (v <= -1) return "#ff6b35";
+  if (v <= -0.25) return "#ffd84d";
+  return "#a8aec7";
+}
+
+function PulseDelta({ value, suffix = "" }) {
+  const tone = pulseTone(value);
+  const arrow = value > 0.05 ? "▲" : value < -0.05 ? "▼" : "•";
+  return (
+    <span style={{ color: tone, fontWeight: 700, fontSize: 12 }}>
+      {arrow} {fmtSigned(value)}
+      {suffix && <span style={{ fontSize: 9, color: "#8a91a8", marginLeft: 2 }}>{suffix}</span>}
+    </span>
+  );
+}
+
+function PositionPulseCard({ pos, data }) {
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.025)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 6,
+        padding: 12,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ fontSize: 12, color: "#fff", fontWeight: 700, letterSpacing: 1 }}>
+          {pos}
+        </div>
+        <div style={{ fontSize: 9, color: "#8a91a8" }}>{data.count} players</div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 10, color: "#8a91a8" }}>7d trend</span>
+          <PulseDelta value={data.avg7d} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 10, color: "#8a91a8" }}>30d trend</span>
+          <PulseDelta value={data.avg30d} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 10, color: "#8a91a8" }}>Up / down</span>
+          <span style={{ fontSize: 11, color: "#d9deef" }}>
+            <span style={{ color: "#00f5a0" }}>{data.upShare}%</span>
+            <span style={{ color: "#5a6280", margin: "0 4px" }}>/</span>
+            <span style={{ color: "#ff6b35" }}>{data.downShare}%</span>
+          </span>
+        </div>
+      </div>
+
+      {data.risers30d?.[0] && (
+        <div style={{ marginBottom: 4 }}>
+          <span style={{ fontSize: 9, color: "#00f5a0", letterSpacing: 1.2, marginRight: 4 }}>↑</span>
+          <span style={{ fontSize: 10, color: "#d9deef" }}>{data.risers30d[0].name}</span>
+          <span style={{ fontSize: 9, color: "#00f5a0", marginLeft: 4 }}>
+            {fmtSigned(data.risers30d[0].trend30d, 0)}
+          </span>
+        </div>
+      )}
+      {data.fallers30d?.[0] && (
+        <div>
+          <span style={{ fontSize: 9, color: "#ff6b35", letterSpacing: 1.2, marginRight: 4 }}>↓</span>
+          <span style={{ fontSize: 10, color: "#d9deef" }}>{data.fallers30d[0].name}</span>
+          <span style={{ fontSize: 9, color: "#ff6b35", marginLeft: 4 }}>
+            {fmtSigned(data.fallers30d[0].trend30d, 0)}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MoverList({ title, items, accent }) {
+  if (!items?.length) {
+    return (
+      <div
+        style={{
+          background: "rgba(255,255,255,0.025)",
+          border: "1px solid rgba(255,255,255,0.06)",
+          borderRadius: 6,
+          padding: 12,
+        }}
+      >
+        <div style={{ fontSize: 10, color: accent, letterSpacing: 1.5, marginBottom: 6, fontWeight: 700 }}>
+          {title}
+        </div>
+        <div style={{ fontSize: 11, color: "#8a91a8" }}>No notable moves.</div>
+      </div>
+    );
+  }
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.025)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 6,
+        padding: 12,
+      }}
+    >
+      <div style={{ fontSize: 10, color: accent, letterSpacing: 1.5, marginBottom: 8, fontWeight: 700 }}>
+        {title}
+      </div>
+      {items.slice(0, 5).map((m, i) => (
+        <div
+          key={`${m.name}-${i}`}
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            fontSize: 11,
+            padding: "3px 0",
+            borderTop: i === 0 ? "none" : "1px solid rgba(255,255,255,0.04)",
+          }}
+        >
+          <span style={{ color: "#e8e8f0" }}>
+            {m.name}
+            <span style={{ color: "#8a91a8", marginLeft: 6, fontSize: 9 }}>
+              {m.position}
+              {m.team ? ` · ${m.team}` : ""}
+            </span>
+          </span>
+          <span style={{ color: accent, fontWeight: 700, fontSize: 11 }}>
+            {fmtSigned(m.trend7d, 0)}
+            <span style={{ fontSize: 9, color: "#8a91a8", marginLeft: 4 }}>
+              7d · {fmtSigned(m.trend30d, 0)} 30d
+            </span>
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MarketPulsePanel({ pulse }) {
+  const positions = Object.entries(pulse.positions || {});
+  if (!positions.length) return null;
+
+  return (
+    <div
+      style={{
+        ...styles.card,
+        marginBottom: 18,
+        borderColor: "rgba(6,182,212,0.22)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          flexWrap: "wrap",
+          gap: 8,
+          marginBottom: 12,
+        }}
+      >
+        <div>
+          <div style={styles.sectionLabel}>📊 Market Pulse</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>
+            Value-weighted RA trend deltas across {pulse.summary?.sampleSize || 0} players. Movers
+            filtered to meaningful-value assets only.
+          </div>
+        </div>
+      </div>
+
+      <div
+        className="dyn-grid-4"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 10,
+          marginBottom: 14,
+        }}
+      >
+        {positions.map(([pos, data]) => (
+          <PositionPulseCard key={pos} pos={pos} data={data} />
+        ))}
+      </div>
+
+      <div
+        className="dyn-grid-2"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 10,
+        }}
+      >
+        <MoverList title="🔥 BIGGEST RISERS (7d)" items={pulse.risers7d} accent="#00f5a0" />
+        <MoverList title="🧊 BIGGEST FALLERS (7d)" items={pulse.fallers7d} accent="#ff6b35" />
+      </div>
+    </div>
+  );
+}

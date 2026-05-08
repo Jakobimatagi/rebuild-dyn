@@ -378,3 +378,18 @@ export function getConfidence(player) {
 
   return Math.round(Math.max(0, Math.min(1, raw)) * 100);
 }
+
+// Bucket the 0-100 confidence into a tier the UI can use to qualify
+// recommendations. "speculative" flags rookies / very-low-sample players
+// whose verdict is driven by archetype + draft pedigree more than by
+// observed production. "high" is reserved for proven contributors with
+// a stable trend.
+export function getConvictionTier(player) {
+  const confidence = player.confidence ?? getConfidence(player);
+  const gp24 = player.gp24 ?? 0;
+  const yearsExp = player.yearsExp ?? 0;
+
+  if (confidence < 35 || (gp24 < 4 && yearsExp <= 1)) return "speculative";
+  if (confidence >= 65 && gp24 >= 10) return "high";
+  return "standard";
+}
