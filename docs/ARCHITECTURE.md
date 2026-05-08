@@ -17,7 +17,7 @@ Single source of truth for how this app is structured. Replaces the seven scatte
   - [Env vars](#env-vars)
   - [Directory map](#directory-map)
 - [API layer (`api/`)](#api-layer-api)
-  - [Proxies: cfbd, fleaflicker, rosteraudit](#proxies)
+  - [Proxies: fleaflicker, rosteraudit](#proxies)
   - [Gemini AI endpoints](#gemini-ai-endpoints)
   - [Historical data](#historical-data)
   - [Security notes](#security-notes)
@@ -45,7 +45,7 @@ Dynasty OS is a browser-only dynasty fantasy football analysis tool. Users conne
 ### Tech stack
 - **React 18 + Vite 6** — SPA, no React Router (App.jsx conditionally renders screens via `step` state). All styling via inline style objects in `src/styles.js` plus Tailwind classes on two standalone admin/public pages.
 - **Supabase** — used only for the Rookie Rankings + Prospector admin pages (prospect DB + expert ranking lists). The main analysis pipeline has no backend.
-- **Vercel** — hosts the SPA + 8 serverless functions in `api/`: third-party data proxies (`cfbd`, `fleaflicker`, `rosteraudit`), Gemini-backed AI endpoints (`ai-analyze`, `ai-oc-analyze`, `ai-oracle-board`, `ai-vs-evaluate`), and an nflverse historical-roster fetcher (`historical-rosters`). Note: `api/cfbd.js` currently has no client caller and may be dead code — see `CLEANUP.md`.
+- **Vercel** — hosts the SPA + 7 serverless functions in `api/`: third-party data proxies (`fleaflicker`, `rosteraudit`), Gemini-backed AI endpoints (`ai-analyze`, `ai-oc-analyze`, `ai-oracle-board`, `ai-vs-evaluate`), and an nflverse historical-roster fetcher (`historical-rosters`).
 - **localStorage** — all caching; no cookies or server sessions for the main flow.
 
 ### Supported platforms
@@ -110,7 +110,6 @@ From `src/constants.js` — 11 archetypes assigned by `playerGrading.getArchetyp
 ### Env vars
 | Var | Required | Notes |
 |---|---|---|
-| `VITE_CFBD_API_KEY` | Server-side only | Set in Vercel project env for the `api/cfbd.js` proxy |
 | `GEMINI_API_KEY` | Server-side only | Used by all four `api/ai-*.js` handlers |
 | `VITE_ENABLE_STRATEGY_PLANNER` | Optional | Set to `"true"` to unhide the Strategy Planner tab without the access-code gate |
 | `VITE_SUPABASE_URL` | Client | Used by `src/lib/supabase.js` for rookie prospector |
@@ -118,7 +117,7 @@ From `src/constants.js` — 11 archetypes assigned by `playerGrading.getArchetyp
 
 ### Directory map
 ```
-api/                  Vercel serverless functions: data proxies (cfbd, fleaflicker, rosteraudit), Gemini AI endpoints (ai-*), nflverse history (historical-rosters)
+api/                  Vercel serverless functions: data proxies (fleaflicker, rosteraudit), Gemini AI endpoints (ai-*), nflverse history (historical-rosters)
 src/
   App.jsx             Orchestrator: step state, data fetching, weight recalc
   constants.js        POSITION_PRIORITY, IDEAL_PROPORTION, ARCHETYPE_META/DESC
@@ -157,30 +156,20 @@ docs/
 
 ## API layer (`api/`)
 
-Eight Vercel serverless functions, split across three handler styles:
+Seven Vercel serverless functions, split across three handler styles:
 
-1. **Path-allowlist proxies** — `cfbd.js`, `fleaflicker.js`, `rosteraudit.js`. Take a `path` query parameter selecting the upstream route from a hard-coded whitelist; remaining params are forwarded verbatim. Keep secrets server-side, enforce allowlists (prevent open-proxy abuse), set edge cache headers.
+1. **Path-allowlist proxies** — `fleaflicker.js`, `rosteraudit.js`. Take a `path` query parameter selecting the upstream route from a hard-coded whitelist; remaining params are forwarded verbatim. Keep secrets server-side, enforce allowlists (prevent open-proxy abuse), set edge cache headers.
 2. **Gemini-backed AI endpoints** — `ai-analyze.js`, `ai-oc-analyze.js`, `ai-oracle-board.js`, `ai-vs-evaluate.js`. POST handlers that wrap a Gemini 2.5 Flash call with a feature-specific system prompt. All four share `GEMINI_API_KEY`. Used by the AI-assisted features in the dashboard and admin pages.
 3. **Specific-upstream data fetcher** — `historical-rosters.js`. Pulls nflverse-data's `roster_{year}.csv` release from GitHub and collapses it to `{ sleeper_id: { team, position, name } }` for historical room analysis.
 
 Every handler uses the default Node runtime export signature `(req, res)`. Method is not validated by the proxies (upstreams reject non-GET); the AI endpoints are POST-only by upstream contract.
 
 Client-side wrappers:
-- Proxies: `src/lib/fleaflickerApi.js`, `src/lib/rosterAuditApi.js`. (`api/cfbd.js` has no current client caller — see `CLEANUP.md`.)
+- Proxies: `src/lib/fleaflickerApi.js`, `src/lib/rosterAuditApi.js`.
 - AI: `src/lib/aiAdviceApi.js` (→ `ai-analyze`), `src/lib/aiOcAnalyzeApi.js`, `src/lib/aiOracleBoardApi.js`, `src/lib/aiVsEvaluateApi.js`.
 - Historical: `src/lib/historicalRostersApi.js`.
 
 ### Proxies
-
-#### cfbd.js — CollegeFootballData.com proxy
-Proxies `https://api.collegefootballdata.com/<path>` with a Bearer token read from `process.env.VITE_CFBD_API_KEY` (the `VITE_` prefix is historical — it is server-only despite the name).
-
-- Allowlist: `player/usage`, `stats/player/season`. Anything else returns 403 `{ error: "Endpoint not allowed" }`.
-- Missing key: 500 `{ error: "CFBD key not configured on server" }`.
-- Query params: all keys other than `path` are URL-encoded and appended. Callers typically pass `year` and `position`.
-- Adaptive caching based on `year`: if `year < currentYear` (historical), `s-maxage=2592000` (30 days) with `stale-while-revalidate=5184000` (60 days). Current/future season uses `s-maxage=86400` (1 day) with `swr=172800` (2 days). This dramatically reduces CFBD quota burn for past-season lookups.
-- Response: upstream body is returned as-is via `res.send(text)` with `Content-Type: application/json` and the upstream status. Errors during fetch return 502.
-- CORS: none set — relies on same-origin via Vercel.
 
 #### fleaflicker.js — Fleaflicker API proxy
 Proxies `https://www.fleaflicker.com/api/<path>`. No auth required upstream; the endpoint is public but CORS-blocked from the browser, hence the proxy.
@@ -220,8 +209,8 @@ Env vars: all four require `GEMINI_API_KEY` (server-only). Free tier is 1.5k req
 **historical-rosters.js** — pulls `https://github.com/nflverse/nflverse-data/releases/download/rosters/roster_{year}.csv` and collapses per-week records to a single primary-team-per-player map (`{ sleeper_id: { team, position, name } }`) using the team the player spent the most weeks on. Validates `year` is 2009–2030. Past seasons cache aggressively; current season caches a day. No env vars; nflverse releases are public.
 
 ### Security notes
-- The three proxy endpoints enforce a hard allowlist so attackers cannot pivot them into open proxies.
-- Secrets handled: `VITE_CFBD_API_KEY` (cfbd.js — name has historical `VITE_` prefix but is server-only), `GEMINI_API_KEY` (all four ai-*). Set in Vercel project env; local dev reads from `.env.local`.
+- The two proxy endpoints enforce a hard allowlist so attackers cannot pivot them into open proxies.
+- Secrets handled: `GEMINI_API_KEY` (all four ai-*). Set in Vercel project env; local dev reads from `.env.local`.
 - None of the proxy handlers validate HTTP method — a mutating verb would still be forwarded. Upstreams all reject non-GET.
 
 ---

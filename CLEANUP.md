@@ -18,10 +18,10 @@ Working doc for the `kobim/cleanup` branch. Each item is independently actionabl
 - Action: add a line `.claude/worktrees/` under the existing `.claude/settings.local.json` entry. (The whole `.claude/` directory is intentionally not ignored because you presumably want to track project skills/agents, so a targeted ignore is correct.)
 
 ### 3. Stale "three serverless functions" claim in agent docs
-- The repo has **8** files in `api/` (`ai-analyze.js`, `ai-oc-analyze.js`, `ai-oracle-board.js`, `ai-vs-evaluate.js`, `cfbd.js`, `fleaflicker.js`, `historical-rosters.js`, `rosteraudit.js`).
+- The repo has **7** files in `api/` (`ai-analyze.js`, `ai-oc-analyze.js`, `ai-oracle-board.js`, `ai-vs-evaluate.js`, `fleaflicker.js`, `historical-rosters.js`, `rosteraudit.js`).
 - Stale references:
   - [feature_claude.md:9](feature_claude.md) — "three serverless functions in `api/`"
-  - [api/feature_claude.md:4](api/feature_claude.md) — "Three Vercel serverless functions… All three take a `path` query parameter…" (only the original three — `cfbd`, `fleaflicker`, `rosteraudit` — match that pattern; the AI/historical handlers don't).
+  - [api/feature_claude.md:4](api/feature_claude.md) — "Three Vercel serverless functions… All three take a `path` query parameter…" (only the proxy-style files — `fleaflicker`, `rosteraudit` — match that pattern; the AI/historical handlers don't).
 - Action: rewrite both intros to reflect the current 8-handler split (proxy-style vs AI-style vs Supabase-backed).
 
 ### 4. README is missing Fleaflicker + admin surfaces
@@ -88,7 +88,7 @@ Pick one (e.g. `TradeTab.jsx`) and use it as a pattern — don't try to split al
 
 ### 8. `api/rosteraudit.js` is 23 lines
 - File: [api/rosteraudit.js](api/rosteraudit.js)
-- It's a thin proxy. Worth a glance to see if it's still used (`src/lib/rosterAuditApi.js` does reference it) and whether the same handler shape now duplicates `cfbd.js`/`fleaflicker.js`. If yes, a shared helper in `api/_lib/proxy.js` would dedupe all three.
+- It's a thin proxy. Worth a glance to see if it's still used (`src/lib/rosterAuditApi.js` does reference it) and whether the same handler shape now duplicates `fleaflicker.js`. If yes, a shared helper in `api/_lib/proxy.js` would dedupe both.
 
 ---
 

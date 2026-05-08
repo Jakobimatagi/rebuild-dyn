@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // Mounts a Vercel-style /api handler as Vite dev-server middleware so client
@@ -47,8 +47,7 @@ function devApiHandler(routePath, importPath) {
   }
 }
 
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
+export default defineConfig(() => {
   return {
     plugins: [
       react(),
@@ -70,22 +69,6 @@ export default defineConfig(({ mode }) => {
           target: 'https://rosteraudit.com/wp-json/ra/v1',
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/rosteraudit/, ''),
-        },
-        '/api/cfbd': {
-          target: 'https://api.collegefootballdata.com',
-          changeOrigin: true,
-          secure: true,
-          configure: (proxy) => {
-            proxy.on('proxyReq', (proxyReq, req) => {
-              const url = new URL(req.url, 'http://x')
-              const cfbdPath = url.searchParams.get('path') || ''
-              url.searchParams.delete('path')
-              proxyReq.path = `/${cfbdPath}${url.search}`
-              if (env.VITE_CFBD_API_KEY) {
-                proxyReq.setHeader('Authorization', `Bearer ${env.VITE_CFBD_API_KEY}`)
-              }
-            })
-          },
         },
       },
     },
