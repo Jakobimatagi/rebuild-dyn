@@ -252,19 +252,6 @@ export default function App() {
         ? (allDraftPicksMap[recentDraft.draft_id] || [])
         : [];
 
-      console.log("[draft-debug] /league/<id>/drafts:", sleeperDrafts);
-      console.log("[draft-debug] selected recent draft:", recentDraft);
-      console.log(
-        "[draft-debug] picks fetched for that draft:",
-        recentDraftPicks.length,
-        recentDraftPicks,
-      );
-      console.log(
-        "[draft-debug] /league/<id>/traded_picks:",
-        tradedPicks.length,
-        tradedPicks,
-      );
-
       const payload = {
         myRoster,
         players,

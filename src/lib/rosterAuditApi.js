@@ -3,9 +3,27 @@
  * Fetches dynasty player values and pick values from RosterAudit.
  */
 
+import { safeLocalStorageWrite } from "./sleeperApi.js";
+
 const RA_BASE_URL = import.meta.env.DEV
   ? "/rosteraudit"
   : "/api/rosteraudit";
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+function readCache(key, ttlMs) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Date.now() - parsed.timestamp < ttlMs && parsed.data !== undefined) {
+      return parsed.data;
+    }
+  } catch {
+    // ignore cache issues
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // League ↔ RA format mapping
@@ -19,18 +37,19 @@ function getRaFormat(league) {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch all player rankings (paginated — RA caps at 100/page)
+// Fetch all player rankings.
+// Cached 24h in localStorage. Pages 2..N are fetched in parallel after page 1
+// returns total_pages (RA caps at 100 players/page; ~5–6 pages typical).
 // ---------------------------------------------------------------------------
 export async function fetchRosterAuditValues(league) {
   const format = getRaFormat(league);
   const numTeams = Number(league?.total_rosters || 12);
+  const cacheKey = `rosteraudit_values_${format}_${numTeams}`;
 
-  // Paginate through all results
-  const allPlayers = [];
-  let page = 1;
-  let totalPages = 1;
+  const cached = readCache(cacheKey, ONE_DAY_MS);
+  if (Array.isArray(cached)) return cached;
 
-  while (page <= totalPages) {
+  const buildUrl = (page) => {
     const params = new URLSearchParams({
       format,
       position: "all",
@@ -38,35 +57,62 @@ export async function fetchRosterAuditValues(league) {
       page: String(page),
       league_size: String(numTeams),
     });
-    const url = import.meta.env.DEV
+    return import.meta.env.DEV
       ? `${RA_BASE_URL}/rankings?${params.toString()}`
       : `${RA_BASE_URL}?path=rankings&${params.toString()}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`RosterAudit API error: ${res.status}`);
+  };
 
-    const json = await res.json();
-    const players = json.players || [];
-    allPlayers.push(...players);
-    totalPages = json.total_pages || 1;
-    page++;
-  }
+  const fetchPage = async (page) => {
+    const res = await fetch(buildUrl(page));
+    if (!res.ok) throw new Error(`RosterAudit API error: ${res.status}`);
+    return res.json();
+  };
+
+  const firstPage = await fetchPage(1);
+  const totalPages = Number(firstPage.total_pages || 1);
+  const restPages =
+    totalPages > 1
+      ? await Promise.all(
+          Array.from({ length: totalPages - 1 }, (_, i) => fetchPage(i + 2)),
+        )
+      : [];
+
+  const allPlayers = [
+    ...(firstPage.players || []),
+    ...restPages.flatMap((p) => p.players || []),
+  ];
+
+  safeLocalStorageWrite(
+    cacheKey,
+    JSON.stringify({ timestamp: Date.now(), data: allPlayers }),
+  );
 
   return allPlayers;
 }
 
 // ---------------------------------------------------------------------------
-// Fetch pick values
+// Fetch pick values. Cached 24h in localStorage.
 // ---------------------------------------------------------------------------
 export async function fetchRosterAuditPicks() {
+  const cacheKey = "rosteraudit_picks";
+
+  const cached = readCache(cacheKey, ONE_DAY_MS);
+  if (cached) return cached;
+
   const url = import.meta.env.DEV
     ? `${RA_BASE_URL}/picks`
     : `${RA_BASE_URL}?path=picks`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`RosterAudit picks API error: ${res.status}`);
 
-  const json = await res.json();
+  const data = await res.json();
 
-  return json;
+  safeLocalStorageWrite(
+    cacheKey,
+    JSON.stringify({ timestamp: Date.now(), data }),
+  );
+
+  return data;
 }
 
 // ---------------------------------------------------------------------------

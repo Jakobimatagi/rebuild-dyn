@@ -1,17 +1,29 @@
-# Dynasty Advisor
+# Dynasty OS
 
-Dynasty fantasy football analysis tool for Sleeper leagues. Connect your Sleeper username, pick a league, and get a full breakdown of your roster — grades, trade suggestions, pick strategy, and league-wide rankings.
+Browser-only dynasty fantasy football analysis tool. Connect your Sleeper or Fleaflicker account, pick a dynasty league, and get a full analytical dashboard — roster grades, trade tools, league-wide rankings, rookie scouting, and a multi-year strategy planner.
 
 ## Features
 
 - **Roster Grading** — Every player scored 0–100 across age, production, availability, trend, and situation. Each position room graded A+ through F.
-- **Player Archetypes** — Cornerstone, Foundational, Productive Vet, Upside Shot, and more. At-a-glance understanding of each asset's dynasty role.
-- **Trade Suggestions** — Phase-aware trade ideas based on your team's contender / retool / rebuild classification. Targets calibrated to your league's actual trade market.
+- **Player Archetypes** — 11 archetypes from Cornerstone to Replaceable. At-a-glance understanding of each asset's dynasty role.
+- **Conviction-Aware Verdicts** — buy / hold / sell / cut calls with confidence scoring.
+- **Trade Suggestions** — Phase-aware ideas based on your team's contender / retool / rebuild classification, calibrated to your league's actual trade market.
 - **Trade Calculator** — Evaluate any proposed trade between two teams with phase-adjusted values.
-- **League Rankings** — See every team's dynasty score, team phase, and roster composition side by side.
-- **League Activity** — Recent trades and transactions across the league, graded for value.
-- **Draft Pick Tracker** — All future picks with estimated values based on league context.
-- **Adjustable Weights** — Customize how much age, production, availability, trend, and situation matter to your scoring model.
+- **Cliff Calendar** — Forward-looking age-cliff and contract-risk timeline for your roster.
+- **Market Pulse** — Live snapshot of which players the league is moving on.
+- **League Rankings** — Every team's dynasty score, team phase, and roster composition side by side.
+- **League Activity** — Recent trades and transactions, graded for value, blended with team activity score.
+- **Draft Pick Tracker** — All future picks with estimated values from the league context.
+- **Draft Recap** — Per-pick gain/loss breakdown after a completed draft.
+- **Rookie Rankings & Prospector** — Public consensus rookie board plus an admin editor for the prospect database (Supabase-backed).
+- **Offensive Coordinator Rankings** — 32-team OC landscape with scheme tags and ORACLE AI briefings.
+- **AI Team Analysis** — Gemini-backed team diagnosis with current-news grounding (injuries, depth-chart changes).
+- **Adjustable Scoring Weights** — Customize how much age, production, availability, trend, and situation matter to your model.
+
+## Supported Platforms
+
+- **Sleeper** — public API, no auth. Keyed by username.
+- **Fleaflicker** — keyed by email; normalised server-side to a Sleeper-compatible shape.
 
 ## Supported Formats
 
@@ -27,18 +39,20 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173), enter your Sleeper username, and select a dynasty league.
+Open [http://localhost:5173](http://localhost:5173), enter your Sleeper username (or Fleaflicker email), and select a dynasty league.
 
 ## Tech Stack
 
-- React + Vite
-- Sleeper API (public, no auth required)
-- FantasyCalc API for market value blending
-- No backend — runs entirely in the browser
+- **React 18 + Vite 6** — SPA, no router (App.jsx switches screens via `step` state).
+- **Vercel serverless** — proxies for Fleaflicker / RosterAudit / nflverse, plus Gemini-backed AI endpoints.
+- **Supabase** — only for the Rookie Rankings + Prospector admin pages.
+- **localStorage** — all caching for the main flow; no cookies or server sessions.
 
 ## Data Sources
 
-- **Sleeper API** — rosters, players, stats, transactions, traded picks
-- **FantasyCalc** — consensus dynasty trade values for market calibration
-
-All data is cached in localStorage to minimize API calls.
+- **Sleeper API** — rosters, players, stats, transactions, traded picks, drafts.
+- **Fleaflicker API** — same data shape, normalised by `src/lib/fleaflickerApi.js`.
+- **FantasyCalc + RosterAudit** — consensus dynasty trade values, blended for market calibration.
+- **nflverse-data** — historical per-season roster CSVs (sleeper_id ↔ team mapping for past years).
+- **CollegeFootballData** — prospect college usage and stats.
+- **Gemini 2.5 Flash** — AI team analysis, ORACLE OC briefing, prospect board QA.
