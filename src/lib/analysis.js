@@ -10,6 +10,7 @@ import { buildLeagueActivity } from './activityEngine';
 import { assignPositionRanks as _assignPositionRanks } from './playerGrading';
 import { buildDraftRecap } from './draftRecap';
 import { buildOcOutlookContext } from './ocAdjustment';
+import { buildCliffCalendar } from './cliffCalendar';
 
 // Re-exports — consumers that import from 'analysis' still work unchanged.
 export { DEFAULT_SCORING_WEIGHTS, draftTierLabel } from './scoringEngine';
@@ -24,6 +25,7 @@ export {
   getArchetype,
   getArchetypeTags,
   getConfidence,
+  getConvictionTier,
 } from './playerGrading';
 
 export function buildRosterAnalysis(
@@ -267,6 +269,7 @@ export function buildRosterAnalysis(
     tradeMarket,
     tradeSuggestions,
     tradeBlock: myTeam.tradeablePlayers.slice(0, 8),
+    cliffCalendar: buildCliffCalendar(myTeam, leagueContext),
     leagueActivity,
     marketCompsBySleeperId,
     marketCompsSource: {

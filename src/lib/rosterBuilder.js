@@ -10,6 +10,7 @@ import {
   getArchetype,
   getArchetypeTags,
   getConfidence,
+  getConvictionTier,
 } from "./playerGrading";
 import { computeBlendedScore } from "./fantasyCalcBlend";
 import {
@@ -573,6 +574,7 @@ export function buildRosterSnapshot(
       enrichedPlayer.archetype = getArchetype(enrichedPlayer);
       enrichedPlayer.tags = getArchetypeTags(enrichedPlayer);
       enrichedPlayer.confidence = getConfidence(enrichedPlayer);
+      enrichedPlayer.convictionTier = getConvictionTier(enrichedPlayer);
       const market = buildPlayerMarketValue(
         enrichedPlayer,
         leagueContext,

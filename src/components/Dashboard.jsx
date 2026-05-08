@@ -203,6 +203,7 @@ export default function Dashboard({
           myNeeds={needs}
           mySurplus={surplusPositions}
           myRosterId={analysis.rosterId}
+          cliffCalendar={analysis.cliffCalendar}
         />
       )}
 

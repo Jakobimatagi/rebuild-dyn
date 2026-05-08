@@ -3,6 +3,7 @@ import { POSITION_PRIORITY } from "../../constants";
 import { evaluateTrade, simulateTrade, buildTradeRationale, suggestBalancingAsset } from "../../lib/tradeEngine";
 import { estimatePickValue } from "../../lib/marketValue";
 import { rankLabel } from "../../lib/playerGrading";
+import { ConvictionChip, ConvictionLegend } from "./OverviewTab";
 import { styles } from "../../styles";
 
 // ---------------------------------------------------------------------------
@@ -1116,26 +1117,43 @@ export default function TradeTab({
 
       <div style={styles.card}>
         <div style={styles.sectionLabel}>Best Trade Chips</div>
+        {tradeBlock.some(
+          (p) => p.convictionTier === "high" || p.convictionTier === "speculative",
+        ) && <ConvictionLegend />}
         {tradeBlock.length ? (
-          tradeBlock.map((player) => (
-            <div key={player.id} style={styles.playerRow}>
-              <div>
-                <div style={{ fontSize: 13, color: "#e8e8f0" }}>
-                  {player.name}
+          [...tradeBlock]
+            .sort((a, b) => {
+              const order = { high: 0, standard: 1, speculative: 2 };
+              const ta = order[a.convictionTier] ?? 1;
+              const tb = order[b.convictionTier] ?? 1;
+              if (ta !== tb) return ta - tb;
+              return b.score - a.score;
+            })
+            .map((player) => (
+              <div key={player.id} style={styles.playerRow}>
+                <div>
+                  <div style={{ fontSize: 13, color: "#e8e8f0" }}>
+                    {player.name}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#d1d7ea" }}>
+                    {player.position} · {player.age}yo · {player.archetype}
+                  </div>
                 </div>
-                <div style={{ fontSize: 11, color: "#d1d7ea" }}>
-                  {player.position} · {player.age}yo · {player.archetype}
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <ConvictionChip
+                    tier={player.convictionTier}
+                    confidence={player.confidence}
+                  />
+                  <span
+                    style={styles.tag(
+                      player.verdict === "buy" ? "#00f5a0" : "#ffd84d",
+                    )}
+                  >
+                    {player.score}
+                  </span>
                 </div>
               </div>
-              <span
-                style={styles.tag(
-                  player.verdict === "buy" ? "#00f5a0" : "#ffd84d",
-                )}
-              >
-                {player.score}
-              </span>
-            </div>
-          ))
+            ))
         ) : (
           <div style={{ fontSize: 12, color: "#d1d7ea" }}>
             No obvious player chips. Use picks as the primary sweetener.

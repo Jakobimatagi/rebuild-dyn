@@ -15,6 +15,7 @@ export default function OverviewTab({
   myNeeds,
   mySurplus,
   myRosterId,
+  cliffCalendar,
 }) {
   // Merge backend weakRooms with any bottom-third ranked rooms from posRanks
   const displayWeakRooms = (() => {
@@ -134,17 +135,32 @@ export default function OverviewTab({
       >
         <div style={styles.card}>
           <div style={styles.sectionLabel}>🔴 Sell Now</div>
-          {sells.slice(0, 4).map((p) => (
-            <div key={p.id} style={styles.playerRow}>
-              <div>
-                <div style={{ fontSize: 13, color: "#e8e8f0" }}>{p.name}</div>
-                <div style={{ fontSize: 11, color: "#fff" }}>
-                  {p.team} · {p.age}yo{p.ppg ? ` · ${p.ppg}ppg` : ""}
+          {sells.some(
+            (s) => s.convictionTier === "high" || s.convictionTier === "speculative",
+          ) && <ConvictionLegend />}
+          {(() => {
+            const sorted = [...sells].sort((a, b) => {
+              const order = { high: 0, standard: 1, speculative: 2 };
+              const ta = order[a.convictionTier] ?? 1;
+              const tb = order[b.convictionTier] ?? 1;
+              if (ta !== tb) return ta - tb;
+              return a.score - b.score;
+            });
+            return sorted.slice(0, 4).map((p) => (
+              <div key={p.id} style={styles.playerRow}>
+                <div>
+                  <div style={{ fontSize: 13, color: "#e8e8f0" }}>{p.name}</div>
+                  <div style={{ fontSize: 11, color: "#fff" }}>
+                    {p.team} · {p.age}yo{p.ppg ? ` · ${p.ppg}ppg` : ""}
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <ConvictionChip tier={p.convictionTier} confidence={p.confidence} />
+                  <span style={styles.tag(getColor(p.verdict))}>{p.verdict}</span>
                 </div>
               </div>
-              <span style={styles.tag(getColor(p.verdict))}>{p.verdict}</span>
-            </div>
-          ))}
+            ));
+          })()}
           {sells.length === 0 && (
             <div style={{ fontSize: 12, color: "#d1d7ea" }}>
               No obvious sells.
@@ -534,6 +550,8 @@ export default function OverviewTab({
         </div>
       )}
 
+      {cliffCalendar && <CliffCalendar calendar={cliffCalendar} />}
+
       {aiAdvice && (
         <div
           style={{
@@ -572,6 +590,319 @@ export default function OverviewTab({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Conviction chip — qualifies a verdict by confidence tier so rookies
+// don't get equal weight with vets in Sell/Buy/Trade-Block lists.
+// ---------------------------------------------------------------------------
+
+export function ConvictionChip({ tier, confidence }) {
+  if (!tier || tier === "standard") return null;
+  const meta =
+    tier === "high"
+      ? {
+          label: "PROVEN",
+          color: "#00f5a0",
+          tooltip: `Verdict backed by a real sample (${confidence ?? "?"}% confidence). Trust it — act with normal aggression.`,
+        }
+      : {
+          label: "UNPROVEN",
+          color: "#c084fc",
+          tooltip: `Small sample / rookie / injury return (${confidence ?? "?"}% confidence). Verdict is mostly extrapolation — don't pay top dollar on a buy or fire-sale on a sell.`,
+        };
+  return (
+    <span
+      title={meta.tooltip}
+      style={{
+        fontSize: 8,
+        letterSpacing: 1.2,
+        fontWeight: 700,
+        color: meta.color,
+        background: `${meta.color}18`,
+        border: `1px solid ${meta.color}44`,
+        padding: "2px 5px",
+        borderRadius: 2,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+// Compact one-line caption shown under section headers that contain
+// ConvictionChip rows so the user doesn't have to hover or guess what
+// the colored tags mean.
+export function ConvictionLegend() {
+  return (
+    <div style={{ fontSize: 10, color: "#8a91a8", marginTop: -4, marginBottom: 8, lineHeight: 1.4 }}>
+      <span style={{ color: "#00f5a0", fontWeight: 700, letterSpacing: 0.6 }}>PROVEN</span>
+      <span> = real production sample · </span>
+      <span style={{ color: "#c084fc", fontWeight: 700, letterSpacing: 0.6 }}>UNPROVEN</span>
+      <span> = small sample (rookie, injury return); treat with caution.</span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cliff Calendar — per-team 3-year window timeline
+// ---------------------------------------------------------------------------
+
+const VERDICT_TONE = {
+  good: { color: "#00f5a0", bg: "rgba(0,245,160,0.08)", border: "rgba(0,245,160,0.3)" },
+  warn: { color: "#ffd84d", bg: "rgba(255,216,77,0.08)", border: "rgba(255,216,77,0.3)" },
+  bad: { color: "#ff6b35", bg: "rgba(255,107,53,0.08)", border: "rgba(255,107,53,0.3)" },
+  neutral: { color: "#a8aec7", bg: "rgba(255,255,255,0.03)", border: "rgba(255,255,255,0.08)" },
+};
+
+function scoreColor(score) {
+  if (score >= 75) return "#00f5a0";
+  if (score >= 65) return "#7ed56f";
+  if (score >= 50) return "#ffd84d";
+  if (score >= 35) return "#ff9f43";
+  return "#ff6b35";
+}
+
+function CliffCalendar({ calendar }) {
+  const { seasons, windowVerdict } = calendar;
+  const tone = VERDICT_TONE[windowVerdict?.tone] || VERDICT_TONE.neutral;
+
+  return (
+    <div style={{ ...styles.card, marginBottom: 16 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          flexWrap: "wrap",
+          gap: 12,
+          marginBottom: 14,
+        }}
+      >
+        <div>
+          <div style={styles.sectionLabel}>📅 Roster Cliff Calendar</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>
+            Projected starting lineup shape — now through {seasons[3].year}.
+          </div>
+        </div>
+        {windowVerdict && (
+          <div
+            style={{
+              padding: "6px 12px",
+              borderRadius: 4,
+              background: tone.bg,
+              border: `1px solid ${tone.border}`,
+              maxWidth: 320,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 10,
+                letterSpacing: 1.5,
+                color: tone.color,
+                fontWeight: 700,
+              }}
+            >
+              {windowVerdict.label.toUpperCase()}
+            </div>
+            <div style={{ fontSize: 11, color: "#d9deef", marginTop: 2 }}>
+              {windowVerdict.note}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div
+        className="dyn-grid-4"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 12,
+        }}
+      >
+        {seasons.map((s) => (
+          <CliffSeasonColumn key={s.yearsAhead} season={s} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CliffSeasonColumn({ season }) {
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.025)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 6,
+        padding: 12,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ fontSize: 12, color: "#fff", fontWeight: 700, letterSpacing: 1 }}>
+          {season.label}
+        </div>
+        <div style={{ fontSize: 10, color: "#8a91a8" }}>{season.year}</div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+        <CliffStat
+          label="Starter PPG"
+          value={season.starterPPG > 0 ? season.starterPPG.toFixed(1) : "—"}
+        />
+        <CliffStat
+          label="Avg starter score"
+          value={season.avgScore || "—"}
+          color={scoreColor(season.avgScore)}
+        />
+        <CliffStat
+          label="≥ Foundational"
+          value={season.foundational}
+          color={season.foundational >= 3 ? "#00f5a0" : season.foundational >= 1 ? "#ffd84d" : "#ff6b35"}
+          hint={season.cornerstones ? `(${season.cornerstones} Cornerstone)` : null}
+        />
+      </div>
+
+      {season.departing?.length > 0 && (
+        <div style={{ marginBottom: season.emerging?.length ? 8 : 0 }}>
+          <div style={{ fontSize: 9, color: "#ff6b35", letterSpacing: 1.5, marginBottom: 3 }}>
+            DEPARTING
+          </div>
+          {season.departing.slice(0, 3).map((d) => {
+            const catTone =
+              d.category === "retired"
+                ? "#ff2d55"
+                : d.category === "lineup"
+                  ? "#c084fc"
+                  : "#ff9f43";
+            const catLabel =
+              d.category === "retired"
+                ? "RET"
+                : d.category === "lineup"
+                  ? "LU"
+                  : "PROD";
+            const tip =
+              d.ppgDrop != null
+                ? `${d.currentPpg ?? "?"} → ${d.projectedPpg ?? "?"} PPG · score ${d.currentScore} → ${d.projectedScore}`
+                : `score ${d.currentScore} → ${d.projectedScore}`;
+            return (
+              <div
+                key={d.id}
+                style={{
+                  fontSize: 10,
+                  color: "#d9deef",
+                  lineHeight: 1.4,
+                  marginBottom: 3,
+                }}
+                title={tip}
+              >
+                <span
+                  style={{
+                    fontSize: 8,
+                    fontWeight: 700,
+                    color: catTone,
+                    background: `${catTone}18`,
+                    border: `1px solid ${catTone}44`,
+                    borderRadius: 2,
+                    padding: "1px 4px",
+                    marginRight: 5,
+                    letterSpacing: 1,
+                  }}
+                >
+                  {catLabel}
+                </span>
+                {d.name}{" "}
+                <span style={{ color: "#8a91a8", fontSize: 9 }}>{d.reason}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {season.emerging?.length > 0 && (
+        <div>
+          <div style={{ fontSize: 9, color: "#00f5a0", letterSpacing: 1.5, marginBottom: 3 }}>
+            EMERGING
+          </div>
+          {season.emerging.slice(0, 3).map((e) => (
+            <div
+              key={e.id}
+              style={{
+                fontSize: 10,
+                color: "#d9deef",
+                lineHeight: 1.4,
+                marginBottom: 2,
+              }}
+              title={`${e.currentScore} → ${e.projectedScore}`}
+            >
+              <span style={{ color: "#00f5a0" }}>+</span> {e.name}{" "}
+              <span style={{ color: "#8a91a8", fontSize: 9 }}>+{e.gain} pts</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {season.yearsAhead === 0 && season.topStarters?.length > 0 && (
+        <div>
+          <div style={{ fontSize: 9, color: "#c8cfe3", letterSpacing: 1.5, marginBottom: 3 }}>
+            TOP STARTERS
+          </div>
+          {season.topStarters.slice(0, 4).map((p) => (
+            <div
+              key={p.id}
+              style={{
+                fontSize: 10,
+                color: "#d9deef",
+                lineHeight: 1.4,
+                marginBottom: 2,
+              }}
+            >
+              {p.name}{" "}
+              <span
+                style={{
+                  fontSize: 9,
+                  color: scoreColor(p.projectedScore),
+                  fontWeight: 700,
+                }}
+              >
+                {p.projectedScore}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CliffStat({ label, value, color, hint }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+      <span style={{ fontSize: 10, color: "#8a91a8" }}>{label}</span>
+      <span>
+        <span
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            color: color || "#e8e8f0",
+          }}
+        >
+          {value}
+        </span>
+        {hint && (
+          <span style={{ fontSize: 9, color: "#8a91a8", marginLeft: 4 }}>{hint}</span>
+        )}
+      </span>
     </div>
   );
 }
