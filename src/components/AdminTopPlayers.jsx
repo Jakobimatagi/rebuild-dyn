@@ -10,12 +10,11 @@ import { fetchFantasyCalcValues } from "../lib/fantasyCalcApi.js";
 import { fetchRosterAuditValues } from "../lib/rosterAuditApi.js";
 import {
   buildBenchmarks,
-  playerPctiles,
   calcScore,
   clamp,
   DEFAULT_SCORING_WEIGHTS,
 } from "../lib/scoringEngine.js";
-import { buildFantasyCalcContext, computeBlendedScore } from "../lib/fantasyCalcBlend.js";
+import { buildFantasyCalcContext, normalizeFantasyCalcValue, normalizeRosterAuditValue } from "../lib/fantasyCalcBlend.js";
 import { buildRosterAuditContext } from "../lib/rosterAuditApi.js";
 import { buildOcOutlookContext, buildPlayerOcOutlook } from "../lib/ocAdjustment.js";
 import { loadOcOverrides } from "../lib/ocData.js";
@@ -259,6 +258,49 @@ export default function AdminTopPlayers() {
         const fcContext = buildFantasyCalcContext(fcValues || []);
         const raContext = buildRosterAuditContext(raValues || [], null, "sf");
 
+        // Extended per-position, per-year ppg distributions across every season
+        // we fetched (not just the last 3). This lets the prod blend below see
+        // a player's full career body of work — Jefferson's 2020-2022 elite peak
+        // matters again, instead of only his recent down years.
+        const POSITIONS_LIST = ["QB", "RB", "WR", "TE"];
+        const allStatsByYear = {
+          [String(lastSeason)]:     stats24,
+          [String(lastSeason - 1)]: stats23,
+          [String(lastSeason - 2)]: stats22,
+          "2021": stats21, "2020": stats20, "2019": stats19,
+          "2018": stats18, "2017": stats17, "2016": stats16,
+        };
+        const extDist = {};
+        const extRepl = {};
+        POSITIONS_LIST.forEach((pos) => { extDist[pos] = {}; extRepl[pos] = {}; });
+        Object.entries(allStatsByYear).forEach(([year, yrStats]) => {
+          POSITIONS_LIST.forEach((pos) => { extDist[pos][year] = []; });
+          if (!yrStats) return;
+          Object.entries(yrStats).forEach(([id, s]) => {
+            if (!s?.gp || s.gp < 8) return;
+            const pl = players[id];
+            if (!pl) return;
+            const pos = pl.fantasy_positions?.[0] || pl.position;
+            if (!POSITIONS_LIST.includes(pos)) return;
+            const ppg = (s.pts_ppr || 0) / s.gp;
+            if (ppg > 0) extDist[pos][year].push(ppg);
+          });
+          POSITIONS_LIST.forEach((pos) => extDist[pos][year].sort((a, b) => a - b));
+        });
+        // Replacement-level ppg per (position, year): the player just outside
+        // projected starters in a 12-team SF league. Used for the PAR bonus
+        // below — same idea as scoringEngine's buildBenchmarks but applied
+        // across every available year so peak elite seasons get the +bonus
+        // they deserve, not just last 3.
+        const REPL_RANK = { QB: 25, RB: 33, WR: 48, TE: 15 };
+        Object.keys(allStatsByYear).forEach((year) => {
+          POSITIONS_LIST.forEach((pos) => {
+            const sorted = extDist[pos][year];
+            const idx = Math.max(0, sorted.length - REPL_RANK[pos]);
+            extRepl[pos][year] = sorted[idx] || 0;
+          });
+        });
+
         const ocOutlookContext = buildOcOutlookContext({
           targetSeason: ocTargetSeason,
           statsByYear: [
@@ -305,19 +347,38 @@ export default function AdminTopPlayers() {
             depthOrder: p.depth_chart_order || 2,
           };
 
-          const pctiles = playerPctiles(s24, s23, s22, pos, benchmarks, lastSeason);
-          // Multi-year prod blend so consistent producers (Jefferson, JT, McCaffrey)
-          // aren't punished for one down year, and one-year wonders don't leapfrog
-          // them. current=last season recency, floor=avg of valid recent years
-          // (high floor = consistent, scores more on average), peak=best of those
-          // years (rewards ceiling). Players with only one valid season fall back
-          // to current — sample-size cap above already handles the rookie inflation.
-          const validProd = [pctiles.pLast, pctiles.pPrev, pctiles.pOlder].filter((v) => v != null);
-          const floorPctile = validProd.length
-            ? validProd.reduce((a, b) => a + b, 0) / validProd.length
-            : (pctiles.current ?? 40);
-          const peakPctile = pctiles.peak ?? floorPctile;
-          const currentPctile = pctiles.current ?? floorPctile;
+          // Career-extended prod blend: walk every year we fetched (2016-2025)
+          // and compute this player's PAR-adjusted pctile vs that year's pool.
+          // gp >= 6 keeps the rate stable. PAR bonus (max +8) rewards seasons
+          // meaningfully above replacement level — same formula as the original
+          // playerPctiles, just applied across every career year so Jefferson's
+          // 2020-2022 dominant seasons land at 95-100 instead of 88-92.
+          const careerYears = [];
+          Object.entries(allStatsByYear).forEach(([yr, yrStats]) => {
+            const ys = yrStats?.[id];
+            if (!ys?.gp || ys.gp < 6) return;
+            const ppg = (ys.pts_ppr || 0) / ys.gp;
+            if (ppg <= 0) return;
+            const sorted = extDist[pos]?.[yr] || [];
+            if (!sorted.length) return;
+            // binary search would be faster, but the per-year arrays are small
+            const below = sorted.filter((v) => v < ppg).length;
+            const basePctile = Math.round((below / sorted.length) * 100);
+            const replPpg = extRepl[pos]?.[yr] || 0;
+            const parBonus = replPpg > 0 && ppg > replPpg
+              ? Math.min(8, Math.round(((ppg - replPpg) / replPpg) * 12))
+              : 0;
+            const pctile = Math.min(100, basePctile + parBonus);
+            careerYears.push({ year: Number(yr), pctile });
+          });
+          careerYears.sort((a, b) => b.year - a.year); // most recent first
+
+          const allPctiles = careerYears.map((y) => y.pctile);
+          const currentPctile = allPctiles[0] ?? 40;
+          const floorPctile = allPctiles.length
+            ? allPctiles.reduce((a, b) => a + b, 0) / allPctiles.length
+            : currentPctile;
+          const peakPctile = allPctiles.length ? Math.max(...allPctiles) : currentPctile;
           const prodBlend = Math.round(0.4 * currentPctile + 0.3 * floorPctile + 0.3 * peakPctile);
           const { score: internalScore, components } = calcScore(
             playerData,
@@ -328,8 +389,24 @@ export default function AdminTopPlayers() {
             DEFAULT_SCORING_WEIGHTS,
           );
 
-          const { score: blended, fantasyCalcNormalized, rosterAuditNormalized } =
-            computeBlendedScore(internalScore, fcEntry, fcContext, raEntry, raContext);
+          // Career-first blend: internal (production + age + situ) carries the
+          // dominant 40% vote, FC and RA equalized at 30% each. Replaces the
+          // shared computeBlendedScore (which weights market 80%) — we want
+          // career production to outweigh consensus hype here.
+          const fantasyCalcNormalized = normalizeFantasyCalcValue(fcEntry, fcContext);
+          const rosterAuditNormalized = normalizeRosterAuditValue(raEntry, raContext);
+          const hasFc = fantasyCalcNormalized != null;
+          const hasRa = rosterAuditNormalized != null;
+          let blended;
+          if (hasFc && hasRa) {
+            blended = Math.max(5, Math.round(internalScore * 0.40 + fantasyCalcNormalized * 0.30 + rosterAuditNormalized * 0.30));
+          } else if (hasFc) {
+            blended = Math.max(5, Math.round(internalScore * 0.55 + fantasyCalcNormalized * 0.45));
+          } else if (hasRa) {
+            blended = Math.max(5, Math.round(internalScore * 0.55 + rosterAuditNormalized * 0.45));
+          } else {
+            blended = internalScore;
+          }
 
           // OC outlook is shown as an informational chip but no longer multiplied
           // into the score. The OC signal projects Year-1 PPG which over-rotates
@@ -361,6 +438,7 @@ export default function AdminTopPlayers() {
             ppg,
             gp24,
             careerGpRecent,
+            careerYearsScored: careerYears.length,
             isUnproven,
             internalScore,
             blendedScore: blended,
@@ -527,7 +605,7 @@ export default function AdminTopPlayers() {
             </div>
             <h1 className="text-xl font-bold">Top Players · Tier Board</h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              Dynasty model + FantasyCalc + RosterAudit. 12-team superflex full-PPR. Players with under one full season cap at 85.
+              Career-first dynasty score (40% internal / 30% FC / 30% RA), prod blend across all available seasons. 12-team SF full-PPR. Under one full NFL season caps at 85.
             </p>
           </div>
           <div className="flex items-center gap-3">
