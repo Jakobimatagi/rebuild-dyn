@@ -60,17 +60,22 @@ export function computeRoomQuality(players, pos = null, isSuperflex = null) {
     ? getKeepCount(pos, isSuperflex)
     : graded.length;
 
-  // byPos is pre-sorted descending by score in rosterBuilder.
-  const core = graded.slice(0, keepCount);
+  // Pick the core by the same blended formula we grade with — otherwise a
+  // dynasty-only sort lets a backup with an inflated speculative value (e.g.
+  // a young QB2 with a high FC score but zero PPG) displace a productive
+  // starter, then drag the room average down via the 0.7 production weight.
+  const blends = graded.map((p) => ({
+    p,
+    blend: 0.3 * (p.score ?? 0) + 0.7 * (p.currentPctile ?? 0),
+  }));
+  blends.sort((a, b) => b.blend - a.blend);
+  const core = blends.slice(0, keepCount);
 
   let weightedSum = 0;
   let weightTotal = 0;
   for (let i = 0; i < core.length; i++) {
-    const dynasty = core[i].score ?? 0;
-    const production = core[i].currentPctile ?? 0;
-    const blended = 0.3 * dynasty + 0.7 * production;
     const w = 1 - i * 0.08;
-    weightedSum += blended * w;
+    weightedSum += core[i].blend * w;
     weightTotal += w;
   }
   return weightedSum / weightTotal;
