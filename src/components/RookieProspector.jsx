@@ -607,6 +607,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
               <div className="text-[10px] uppercase tracking-widest text-emerald-400">Admin</div>
               <a href="/" className="text-[10px] text-slate-500 hover:text-slate-300 border border-white/5 px-2 py-0.5 rounded">← Dashboard</a>
               <a href="/admin/oc-rankings" className="text-[10px] text-slate-500 hover:text-slate-300 border border-white/5 px-2 py-0.5 rounded">OC Rankings</a>
+              <a href="/admin/top-players" className="text-[10px] text-slate-500 hover:text-slate-300 border border-white/5 px-2 py-0.5 rounded">Top Players</a>
             </div>
             <h1 className="text-xl font-bold">Dynasty Pre-Draft Prospector</h1>
           </div>
