@@ -80,7 +80,7 @@ export default function Dashboard({
             >
               Switch League
             </button>
-            
+
             <button
               className="dyn-btn-ghost"
               style={styles.btnGhost}
@@ -89,6 +89,13 @@ export default function Dashboard({
             >
               Adjust Weights
             </button>
+            <a
+              className="dyn-btn-ghost"
+              style={{ ...styles.btnGhost, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+              href="/admin/top-players"
+            >
+              Admin
+            </a>
             <button
               className="dyn-btn-ghost"
               style={styles.btnGhost}

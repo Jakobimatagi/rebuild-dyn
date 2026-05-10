@@ -284,6 +284,7 @@ export default function OffensiveCoordinators() {
               <div className="text-[10px] uppercase tracking-widest text-emerald-400">Admin</div>
               <a href="/" className="text-[10px] text-slate-500 hover:text-slate-300 border border-white/5 px-2 py-0.5 rounded">← Dashboard</a>
               <a href="/admin/rookie-prospector" className="text-[10px] text-slate-500 hover:text-slate-300 border border-white/5 px-2 py-0.5 rounded">Rookies</a>
+              <a href="/admin/top-players" className="text-[10px] text-slate-500 hover:text-slate-300 border border-white/5 px-2 py-0.5 rounded">Top Players</a>
             </div>
             <h1 className="text-xl font-bold">Offensive Coordinator Rankings</h1>
             <p className="text-xs text-slate-500 mt-0.5">Fantasy PPR PPG by position room, ranked 1–32 across the NFL.</p>
