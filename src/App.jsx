@@ -63,7 +63,16 @@ export default function App() {
     () => localStorage.getItem("ff_email") || "",
   );
   const [leagues, setLeagues] = useState([]);
-  const [selectedLeague, setSelectedLeague] = useState(null);
+  const [selectedLeague, setSelectedLeague] = useState(() => {
+    try {
+      const savedPlatform = localStorage.getItem("dynasty_os_platform");
+      const key = savedPlatform === "fleaflicker" ? "ff_league" : "sleeper_league";
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [analysis, setAnalysis] = useState(null);
@@ -568,6 +577,7 @@ export default function App() {
           }
           loading={loading}
           error={error}
+          clearError={() => setError("")}
           platform={platform}
           onSetPlatform={setPlatform}
           ffEmail={ffEmail}
@@ -631,6 +641,14 @@ export default function App() {
         />
       </Layout>
       </ErrorBoundary>
+    );
+  }
+
+  if (selectedLeague) {
+    return (
+      <Layout>
+        <DashboardSkeleton leagueName={selectedLeague.name} />
+      </Layout>
     );
   }
 

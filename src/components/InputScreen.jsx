@@ -6,6 +6,7 @@ export default function InputScreen({
   onSubmit,
   loading,
   error,
+  clearError,
   platform,
   onSetPlatform,
   ffEmail,
@@ -13,10 +14,27 @@ export default function InputScreen({
 }) {
   const isSleeper = platform === "sleeper";
 
+  function handleInputChange(value) {
+    if (error && clearError) clearError();
+    if (isSleeper) setUsername(value);
+    else setFfEmail(value);
+  }
+
+  function handlePlatformChange(next) {
+    if (error && clearError) clearError();
+    onSetPlatform(next);
+  }
+
+  function handleSubmit() {
+    if (loading) return;
+    const value = (isSleeper ? username : ffEmail).trim();
+    if (!value) return;
+    onSubmit();
+  }
+
   return (
     <>
       <div style={styles.header}>
-        <div style={styles.logo}>Dynasty OS</div>
         <h1 style={styles.title}>Dynasty Advisor</h1>
         <p style={styles.subtitle}>
           AI-powered dynasty fantasy football analysis for Sleeper &amp; Fleaflicker leagues.
@@ -32,7 +50,7 @@ export default function InputScreen({
               ...(isSleeper ? platformTabActive : platformTabInactive),
               borderRadius: "4px 0 0 4px",
             }}
-            onClick={() => onSetPlatform("sleeper")}
+            onClick={() => handlePlatformChange("sleeper")}
           >
             Sleeper
           </button>
@@ -42,7 +60,7 @@ export default function InputScreen({
               ...(!isSleeper ? platformTabActive : platformTabInactive),
               borderRadius: "0 4px 4px 0",
             }}
-            onClick={() => onSetPlatform("fleaflicker")}
+            onClick={() => handlePlatformChange("fleaflicker")}
           >
             Fleaflicker
           </button>
@@ -54,12 +72,8 @@ export default function InputScreen({
         <input
           style={styles.input}
           value={isSleeper ? username : ffEmail}
-          onChange={(e) =>
-            isSleeper
-              ? setUsername(e.target.value)
-              : setFfEmail(e.target.value)
-          }
-          onKeyDown={(e) => e.key === "Enter" && onSubmit()}
+          onChange={(e) => handleInputChange(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
           placeholder={isSleeper ? "e.g. UserName" : "e.g. user@email.com"}
         />
         {error && (
@@ -71,8 +85,8 @@ export default function InputScreen({
           <button
             className="dyn-btn"
             style={styles.btn}
-            onClick={onSubmit}
-            disabled={loading || (isSleeper ? !username : !ffEmail)}
+            onClick={handleSubmit}
+            disabled={loading || (isSleeper ? !username.trim() : !ffEmail.trim())}
           >
             {loading ? "Loading..." : "Connect →"}
           </button>
@@ -279,8 +293,8 @@ const platformTabBase = {
 };
 
 const platformTabActive = {
-  background: "rgba(0,245,160,0.12)",
-  color: "#00f5a0",
+  background: "#00f5a0",
+  color: "#05080f",
   borderColor: "#00f5a0",
 };
 

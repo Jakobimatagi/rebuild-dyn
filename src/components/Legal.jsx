@@ -4,7 +4,7 @@ export default function PrivacyPolicy({ onBack }) {
   return (
     <>
       <div style={styles.header}>
-        <div style={styles.logo}>Dynasty OS</div>
+        <div style={styles.logo}>Dynasty Advisor</div>
         <h1 style={styles.title}>Privacy Policy</h1>
         <p style={styles.subtitle}>Last updated: April 2025</p>
       </div>
