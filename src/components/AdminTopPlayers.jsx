@@ -18,7 +18,8 @@ import {
 import { buildFantasyCalcContext, computeBlendedScore } from "../lib/fantasyCalcBlend.js";
 import { buildRosterAuditContext } from "../lib/rosterAuditApi.js";
 import { buildOcOutlookContext, buildPlayerOcOutlook } from "../lib/ocAdjustment.js";
-import { mergeOcData, loadOcOverrides } from "../lib/ocData.js";
+import { loadOcOverrides } from "../lib/ocData.js";
+import { useModalBehavior } from "../lib/useModalBehavior.js";
 import { loadSession, saveSession, clearSession } from "./rookieAdmin/utils.js";
 
 const POS_COLORS = {
@@ -258,7 +259,6 @@ export default function AdminTopPlayers() {
         const fcContext = buildFantasyCalcContext(fcValues || []);
         const raContext = buildRosterAuditContext(raValues || [], null, "sf");
 
-        const mergedOc = mergeOcData(ocDbOverrides || {});
         const ocOutlookContext = buildOcOutlookContext({
           targetSeason: ocTargetSeason,
           statsByYear: [
@@ -399,6 +399,7 @@ export default function AdminTopPlayers() {
         const score = Math.round(clamp(adj, 5, 100));
         return { ...p, displayScore: score, displayTier: tierFor(score) };
       })
+      .filter((p) => p.displayTier)
       .sort((a, b) => b.displayScore - a.displayScore);
   }, [computed, posFilter, search, tePremium]);
 
@@ -644,53 +645,65 @@ function ShareModal({
   downloading, tePremium, ocTargetSeason,
   onDownload, onDownloadAll, onClose,
 }) {
+  const modalRef = useModalBehavior(onClose);
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex flex-col" onClick={onClose}>
-      <div className="bg-slate-900 border-b border-white/10 px-6 py-3 flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
-        <span className="text-[10px] uppercase tracking-widest text-emerald-400 font-bold">Share</span>
-        <span className="text-sm text-slate-200">Twitter-ready tier cards</span>
-        <div className="flex gap-1 ml-4">
-          {["QB","RB","WR","TE"].map((pos) => (
-            <button key={pos} onClick={() => setShareTab(pos)}
-              className={`px-3 py-1 rounded text-xs font-semibold border ${shareTab === pos ? POS_COLORS[pos] : "border-white/10 text-slate-500 bg-slate-900/40 hover:text-slate-200"}`}>
-              {pos}
+      <div
+        ref={modalRef}
+        className="w-full h-full flex flex-col"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="share-cards-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="bg-slate-900 border-b border-white/10 px-6 py-3 flex items-center gap-3">
+          <span className="text-[10px] uppercase tracking-widest text-emerald-400 font-bold">Share</span>
+          <span id="share-cards-title" className="text-sm text-slate-200">Twitter-ready tier cards</span>
+          <div className="flex gap-1 ml-4">
+            {["QB","RB","WR","TE"].map((pos) => (
+              <button key={pos} onClick={() => setShareTab(pos)}
+                className={`px-3 py-1 rounded text-xs font-semibold border ${shareTab === pos ? POS_COLORS[pos] : "border-white/10 text-slate-500 bg-slate-900/40 hover:text-slate-200"}`}>
+                {pos}
+              </button>
+            ))}
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => onDownload(shareTab)}
+              disabled={downloading === shareTab || downloading === "all"}
+              className="text-xs font-semibold px-3 py-1.5 rounded border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 disabled:opacity-40">
+              {downloading === shareTab ? "Generating…" : `Download ${shareTab} PNG`}
             </button>
-          ))}
+            <button onClick={onDownloadAll}
+              disabled={downloading === "all"}
+              className="text-xs font-semibold px-3 py-1.5 rounded border border-emerald-400/60 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-40">
+              {downloading === "all" ? "Generating all…" : "Download all 4"}
+            </button>
+            <button onClick={onClose}
+              aria-label="Close share cards"
+              className="text-slate-400 hover:text-slate-100 text-lg leading-none px-2">✕</button>
+          </div>
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          <button onClick={() => onDownload(shareTab)}
-            disabled={downloading === shareTab || downloading === "all"}
-            className="text-xs font-semibold px-3 py-1.5 rounded border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 disabled:opacity-40">
-            {downloading === shareTab ? "Generating…" : `Download ${shareTab} PNG`}
-          </button>
-          <button onClick={onDownloadAll}
-            disabled={downloading === "all"}
-            className="text-xs font-semibold px-3 py-1.5 rounded border border-emerald-400/60 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-40">
-            {downloading === "all" ? "Generating all…" : "Download all 4"}
-          </button>
-          <button onClick={onClose}
-            className="text-slate-400 hover:text-slate-100 text-lg leading-none px-2">✕</button>
-        </div>
-      </div>
 
-      <div className="flex-1 overflow-auto p-6 flex justify-center" onClick={(e) => e.stopPropagation()}>
-        {/* Render all 4 cards but only show the active tab. Off-screen cards are
+        <div className="flex-1 overflow-auto p-6 flex justify-center">
+          {/* Render all 4 cards but only show the active tab. Off-screen cards are
             still mounted so html-to-image can find them for the "Download all"
             batch. They sit at -9999px when not the active tab. */}
-        {["QB","RB","WR","TE"].map((pos) => {
-          const isActive = shareTab === pos;
-          return (
-            <div key={pos} style={isActive ? {} : { position: "absolute", left: "-9999px", top: 0 }}>
-              <ShareCard
-                innerRef={(el) => { shareRefs.current[pos] = el; }}
-                pos={pos}
-                groups={sharePositions[pos].groups}
-                tepremium={tePremium}
-                ocTargetSeason={ocTargetSeason}
-              />
-            </div>
-          );
-        })}
+          {["QB","RB","WR","TE"].map((pos) => {
+            const isActive = shareTab === pos;
+            return (
+              <div key={pos} style={isActive ? {} : { position: "absolute", left: "-9999px", top: 0 }}>
+                <ShareCard
+                  innerRef={(el) => { shareRefs.current[pos] = el; }}
+                  pos={pos}
+                  groups={sharePositions[pos].groups}
+                  tePremium={tePremium}
+                  ocTargetSeason={ocTargetSeason}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -703,7 +716,7 @@ const POS_GRADIENTS = {
   TE: "from-amber-500 to-amber-700",
 };
 
-function ShareCard({ innerRef, pos, groups, tepremium, ocTargetSeason }) {
+function ShareCard({ innerRef, pos, groups, tePremium, ocTargetSeason }) {
   const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   return (
     <div ref={innerRef}
@@ -717,7 +730,7 @@ function ShareCard({ innerRef, pos, groups, tepremium, ocTargetSeason }) {
           </div>
           <div className="text-5xl font-black text-white leading-none">TOP {pos}</div>
           <div className="text-sm text-white/80 mt-2">
-            Tier Board · 12-Team SF · Full PPR{tepremium && pos === "TE" ? " · TEP" : ""}
+            Tier Board · 12-Team SF · Full PPR{tePremium && pos === "TE" ? " · TEP" : ""}
           </div>
         </div>
         <div className="text-right">
