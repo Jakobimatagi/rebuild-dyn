@@ -8,6 +8,7 @@ import { GradeBadge, Pill, TierSelect, CapitalSelect, Pagination, AddPlayerSeaso
 import ProspectCard from "./rookieAdmin/ProspectCard.jsx";
 import ProspectEditorTab from "./rookieAdmin/ProspectEditorTab.jsx";
 import DraftPlanTab from "./rookieAdmin/DraftPlanTab.jsx";
+import RookieShareModal from "./rookieAdmin/RookieShareModal.jsx";
 import { fetchVsEvaluation } from "../lib/aiVsEvaluateApi.js";
 import { fetchOracleBoardEvaluation } from "../lib/aiOracleBoardApi.js";
 
@@ -49,6 +50,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
   const [vsAi, setVsAi] = useState({ loading: false, error: "", result: null, generatedAt: null, cached: false });
   const [boardAi, setBoardAi] = useState({ loading: false, error: "", result: null, generatedAt: null, cached: false });
   const [tweetCopied, setTweetCopied] = useState(null);
+  const [showShare, setShowShare] = useState(false);
 
   function setAnnotation(id, patch) {
     setState((s) => {
@@ -783,6 +785,11 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
             <input value={state.listSearch} onChange={(e) => update({ listSearch: e.target.value, page: 1 })}
               placeholder="Search…"
               className="bg-slate-900 border border-white/10 rounded-md px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-emerald-400 w-44" />
+            <button onClick={() => setShowShare(true)}
+              title="Generate Twitter-ready rookie ranking PNGs"
+              className="px-3 py-1.5 rounded-md text-xs font-semibold border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25">
+              Share Cards
+            </button>
             <span className="text-xs text-slate-500 ml-auto">
               {state.tab === "compare"
                 ? `${compareA.length + compareB.length} prospects across both classes`
@@ -1134,6 +1141,17 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
         )}
 
       </main>
+
+      {showShare && (
+        <RookieShareModal
+          prospects={state.prospects}
+          annotations={state.annotations}
+          sleeperByName={state.sleeperByName}
+          currentDraftYear={currentDraftYear}
+          initialYear={state.yearFilter === "all" ? currentDraftYear : parseInt(state.yearFilter, 10) || currentDraftYear}
+          onClose={() => setShowShare(false)}
+        />
+      )}
     </div>
   );
 }
