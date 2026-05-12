@@ -11,7 +11,9 @@
     "build": "node node_modules/vite/bin/vite.js build",
     "preview": "vite preview",
     "test": "node --test src/lib/*.test.mjs",
-    "import:ocs": "node scripts/import-ocs.mjs"
+    "import:ocs": "node scripts/import-ocs.mjs",
+    "install:safe": "node scripts/safe-install.mjs",
+    "deps:review": "node scripts/safe-install.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.103.3",
