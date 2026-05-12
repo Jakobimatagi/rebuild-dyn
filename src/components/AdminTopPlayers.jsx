@@ -44,6 +44,30 @@ function tierFor(score) {
   return null;
 }
 
+// Split a ranked list into pages around a target size, balancing the last
+// page so we don't end up with a 2-player tail card (top-50 → 5 pages of
+// 10, not 4×12 + 1×2). Returns [{ players, startRank, part, total }].
+function splitIntoPages(players, target = 12) {
+  const total = players.length;
+  if (total === 0) return [];
+  const numPages = Math.max(1, Math.ceil(total / target));
+  const baseSize = Math.floor(total / numPages);
+  const remainder = total % numPages;
+  const pages = [];
+  let start = 0;
+  for (let i = 0; i < numPages; i++) {
+    const size = baseSize + (i < remainder ? 1 : 0);
+    pages.push({
+      players: players.slice(start, start + size),
+      startRank: start + 1,
+      part: i + 1,
+      total: numPages,
+    });
+    start += size;
+  }
+  return pages;
+}
+
 // TE Premium boost — half-TEP / full-TEP market consensus sits between +10%
 // and +15% on TE dynasty value. FC/RA APIs don't expose TEP so we apply this
 // post-hoc when the toggle is on.
@@ -161,6 +185,7 @@ export default function AdminTopPlayers() {
   const [tePremium, setTePremium] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const [shareTab, setShareTab] = useState("QB");
+  const [shareLimit, setShareLimit] = useState(24);
   const [downloading, setDownloading] = useState(null); // pos key while exporting, "all" for batch
   const shareRefs = useRef({});
 
@@ -490,16 +515,16 @@ export default function AdminTopPlayers() {
     return groups;
   }, [filtered]);
 
-  // Per-position tier groupings for the share cards. Pulls from computed
+  // Per-position top-N rankings for the share cards. Pulls from computed
   // (not filtered) so the shared image isn't affected by the active search/pos
   // toggles — the share is "the rankings", not "what I'm currently looking at".
-  // Capped at 24 per position so a card stays a clean ~1080x1350 portrait.
-  const SHARE_LIMIT = 24;
+  // Tier groupings used to live here but the cards now render as a flat 2×6
+  // grid (paginated), and each row carries its tier in the score badge.
   const sharePositions = useMemo(() => {
     if (!computed) return null;
     const out = {};
     ["QB", "RB", "WR", "TE"].forEach((pos) => {
-      const top = computed.players
+      out[pos] = computed.players
         .filter((p) => p.position === pos)
         .map((p) => {
           const adj = tePremium && p.position === "TE" ? p.finalScore * TEP_BOOST : p.finalScore;
@@ -507,31 +532,51 @@ export default function AdminTopPlayers() {
           return { ...p, displayScore: score, displayTier: tierFor(score) };
         })
         .sort((a, b) => b.displayScore - a.displayScore)
-        .slice(0, SHARE_LIMIT);
-      const groups = {};
-      TIERS.forEach((t) => { groups[t.key] = []; });
-      top.forEach((p) => {
-        if (p.displayTier) groups[p.displayTier.key].push(p);
-      });
-      out[pos] = { top, groups };
+        .slice(0, shareLimit);
     });
     return out;
-  }, [computed, tePremium]);
+  }, [computed, tePremium, shareLimit]);
+
+  // Split each position's ranking into pages of ~12 (2 cols × 6 rows). When
+  // the total doesn't divide evenly we balance rather than leaving a tiny
+  // last page — e.g. Top 50 becomes 5 pages of 10, not 4×12+1×2.
+  const sharePages = useMemo(() => {
+    if (!sharePositions) return null;
+    const out = {};
+    ["QB", "RB", "WR", "TE"].forEach((pos) => {
+      out[pos] = splitIntoPages(sharePositions[pos] || []);
+    });
+    return out;
+  }, [sharePositions]);
+
+  function shareFilenameFor(pos, page) {
+    const base = `top-${pos.toLowerCase()}-top${shareLimit}`;
+    return page.total > 1 ? `${base}-pt${page.part}.png` : `${base}.png`;
+  }
+
+  async function captureShareNode(node) {
+    return toPng(node, {
+      cacheBust: true,
+      pixelRatio: 2,
+      backgroundColor: "#020617",
+    });
+  }
 
   async function downloadCard(pos) {
-    const node = shareRefs.current[pos];
-    if (!node) return;
+    const pages = sharePages?.[pos] || [];
+    if (!pages.length) return;
     setDownloading(pos);
     try {
-      const dataUrl = await toPng(node, {
-        cacheBust: true,
-        pixelRatio: 2,
-        backgroundColor: "#020617",
-      });
-      const link = document.createElement("a");
-      link.download = `top-${pos.toLowerCase()}-tiers.png`;
-      link.href = dataUrl;
-      link.click();
+      for (let i = 0; i < pages.length; i++) {
+        const node = shareRefs.current[`${pos}-${i}`];
+        if (!node) continue;
+        const dataUrl = await captureShareNode(node);
+        const link = document.createElement("a");
+        link.download = shareFilenameFor(pos, pages[i]);
+        link.href = dataUrl;
+        link.click();
+        if (i < pages.length - 1) await new Promise((r) => setTimeout(r, 250));
+      }
     } catch (err) {
       console.error("Failed to generate image:", err);
     } finally {
@@ -542,22 +587,20 @@ export default function AdminTopPlayers() {
   async function downloadAll() {
     setDownloading("all");
     for (const pos of ["QB", "RB", "WR", "TE"]) {
-      const node = shareRefs.current[pos];
-      if (!node) continue;
-      try {
-        const dataUrl = await toPng(node, {
-          cacheBust: true,
-          pixelRatio: 2,
-          backgroundColor: "#020617",
-        });
-        const link = document.createElement("a");
-        link.download = `top-${pos.toLowerCase()}-tiers.png`;
-        link.href = dataUrl;
-        link.click();
-        // small spacing so browsers don't drop concurrent downloads
-        await new Promise((r) => setTimeout(r, 250));
-      } catch (err) {
-        console.error(`Failed to generate ${pos} image:`, err);
+      const pages = sharePages?.[pos] || [];
+      for (let i = 0; i < pages.length; i++) {
+        const node = shareRefs.current[`${pos}-${i}`];
+        if (!node) continue;
+        try {
+          const dataUrl = await captureShareNode(node);
+          const link = document.createElement("a");
+          link.download = shareFilenameFor(pos, pages[i]);
+          link.href = dataUrl;
+          link.click();
+          await new Promise((r) => setTimeout(r, 250));
+        } catch (err) {
+          console.error(`Failed to generate ${pos} pt${pages[i].part} image:`, err);
+        }
       }
     }
     setDownloading(null);
@@ -700,11 +743,13 @@ export default function AdminTopPlayers() {
         )}
       </main>
 
-      {showShare && sharePositions && (
+      {showShare && sharePages && (
         <ShareModal
-          sharePositions={sharePositions}
+          sharePages={sharePages}
           shareTab={shareTab}
           setShareTab={setShareTab}
+          shareLimit={shareLimit}
+          setShareLimit={setShareLimit}
           shareRefs={shareRefs}
           downloading={downloading}
           tePremium={tePremium}
@@ -719,11 +764,12 @@ export default function AdminTopPlayers() {
 }
 
 function ShareModal({
-  sharePositions, shareTab, setShareTab, shareRefs,
+  sharePages, shareTab, setShareTab, shareLimit, setShareLimit, shareRefs,
   downloading, tePremium, ocTargetSeason,
   onDownload, onDownloadAll, onClose,
 }) {
   const modalRef = useModalBehavior(onClose);
+  const activePages = sharePages?.[shareTab] || [];
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex flex-col" onClick={onClose}>
@@ -735,27 +781,44 @@ function ShareModal({
         aria-labelledby="share-cards-title"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="bg-slate-900 border-b border-white/10 px-6 py-3 flex items-center gap-3">
+        <div className="bg-slate-900 border-b border-white/10 px-6 py-3 flex flex-wrap items-center gap-3">
           <span className="text-[10px] uppercase tracking-widest text-emerald-400 font-bold">Share</span>
           <span id="share-cards-title" className="text-sm text-slate-200">Twitter-ready tier cards</span>
-          <div className="flex gap-1 ml-4">
-            {["QB","RB","WR","TE"].map((pos) => (
-              <button key={pos} onClick={() => setShareTab(pos)}
-                className={`px-3 py-1 rounded text-xs font-semibold border ${shareTab === pos ? POS_COLORS[pos] : "border-white/10 text-slate-500 bg-slate-900/40 hover:text-slate-200"}`}>
-                {pos}
+
+          <div className="flex items-center gap-1 ml-2">
+            {[12, 24, 36, 50].map((n) => (
+              <button key={n} onClick={() => setShareLimit(n)}
+                className={`px-3 py-1 rounded text-xs font-semibold border ${shareLimit === n ? "border-emerald-400/60 bg-emerald-500/15 text-emerald-200" : "border-white/10 text-slate-400 bg-slate-900/40 hover:text-slate-200"}`}>
+                Top {n}
               </button>
             ))}
           </div>
+
+          <div className="flex gap-1 ml-2">
+            {["QB","RB","WR","TE"].map((pos) => {
+              const count = sharePages?.[pos]?.reduce((acc, pg) => acc + pg.players.length, 0) || 0;
+              return (
+                <button key={pos} onClick={() => setShareTab(pos)}
+                  disabled={count === 0}
+                  className={`px-3 py-1 rounded text-xs font-semibold border ${shareTab === pos ? POS_COLORS[pos] : "border-white/10 text-slate-500 bg-slate-900/40 hover:text-slate-200 disabled:opacity-30"}`}>
+                  {pos}{count ? ` · ${count}` : ""}
+                </button>
+              );
+            })}
+          </div>
+
           <div className="ml-auto flex items-center gap-2">
             <button onClick={() => onDownload(shareTab)}
-              disabled={downloading === shareTab || downloading === "all"}
+              disabled={!activePages.length || downloading === shareTab || downloading === "all"}
               className="text-xs font-semibold px-3 py-1.5 rounded border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 disabled:opacity-40">
-              {downloading === shareTab ? "Generating…" : `Download ${shareTab} PNG`}
+              {downloading === shareTab
+                ? "Generating…"
+                : `Download ${shareTab}${activePages.length > 1 ? ` (${activePages.length} PNGs)` : " PNG"}`}
             </button>
             <button onClick={onDownloadAll}
               disabled={downloading === "all"}
               className="text-xs font-semibold px-3 py-1.5 rounded border border-emerald-400/60 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-40">
-              {downloading === "all" ? "Generating all…" : "Download all 4"}
+              {downloading === "all" ? "Generating all…" : "Download all"}
             </button>
             <button onClick={onClose}
               aria-label="Close share cards"
@@ -763,24 +826,38 @@ function ShareModal({
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto p-6 flex justify-center">
-          {/* Render all 4 cards but only show the active tab. Off-screen cards are
-            still mounted so html-to-image can find them for the "Download all"
-            batch. They sit at -9999px when not the active tab. */}
+        <div className="flex-1 overflow-auto p-6 flex flex-col items-center gap-6">
+          {/* All position pages stay mounted so html-to-image can find them
+              for "Download all"; inactive tabs sit at -9999px. */}
           {["QB","RB","WR","TE"].map((pos) => {
+            const pages = sharePages?.[pos] || [];
             const isActive = shareTab === pos;
+            if (!pages.length && !isActive) return null;
+            const wrapperStyle = isActive ? {} : { position: "absolute", left: "-9999px", top: 0 };
             return (
-              <div key={pos} style={isActive ? {} : { position: "absolute", left: "-9999px", top: 0 }}>
-                <ShareCard
-                  innerRef={(el) => { shareRefs.current[pos] = el; }}
-                  pos={pos}
-                  groups={sharePositions[pos].groups}
-                  tePremium={tePremium}
-                  ocTargetSeason={ocTargetSeason}
-                />
+              <div key={pos} style={wrapperStyle} className="flex flex-col items-center gap-6">
+                {pages.map((page, idx) => (
+                  <ShareCard
+                    key={`${pos}-${idx}`}
+                    innerRef={(el) => { shareRefs.current[`${pos}-${idx}`] = el; }}
+                    pos={pos}
+                    players={page.players}
+                    startRank={page.startRank}
+                    part={page.part}
+                    total={page.total}
+                    shareLimit={shareLimit}
+                    tePremium={tePremium}
+                    ocTargetSeason={ocTargetSeason}
+                  />
+                ))}
               </div>
             );
           })}
+          {!activePages.length && (
+            <div className="text-slate-500 text-sm self-center">
+              No players in this slice.
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -794,13 +871,24 @@ const POS_GRADIENTS = {
   TE: "from-amber-500 to-amber-700",
 };
 
-function ShareCard({ innerRef, pos, groups, tePremium, ocTargetSeason }) {
+function ShareCard({ innerRef, pos, players, startRank = 1, part = 1, total = 1, shareLimit, tePremium, ocTargetSeason }) {
   const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const endRank = startRank + players.length - 1;
+  const subtitle = total > 1
+    ? `Top ${shareLimit} ${pos} · ${startRank}–${endRank}`
+    : `Top ${Math.min(shareLimit, players.length)} ${pos}`;
+
+  // Always 2 columns. With our page-split helper each page lands at ≤ 12
+  // players, so this is 2 × 6 in the common case (or 2 × 5 for Top-50,
+  // which produces 5 balanced pages of 10).
+  const half = Math.ceil(players.length / 2);
+  const col1 = players.slice(0, half);
+  const col2 = players.slice(half);
+
   return (
     <div ref={innerRef}
       style={{ width: 1080, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}
       className="bg-slate-950 text-slate-100 p-10 flex flex-col gap-5">
-      {/* Header */}
       <div className={`rounded-xl bg-gradient-to-br ${POS_GRADIENTS[pos]} p-6 flex items-center justify-between`}>
         <div>
           <div className="text-xs uppercase tracking-[0.3em] text-white/80 font-bold mb-1">
@@ -808,40 +896,32 @@ function ShareCard({ innerRef, pos, groups, tePremium, ocTargetSeason }) {
           </div>
           <div className="text-5xl font-black text-white leading-none">TOP {pos}</div>
           <div className="text-sm text-white/80 mt-2">
-            Tier Board · 12-Team SF · Full PPR{tePremium && pos === "TE" ? " · TEP" : ""}
+            {subtitle} · 12-Team SF · Full PPR{tePremium && pos === "TE" ? " · TEP" : ""}
           </div>
         </div>
         <div className="text-right">
           <div className="text-[10px] uppercase tracking-widest text-white/70">As of</div>
           <div className="text-base font-bold text-white">{date}</div>
+          {total > 1 && (
+            <div className="text-[10px] uppercase tracking-widest text-white/70 mt-2">
+              Part {part} / {total}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Tiers */}
-      <div className="flex flex-col gap-4">
-        {TIERS.map((tier) => {
-          const players = groups[tier.key];
-          if (!players?.length) return null;
-          return (
-            <div key={tier.key} className="rounded-xl border border-white/10 bg-slate-900/70 overflow-hidden">
-              <div className="flex items-center gap-3 px-4 py-2 bg-slate-900 border-b border-white/10">
-                <span className={`px-2.5 py-0.5 rounded text-base font-black border ${tier.cls}`}>
-                  {tier.label}
-                </span>
-                <span className="text-xs text-slate-400 font-medium">{tier.desc}</span>
-                <span className="text-[11px] text-slate-500 ml-auto">≥ {tier.min}</span>
-              </div>
-              <div className="divide-y divide-white/5">
-                {players.map((p, i) => (
-                  <ShareRow key={p.id} player={p} rank={i + 1} />
-                ))}
-              </div>
+      <div className="grid grid-cols-2 gap-4">
+        {[col1, col2].map((col, ci) => (
+          <div key={ci} className="rounded-xl border border-white/10 bg-slate-900/70 overflow-hidden">
+            <div className="divide-y divide-white/5">
+              {col.map((p, i) => (
+                <ShareRow key={p.id} player={p} rank={ci === 0 ? startRank + i : startRank + half + i} />
+              ))}
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
 
-      {/* Footer */}
       <div className="text-center text-[11px] text-slate-500 pt-2 border-t border-white/10">
         Dynasty model + FantasyCalc + RosterAudit · sample-size capped under 17 NFL games
       </div>

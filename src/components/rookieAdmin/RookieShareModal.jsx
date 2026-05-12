@@ -148,20 +148,54 @@ export default function RookieShareModal({
     return out;
   }, [graded, limit]);
 
-  async function downloadCard(which) {
-    const node = shareRefs.current[which];
-    if (!node) return;
-    setDownloading(which);
+  // Chunk into 12-player pages so a Top 24 card splits into two equally
+  // dense 2×6 screenshots instead of a single tall card that's hard to
+  // read on Twitter.
+  const PAGE_SIZE = 12;
+  const pagesPerTab = useMemo(() => {
+    const out = {};
+    SHARE_TABS.forEach((tabKey) => {
+      const players = byTab[tabKey] || [];
+      const pages = [];
+      for (let i = 0; i < players.length; i += PAGE_SIZE) {
+        pages.push({
+          players: players.slice(i, i + PAGE_SIZE),
+          startRank: i + 1,
+        });
+      }
+      out[tabKey] = pages.map((pg, idx) => ({ ...pg, part: idx + 1, total: pages.length }));
+    });
+    return out;
+  }, [byTab]);
+
+  async function captureNode(node) {
+    return toPng(node, {
+      cacheBust: true,
+      pixelRatio: 2,
+      backgroundColor: "#020617",
+    });
+  }
+
+  function filenameFor(tabKey, page) {
+    const base = `rookies-${year}-${tabKey.toLowerCase()}-top${limit}`;
+    return page.total > 1 ? `${base}-pt${page.part}.png` : `${base}.png`;
+  }
+
+  async function downloadTab(tabKey) {
+    const pages = pagesPerTab[tabKey] || [];
+    if (!pages.length) return;
+    setDownloading(tabKey);
     try {
-      const dataUrl = await toPng(node, {
-        cacheBust: true,
-        pixelRatio: 2,
-        backgroundColor: "#020617",
-      });
-      const link = document.createElement("a");
-      link.download = `rookies-${year}-${which.toLowerCase()}-top${limit}.png`;
-      link.href = dataUrl;
-      link.click();
+      for (let i = 0; i < pages.length; i++) {
+        const node = shareRefs.current[`${tabKey}-${i}`];
+        if (!node) continue;
+        const dataUrl = await captureNode(node);
+        const link = document.createElement("a");
+        link.download = filenameFor(tabKey, pages[i]);
+        link.href = dataUrl;
+        link.click();
+        if (i < pages.length - 1) await new Promise((r) => setTimeout(r, 250));
+      }
     } catch (err) {
       console.error("Failed to generate image:", err);
     } finally {
@@ -171,23 +205,21 @@ export default function RookieShareModal({
 
   async function downloadAll() {
     setDownloading("all");
-    for (const which of SHARE_TABS) {
-      if (!byTab[which]?.length) continue;
-      const node = shareRefs.current[which];
-      if (!node) continue;
-      try {
-        const dataUrl = await toPng(node, {
-          cacheBust: true,
-          pixelRatio: 2,
-          backgroundColor: "#020617",
-        });
-        const link = document.createElement("a");
-        link.download = `rookies-${year}-${which.toLowerCase()}-top${limit}.png`;
-        link.href = dataUrl;
-        link.click();
-        await new Promise((r) => setTimeout(r, 250));
-      } catch (err) {
-        console.error(`Failed to generate ${which} image:`, err);
+    for (const tabKey of SHARE_TABS) {
+      const pages = pagesPerTab[tabKey] || [];
+      for (let i = 0; i < pages.length; i++) {
+        const node = shareRefs.current[`${tabKey}-${i}`];
+        if (!node) continue;
+        try {
+          const dataUrl = await captureNode(node);
+          const link = document.createElement("a");
+          link.download = filenameFor(tabKey, pages[i]);
+          link.href = dataUrl;
+          link.click();
+          await new Promise((r) => setTimeout(r, 250));
+        } catch (err) {
+          console.error(`Failed to generate ${tabKey} pt${pages[i].part} image:`, err);
+        }
       }
     }
     setDownloading(null);
@@ -264,11 +296,13 @@ export default function RookieShareModal({
 
           <div className="ml-auto flex items-center gap-2">
             <button
-              onClick={() => downloadCard(tab)}
+              onClick={() => downloadTab(tab)}
               disabled={!totalForTab || downloading === tab || downloading === "all"}
               className="text-xs font-semibold px-3 py-1.5 rounded border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 disabled:opacity-40"
             >
-              {downloading === tab ? "Generating…" : `Download ${tab} PNG`}
+              {downloading === tab
+                ? "Generating…"
+                : `Download ${tab}${(pagesPerTab[tab]?.length || 0) > 1 ? ` (${pagesPerTab[tab].length} PNGs)` : " PNG"}`}
             </button>
             <button
               onClick={downloadAll}
@@ -287,20 +321,27 @@ export default function RookieShareModal({
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto p-6 flex justify-center">
+        <div className="flex-1 overflow-auto p-6 flex flex-col items-center gap-6">
           {SHARE_TABS.map((t) => {
-            const players = byTab[t] || [];
+            const pages = pagesPerTab[t] || [];
             const isActive = tab === t;
-            if (!players.length && !isActive) return null;
+            if (!pages.length && !isActive) return null;
+            const wrapperStyle = isActive ? {} : { position: "absolute", left: "-9999px", top: 0 };
             return (
-              <div key={t} style={isActive ? {} : { position: "absolute", left: "-9999px", top: 0 }}>
-                <ShareCard
-                  innerRef={(el) => { shareRefs.current[t] = el; }}
-                  which={t}
-                  players={players}
-                  year={year}
-                  limit={limit}
-                />
+              <div key={t} style={wrapperStyle} className="flex flex-col items-center gap-6">
+                {pages.map((page, idx) => (
+                  <ShareCard
+                    key={`${t}-${idx}`}
+                    innerRef={(el) => { shareRefs.current[`${t}-${idx}`] = el; }}
+                    which={t}
+                    players={page.players}
+                    year={year}
+                    limit={limit}
+                    startRank={page.startRank}
+                    part={page.part}
+                    total={page.total}
+                  />
+                ))}
               </div>
             );
           })}
@@ -315,11 +356,20 @@ export default function RookieShareModal({
   );
 }
 
-function ShareCard({ innerRef, which, players, year, limit }) {
+function ShareCard({ innerRef, which, players, year, limit, startRank = 1, part = 1, total = 1 }) {
   const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  const subtitle = which === "Overall"
-    ? `Top ${Math.min(limit, players.length)} Overall`
-    : `Top ${Math.min(limit, players.length)} ${which}`;
+  const endRank = startRank + players.length - 1;
+  const label = which === "Overall" ? "Overall" : which;
+  const subtitle = total > 1
+    ? `Top ${limit} ${label} · ${startRank}–${endRank}`
+    : `Top ${Math.min(limit, players.length)} ${label}`;
+
+  // Always 2 columns of (up to) 6, mirroring the Top-12 layout for both
+  // halves of a Top-24 export so the two screenshots feel like a single
+  // matched pair.
+  const half = Math.ceil(players.length / 2);
+  const col1 = players.slice(0, half);
+  const col2 = players.slice(half);
 
   return (
     <div
@@ -338,15 +388,24 @@ function ShareCard({ innerRef, which, players, year, limit }) {
         <div className="text-right">
           <div className="text-[10px] uppercase tracking-widest text-white/70">As of</div>
           <div className="text-base font-bold text-white">{date}</div>
+          {total > 1 && (
+            <div className="text-[10px] uppercase tracking-widest text-white/70 mt-2">
+              Part {part} / {total}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="rounded-xl border border-white/10 bg-slate-900/70 overflow-hidden">
-        <div className="divide-y divide-white/5">
-          {players.map((p, i) => (
-            <ShareRow key={p.id} player={p} rank={i + 1} />
-          ))}
-        </div>
+      <div className="grid grid-cols-2 gap-4">
+        {[col1, col2].map((col, ci) => (
+          <div key={ci} className="rounded-xl border border-white/10 bg-slate-900/70 overflow-hidden">
+            <div className="divide-y divide-white/5">
+              {col.map((p, i) => (
+                <ShareRow key={p.id} player={p} rank={ci === 0 ? startRank + i : startRank + half + i} />
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="text-center text-[11px] text-slate-500 pt-2 border-t border-white/10">
