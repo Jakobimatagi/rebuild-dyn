@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toPng } from "html-to-image";
+import { fetchShareBlurbs, buildTopPlayerBlurbInput } from "../lib/aiShareBlurbsApi.js";
 import { verifyLogin, fetchOcEntries } from "../lib/supabase.js";
 import {
   fetchSleeper,
@@ -187,6 +188,11 @@ export default function AdminTopPlayers() {
   const [shareTab, setShareTab] = useState("QB");
   const [shareLimit, setShareLimit] = useState(24);
   const [downloading, setDownloading] = useState(null); // pos key while exporting, "all" for batch
+  const [shareBlurbs, setShareBlurbs] = useState(() => new Map());
+  const [blurbsLoading, setBlurbsLoading] = useState(false);
+  const [blurbsError, setBlurbsError] = useState("");
+  const [blurbsCached, setBlurbsCached] = useState(false);
+  const [blurbBumpKey, setBlurbBumpKey] = useState(0);
   const shareRefs = useRef({});
 
   // ── Session restore ────────────────────────────────────────────────────────
@@ -549,6 +555,40 @@ export default function AdminTopPlayers() {
     return out;
   }, [sharePositions]);
 
+  // Auto-fetch per-player AI rationales whenever the active tab's set
+  // changes (year is implicit since computed.players doesn't switch
+  // mid-session, but shareLimit + tab + tePremium all reshape the list).
+  // Results accumulate across tab switches so we don't re-pay for players
+  // already explained. bumpKey forces a cache bypass for "Regenerate".
+  useEffect(() => {
+    if (!showShare || !sharePositions) return;
+    const players = sharePositions[shareTab] || [];
+    if (!players.length) return;
+    const inputs = players.map(buildTopPlayerBlurbInput);
+    const force = blurbBumpKey > 0;
+    let cancelled = false;
+    setBlurbsLoading(true);
+    setBlurbsError("");
+    fetchShareBlurbs("top-players", inputs, { position: shareTab }, { force })
+      .then(({ blurbsById, cached }) => {
+        if (cancelled) return;
+        setShareBlurbs((prev) => {
+          const next = new Map(prev);
+          for (const [id, blurb] of blurbsById) next.set(id, blurb);
+          return next;
+        });
+        setBlurbsCached(cached);
+        setBlurbsLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setBlurbsError(String(err.message || err));
+        setBlurbsLoading(false);
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showShare, sharePositions, shareTab, blurbBumpKey]);
+
   function shareFilenameFor(pos, page) {
     const base = `top-${pos.toLowerCase()}-top${shareLimit}`;
     return page.total > 1 ? `${base}-pt${page.part}.png` : `${base}.png`;
@@ -754,6 +794,11 @@ export default function AdminTopPlayers() {
           downloading={downloading}
           tePremium={tePremium}
           ocTargetSeason={computed?.ocTargetSeason}
+          blurbs={shareBlurbs}
+          blurbsLoading={blurbsLoading}
+          blurbsError={blurbsError}
+          blurbsCached={blurbsCached}
+          onRegenerateBlurbs={() => setBlurbBumpKey((k) => k + 1)}
           onDownload={downloadCard}
           onDownloadAll={downloadAll}
           onClose={() => setShowShare(false)}
@@ -766,6 +811,7 @@ export default function AdminTopPlayers() {
 function ShareModal({
   sharePages, shareTab, setShareTab, shareLimit, setShareLimit, shareRefs,
   downloading, tePremium, ocTargetSeason,
+  blurbs, blurbsLoading, blurbsError, blurbsCached, onRegenerateBlurbs,
   onDownload, onDownloadAll, onClose,
 }) {
   const modalRef = useModalBehavior(onClose);
@@ -808,6 +854,21 @@ function ShareModal({
           </div>
 
           <div className="ml-auto flex items-center gap-2">
+            <span className="text-[10px] text-slate-400 mr-1">
+              {blurbsLoading
+                ? "AI insights…"
+                : blurbsError
+                ? <span className="text-rose-300" title={blurbsError}>insights error</span>
+                : blurbs?.size > 0
+                ? `insights ✓${blurbsCached ? " (cached)" : ""}`
+                : ""}
+            </span>
+            <button onClick={onRegenerateBlurbs}
+              disabled={blurbsLoading || !activePages.length}
+              title="Force re-fetch of AI insights (bypasses cache)"
+              className="text-[10px] font-semibold px-2 py-1 rounded border border-amber-400/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20 disabled:opacity-40">
+              Regenerate
+            </button>
             <button onClick={() => onDownload(shareTab)}
               disabled={!activePages.length || downloading === shareTab || downloading === "all"}
               className="text-xs font-semibold px-3 py-1.5 rounded border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 disabled:opacity-40">
@@ -848,6 +909,7 @@ function ShareModal({
                     shareLimit={shareLimit}
                     tePremium={tePremium}
                     ocTargetSeason={ocTargetSeason}
+                    blurbs={blurbs}
                   />
                 ))}
               </div>
@@ -871,7 +933,7 @@ const POS_GRADIENTS = {
   TE: "from-amber-500 to-amber-700",
 };
 
-function ShareCard({ innerRef, pos, players, startRank = 1, part = 1, total = 1, shareLimit, tePremium, ocTargetSeason }) {
+function ShareCard({ innerRef, pos, players, startRank = 1, part = 1, total = 1, shareLimit, tePremium, ocTargetSeason, blurbs }) {
   const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   const endRank = startRank + players.length - 1;
   const subtitle = total > 1
@@ -915,7 +977,12 @@ function ShareCard({ innerRef, pos, players, startRank = 1, part = 1, total = 1,
           <div key={ci} className="rounded-xl border border-white/10 bg-slate-900/70 overflow-hidden">
             <div className="divide-y divide-white/5">
               {col.map((p, i) => (
-                <ShareRow key={p.id} player={p} rank={ci === 0 ? startRank + i : startRank + half + i} />
+                <ShareRow
+                  key={p.id}
+                  player={p}
+                  rank={ci === 0 ? startRank + i : startRank + half + i}
+                  blurb={blurbs?.get(p.id)}
+                />
               ))}
             </div>
           </div>
@@ -929,26 +996,29 @@ function ShareCard({ innerRef, pos, players, startRank = 1, part = 1, total = 1,
   );
 }
 
-function ShareRow({ player, rank }) {
+function ShareRow({ player, rank, blurb }) {
   const { id, name, position, team, displayScore, displayTier, ppg } = player;
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5">
-      <span className="text-base font-bold text-slate-500 w-7 text-right tabular-nums">{rank}</span>
+    <div className="flex items-start gap-3 px-4 py-2.5">
+      <span className="text-base font-bold text-slate-500 w-7 text-right tabular-nums pt-1">{rank}</span>
       <PlayerAvatar id={id} name={name} />
       <div className={`w-12 h-12 rounded-lg border flex flex-col items-center justify-center font-bold shrink-0 ${displayTier?.cls || "bg-slate-700 text-slate-200 border-slate-600"}`}>
         <span className="text-lg leading-none">{displayTier?.label || "—"}</span>
         <span className="text-[9px] leading-none mt-0.5 opacity-80">{displayScore}</span>
       </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-slate-100 font-bold text-base truncate">{name}</span>
           <span className="text-[10px] text-slate-400 border border-white/15 px-1.5 py-0.5 rounded font-semibold">{team}</span>
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${POS_COLORS[position]}`}>{position}</span>
         </div>
         {ppg && (
           <div className="text-[11px] text-slate-500 mt-0.5">{ppg} ppg</div>
         )}
+        {blurb && (
+          <div className="text-[11px] text-slate-300 italic mt-1 leading-snug">{blurb}</div>
+        )}
       </div>
-      <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${POS_COLORS[position]}`}>{position}</span>
     </div>
   );
 }

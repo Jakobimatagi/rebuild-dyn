@@ -1,0 +1,156 @@
+// Gemini proxy for the share-card "why is this player ranked here" blurbs.
+//
+// Powers a per-player one-sentence rationale on the Top Players and Rookie
+// share cards. Takes a kind ("top-players" | "rookies") and a list of
+// player summaries; returns one blurb per id. Shares GEMINI_API_KEY with
+// the other AI endpoints — no new secret required.
+
+const MODEL = "gemini-2.5-flash";
+const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+
+const TOP_PLAYERS_SYSTEM = `You are a dynasty fantasy football analyst writing for share-card captions on Twitter. You will receive a ranked list of NFL players. For each player, write ONE short sentence (max 140 characters) explaining WHY they sit at that rank in OUR model. Cite the concrete signal doing the work, not generic praise.
+
+Each row carries these fields (all already blended into "finalScore" 5–100):
+  - tier: S/A/B/C/D bucket of the final score
+  - internal: our model's score from production + age + situation
+  - fc: FantasyCalc market value (normalized 0–100)
+  - ra: RosterAudit market value (normalized 0–100)
+  - ppg: last NFL season fantasy points per game
+  - gp: last NFL season games played
+  - careerYears: number of NFL seasons with measurable production
+  - ocPct: next-year offensive coordinator scheme adjustment (%)
+  - capped: true if under 17 career NFL games (final score capped at 85)
+  - age, yearsExp
+
+When the player is unanimous (high internal + high fc + high ra) say so. When markets and our model diverge, name the divergence ("FC has him top-5, our internal model isn't there yet — limited NFL sample"). When a young player has a "capped" flag, mention it. When ocPct is meaningfully off zero (|ocPct| >= 6) and the player is RB/WR/TE, factor that in.
+
+Voice: confident, scout-tone, NO emojis, NO filler hype like "BREAKING" / "RISER". Reference exact numbers when they're load-bearing.
+
+Return ONLY this JSON, no prose, no markdown, no code fences:
+{
+  "blurbs": [
+    { "id": "<exact id from input>", "blurb": "one sentence under 140 chars" }
+  ]
+}
+
+Length of "blurbs" must equal length of input. Every input id must appear in the output. Each blurb ≤ 140 characters.`;
+
+const ROOKIES_SYSTEM = `You are a dynasty fantasy football pre-draft analyst writing share-card captions on Twitter. You will receive a ranked list of rookie prospects. For each, write ONE short sentence (max 140 characters) explaining WHY they sit at that rank in OUR model. Cite the concrete signal doing the work.
+
+Each row carries:
+  - grade: our computeGrade total (0–100) blending production, age, athletic profile, draft capital, and (when set) the user's tier conviction
+  - tier: user-assigned or derived tier label (Cornerstone, Foundational, Upside Shot, Mainstay, etc.)
+  - capital: NFL draft capital (early_1 > mid_1 > late_1 > early_2 ... > udfa), null if not yet drafted
+  - landing: NFL team if assigned
+  - comp: user-set comparable NFL player, if any
+  - adp: rookie-draft ADP if set
+  - school: most recent college
+  - recent: last college season stats relevant to position (target share, ypc, completion %, etc.)
+
+Lean on the strongest signal: if a prospect has elite recent stats, name the number. If they fell in capital, mention it. If a comp is set and it adds signal, reference it. If grade outpaces the tier (or vice versa) note the gap. Tier "Cornerstone" / "Foundational" are top-end; "Replaceable" / "JAG" are bottom.
+
+Voice: confident, scout-tone, NO emojis, NO filler hype. Reference exact numbers when they're load-bearing.
+
+Return ONLY this JSON, no prose, no markdown, no code fences:
+{
+  "blurbs": [
+    { "id": "<exact id from input>", "blurb": "one sentence under 140 chars" }
+  ]
+}
+
+Length of "blurbs" must equal length of input. Every input id must appear in the output. Each blurb ≤ 140 characters.`;
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
+  }
+
+  const { kind, players, scope } = req.body || {};
+  if (!Array.isArray(players) || players.length === 0) {
+    return res.status(400).json({ error: "Missing players in body" });
+  }
+  if (kind !== "rookies" && kind !== "top-players") {
+    return res.status(400).json({ error: "kind must be 'rookies' or 'top-players'" });
+  }
+
+  const systemPrompt = kind === "rookies" ? ROOKIES_SYSTEM : TOP_PLAYERS_SYSTEM;
+  const scopeBit = kind === "rookies"
+    ? `Rookie class: ${scope?.year ?? "unknown"}. Position scope: ${scope?.position ?? "all"}.`
+    : `Top Players board · 12-team SF full-PPR. Position scope: ${scope?.position ?? "all"}.`;
+
+  const userPrompt = `${scopeBit}
+
+Ranked input (one entry per player, ordered by our model's final rank):
+${JSON.stringify(players, null, 2)}
+
+Write the blurbs as specified.`;
+
+  const payload = {
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+    generationConfig: {
+      temperature: 0.6,
+      responseMimeType: "application/json",
+    },
+  };
+
+  try {
+    const upstream = await fetch(`${ENDPOINT}?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await upstream.json();
+
+    if (!upstream.ok) {
+      return res
+        .status(upstream.status)
+        .json({ error: "Gemini upstream error", detail: data });
+    }
+
+    const text = data?.candidates?.[0]?.content?.parts
+      ?.map((p) => p.text || "")
+      .join("")
+      .trim();
+
+    if (!text) {
+      return res
+        .status(502)
+        .json({ error: "Empty response from Gemini", raw: data });
+    }
+
+    const result = parseJsonLoose(text);
+    if (!result || !Array.isArray(result.blurbs)) {
+      return res
+        .status(502)
+        .json({ error: "Could not parse JSON from model", raw: text });
+    }
+
+    res.setHeader("Cache-Control", "private, max-age=0, no-store");
+    return res.status(200).json({ result });
+  } catch (err) {
+    return res
+      .status(502)
+      .json({ error: "Upstream request failed", detail: String(err) });
+  }
+}
+
+function parseJsonLoose(text) {
+  try { return JSON.parse(text); } catch { /* fall through */ }
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) {
+    try { return JSON.parse(fenced[1].trim()); } catch { /* fall through */ }
+  }
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try { return JSON.parse(text.slice(start, end + 1)); } catch { /* fall through */ }
+  }
+  return null;
+}

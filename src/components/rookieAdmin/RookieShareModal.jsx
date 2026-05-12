@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toPng } from "html-to-image";
 import { useModalBehavior } from "../../lib/useModalBehavior.js";
 import { computeGrade, deriveSchool, deriveTier } from "../../lib/prospectScoring.js";
+import { fetchShareBlurbs, buildRookieBlurbInput } from "../../lib/aiShareBlurbsApi.js";
 import { normalizeName } from "./utils.js";
 import { POS_COLORS } from "./constants.js";
 
@@ -80,6 +81,17 @@ export default function RookieShareModal({
   const [downloading, setDownloading] = useState(null);
   const shareRefs = useRef({});
 
+  // Per-player AI rationale blurbs. Keyed by prospect id. We accumulate
+  // across tab/year/limit changes so a previously-fetched player stays
+  // captioned when the user switches scope back. `blurbsLoading` flips
+  // while a fetch is in flight; `blurbsError` surfaces transient failures
+  // without nuking the visible blurbs we already have.
+  const [blurbs, setBlurbs] = useState(() => new Map());
+  const [blurbsLoading, setBlurbsLoading] = useState(false);
+  const [blurbsError, setBlurbsError] = useState("");
+  const [blurbsCached, setBlurbsCached] = useState(false);
+  const [blurbBumpKey, setBlurbBumpKey] = useState(0);
+
   // Mirror the membership rules the rest of the admin uses (filter on
   // RookieProspector lines 416-425 + the Archive selector). For a given
   // prospect, compute their "effective" draft year:
@@ -133,6 +145,7 @@ export default function RookieShareModal({
           comp: p.comparablePlayer || p.comparable_player || "",
           rookieAdp: ann.rookieDraftAdp || "",
           grade: Math.round(grade),
+          seasons: p.seasons || [],
         };
       })
       .filter(Boolean)
@@ -167,6 +180,38 @@ export default function RookieShareModal({
     });
     return out;
   }, [byTab]);
+
+  // Auto-fetch blurbs whenever the active tab's player set changes. We
+  // build the input off `byTab[tab]` (the unpaged list capped at `limit`)
+  // so the model sees ALL visible players in one round-trip, not per page.
+  // bumpKey lets the "Regenerate" button force a refetch through the cache.
+  useEffect(() => {
+    const players = byTab[tab] || [];
+    if (!players.length) return;
+    const inputs = players.map(buildRookieBlurbInput);
+    const force = blurbBumpKey > 0;
+    let cancelled = false;
+    setBlurbsLoading(true);
+    setBlurbsError("");
+    fetchShareBlurbs("rookies", inputs, { year, position: tab === "Overall" ? "all" : tab }, { force })
+      .then(({ blurbsById, cached }) => {
+        if (cancelled) return;
+        setBlurbs((prev) => {
+          const next = new Map(prev);
+          for (const [id, blurb] of blurbsById) next.set(id, blurb);
+          return next;
+        });
+        setBlurbsCached(cached);
+        setBlurbsLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setBlurbsError(String(err.message || err));
+        setBlurbsLoading(false);
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [byTab, tab, year, blurbBumpKey]);
 
   async function captureNode(node) {
     return toPng(node, {
@@ -295,6 +340,23 @@ export default function RookieShareModal({
           </div>
 
           <div className="ml-auto flex items-center gap-2">
+            <span className="text-[10px] text-slate-400 mr-1">
+              {blurbsLoading
+                ? "AI insights…"
+                : blurbsError
+                ? <span className="text-rose-300" title={blurbsError}>insights error</span>
+                : blurbs.size > 0
+                ? `insights ✓${blurbsCached ? " (cached)" : ""}`
+                : ""}
+            </span>
+            <button
+              onClick={() => setBlurbBumpKey((k) => k + 1)}
+              disabled={blurbsLoading || !totalForTab}
+              title="Force re-fetch of AI insights (bypasses cache)"
+              className="text-[10px] font-semibold px-2 py-1 rounded border border-amber-400/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20 disabled:opacity-40"
+            >
+              Regenerate
+            </button>
             <button
               onClick={() => downloadTab(tab)}
               disabled={!totalForTab || downloading === tab || downloading === "all"}
@@ -340,6 +402,7 @@ export default function RookieShareModal({
                     startRank={page.startRank}
                     part={page.part}
                     total={page.total}
+                    blurbs={blurbs}
                   />
                 ))}
               </div>
@@ -356,7 +419,7 @@ export default function RookieShareModal({
   );
 }
 
-function ShareCard({ innerRef, which, players, year, limit, startRank = 1, part = 1, total = 1 }) {
+function ShareCard({ innerRef, which, players, year, limit, startRank = 1, part = 1, total = 1, blurbs }) {
   const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   const endRank = startRank + players.length - 1;
   const label = which === "Overall" ? "Overall" : which;
@@ -401,7 +464,12 @@ function ShareCard({ innerRef, which, players, year, limit, startRank = 1, part 
           <div key={ci} className="rounded-xl border border-white/10 bg-slate-900/70 overflow-hidden">
             <div className="divide-y divide-white/5">
               {col.map((p, i) => (
-                <ShareRow key={p.id} player={p} rank={ci === 0 ? startRank + i : startRank + half + i} />
+                <ShareRow
+                  key={p.id}
+                  player={p}
+                  rank={ci === 0 ? startRank + i : startRank + half + i}
+                  blurb={blurbs?.get(p.id)}
+                />
               ))}
             </div>
           </div>
@@ -415,14 +483,14 @@ function ShareCard({ innerRef, which, players, year, limit, startRank = 1, part 
   );
 }
 
-function ShareRow({ player, rank }) {
+function ShareRow({ player, rank, blurb }) {
   const { name, position, school, capitalKey, tierLabel, landingSpot, comp, rookieAdp, grade } = player;
   const letter = gradeLetter(grade);
   const tierCls = TIER_COLORS[tierLabel] || "bg-slate-700 text-slate-200 border-slate-600";
 
   return (
-    <div className="flex items-center gap-4 px-5 py-3">
-      <span className="text-2xl font-black text-slate-400 w-10 text-right tabular-nums shrink-0">{rank}</span>
+    <div className="flex items-start gap-4 px-5 py-3">
+      <span className="text-2xl font-black text-slate-400 w-10 text-right tabular-nums shrink-0 pt-1">{rank}</span>
 
       <div className={`w-14 h-14 rounded-lg border flex flex-col items-center justify-center font-bold shrink-0 ${GRADE_BG[letter]}`}>
         <span className="text-2xl leading-none">{letter}</span>
@@ -456,6 +524,9 @@ function ShareRow({ player, rank }) {
           {landingSpot && <span>{landingSpot}</span>}
           {rookieAdp && <span className="text-sky-300">ADP {rookieAdp}</span>}
         </div>
+        {blurb && (
+          <div className="text-[11px] text-slate-300 italic mt-1.5 leading-snug">{blurb}</div>
+        )}
       </div>
     </div>
   );
