@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "2.103.3",
+    "@vercel/analytics": "2.0.1",
     "html-to-image": "1.11.13",
     "posthog-js": "1.373.4",
     "react": "18.3.1",
