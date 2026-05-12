@@ -7,6 +7,7 @@ import RookieRankings from './components/RookieRankings.jsx'
 import OffensiveCoordinators from './components/OffensiveCoordinators.jsx'
 import AdminTopPlayers from './components/AdminTopPlayers.jsx'
 import { initAnalytics } from './lib/analytics.js'
+import { Analytics } from '@vercel/analytics/react'
 
 initAnalytics()
 
@@ -19,5 +20,8 @@ else if (path.startsWith('/admin/top-players'))   Root = <AdminTopPlayers />
 else if (path.startsWith('/rookie-rankings'))      Root = <RookieRankings />
 
 createRoot(document.getElementById('root')).render(
-  <StrictMode>{Root}</StrictMode>,
+  <StrictMode>
+    {Root}
+    <Analytics />
+  </StrictMode>,
 )
