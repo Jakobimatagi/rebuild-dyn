@@ -6,6 +6,7 @@ import InputScreen from "./components/InputScreen";
 import Layout from "./components/Layout";
 import LeaguePickerScreen from "./components/LeaguePickerScreen";
 import LoadingScreen from "./components/LoadingScreen";
+import { identify } from "./lib/analytics";
 import { fetchAiAdvice } from "./lib/aiAdviceApi";
 import { buildRosterAnalysis, DEFAULT_SCORING_WEIGHTS } from "./lib/analysis";
 import { fetchFantasyCalcValues, fetchFantasyCalcTrades } from "./lib/fantasyCalcApi";
@@ -137,6 +138,11 @@ export default function App() {
   function toggleBars(id) {
     setExpandedBars((prev) => ({ ...prev, [id]: !prev[id] }));
   }
+
+  useEffect(() => {
+    const id = platform === "fleaflicker" ? ffEmail : username;
+    if (id) identify(id, { platform });
+  }, [username, ffEmail, platform]);
 
   useEffect(() => {
     const savedPlatform = localStorage.getItem("dynasty_os_platform");

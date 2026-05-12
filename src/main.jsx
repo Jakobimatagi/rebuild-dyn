@@ -6,6 +6,9 @@ import RookieProspector from './components/RookieProspector.jsx'
 import RookieRankings from './components/RookieRankings.jsx'
 import OffensiveCoordinators from './components/OffensiveCoordinators.jsx'
 import AdminTopPlayers from './components/AdminTopPlayers.jsx'
+import { initAnalytics } from './lib/analytics.js'
+
+initAnalytics()
 
 const path = window.location.pathname
 
