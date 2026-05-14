@@ -1,4 +1,4 @@
-# Dynasty OS
+# Dynasty Oracle
 
 Browser-only dynasty fantasy football analysis tool. Connect your Sleeper or Fleaflicker account, pick a dynasty league, and get a full analytical dashboard — roster grades, trade tools, league-wide rankings, rookie scouting, and a multi-year strategy planner.
 

@@ -10,7 +10,7 @@ export default function LeaguePickerScreen({
   return (
     <>
       <div style={styles.header}>
-        <div style={styles.logo}>Dynasty Advisor — Select League</div>
+        <div style={styles.logo}>Dynasty Oracle — Select League</div>
         <h1 style={styles.title}>Your Leagues</h1>
       </div>
       {error && (

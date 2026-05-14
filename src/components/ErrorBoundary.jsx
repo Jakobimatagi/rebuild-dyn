@@ -12,7 +12,7 @@ export default class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
-    console.error("Dynasty OS uncaught error:", error, info.componentStack);
+    console.error("Dynasty Oracle uncaught error:", error, info.componentStack);
   }
 
   handleReset() {
