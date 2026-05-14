@@ -31,6 +31,7 @@ export function buildRosterPicks(
   tradedPicks,
   rosterLabelById,
   futureSeasons,
+  completedDraftSeasons = new Set(),
 ) {
   const draftRounds = league.settings?.draft_rounds || 5;
 
@@ -42,19 +43,28 @@ export function buildRosterPicks(
       .map((pick) => `${pick.season}_${pick.round}_${pick.roster_id}`),
   );
 
-  const ownPicks = futureSeasons.flatMap((season) =>
-    Array.from({ length: draftRounds }, (_, index) => index + 1)
-      .filter((round) => !tradedAway.has(`${season}_${round}_${rosterId}`))
-      .map((round) => ({
-        season: String(season),
-        round,
-        isOwn: true,
-        label: `${season} ${round === 1 ? "1st" : round === 2 ? "2nd" : round === 3 ? "3rd" : `${round}th`}`,
-      })),
-  );
+  const ownPicks = futureSeasons
+    .filter((season) => !completedDraftSeasons.has(String(season)))
+    .flatMap((season) =>
+      Array.from({ length: draftRounds }, (_, index) => index + 1)
+        .filter((round) => !tradedAway.has(`${season}_${round}_${rosterId}`))
+        .map((round) => ({
+          season: String(season),
+          round,
+          isOwn: true,
+          label: `${season} ${round === 1 ? "1st" : round === 2 ? "2nd" : round === 3 ? "3rd" : `${round}th`}`,
+        })),
+    );
 
+  const futureSeasonSet = new Set(futureSeasons.map(String));
   const acquiredPicks = tradedPicks
-    .filter((pick) => pick.owner_id === rosterId && pick.roster_id !== rosterId)
+    .filter(
+      (pick) =>
+        pick.owner_id === rosterId &&
+        pick.roster_id !== rosterId &&
+        futureSeasonSet.has(String(pick.season)) &&
+        !completedDraftSeasons.has(String(pick.season)),
+    )
     .map((pick) => ({
       season: String(pick.season),
       round: pick.round,
@@ -424,6 +434,7 @@ export function buildRosterSnapshot(
   predictionContext = null,
   rosterAuditContext = null,
   ocOutlookContext = null,
+  completedDraftSeasons = new Set(),
 ) {
   const playerIds = roster.players || [];
   const picks = buildRosterPicks(
@@ -432,6 +443,7 @@ export function buildRosterSnapshot(
     tradedPicks,
     rosterLabelById,
     futureSeasons,
+    completedDraftSeasons,
   );
 
   const enriched = playerIds

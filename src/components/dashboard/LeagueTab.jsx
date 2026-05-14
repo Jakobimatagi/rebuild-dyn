@@ -43,6 +43,31 @@ function PositionGrades({ posRanks }) {
   );
 }
 
+function PickGrade({ pickRank }) {
+  const color = pickRank?.color || "#4a5068";
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        background: `${color}12`,
+        border: `1px solid ${color}30`,
+        borderRadius: 3,
+        padding: "3px 7px",
+        minWidth: 34,
+      }}
+    >
+      <span style={{ fontSize: 8, letterSpacing: 1.5, color: "#9ca3b8", textTransform: "uppercase" }}>
+        Picks
+      </span>
+      <span style={{ fontSize: 12, fontWeight: 700, color, lineHeight: 1.2 }}>
+        {pickRank ? rankLabel(pickRank.rank) : "—"}
+      </span>
+    </div>
+  );
+}
+
 function TeamRoster({ byPos }) {
   return (
     <div style={{ marginTop: 16 }}>
@@ -591,6 +616,7 @@ export default function LeagueTab({ leagueTeams, myTeamLabel, isSuperflex }) {
 
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <PositionGrades posRanks={team.posRanks} />
+                  <PickGrade pickRank={team.pickRank} />
                   <div style={{ textAlign: "right", flexShrink: 0, minWidth: 38 }}>
                     <div
                       style={{

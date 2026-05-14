@@ -7,7 +7,7 @@ import { getLeagueRulesContext } from './marketValue';
 import { buildTradeMarket, buildTradeSuggestions, evaluateTrade } from './tradeEngine';
 import { buildPredictionContext } from './predictionEngine';
 import { buildLeagueActivity } from './activityEngine';
-import { assignPositionRanks as _assignPositionRanks } from './playerGrading';
+import { assignPositionRanks as _assignPositionRanks, assignPickRanks as _assignPickRanks } from './playerGrading';
 import { buildDraftRecap } from './draftRecap';
 import { buildOcOutlookContext } from './ocAdjustment';
 import { buildCliffCalendar } from './cliffCalendar';
@@ -138,6 +138,12 @@ export function buildRosterAnalysis(
     players,
   });
 
+  const completedDraftSeasons = new Set(
+    (sleeperDrafts || [])
+      .filter((d) => d.status === "complete")
+      .map((d) => String(d.season)),
+  );
+
   const leagueTeams = sourceRosters.map((roster) =>
     buildRosterSnapshot(
       roster,
@@ -157,6 +163,7 @@ export function buildRosterAnalysis(
       predictionContext,
       rosterAuditContext,
       ocOutlookContext,
+      completedDraftSeasons,
     ),
   );
 
@@ -202,6 +209,9 @@ export function buildRosterAnalysis(
     leagueTeams,
     leagueContext,
   );
+
+  // Rank each team's draft pick capital 1..N across the league.
+  _assignPickRanks(leagueTeams, leagueContext, tradeMarket);
   const tradeSuggestions = buildTradeSuggestions(
     myTeam,
     leagueTeams,
