@@ -3,7 +3,7 @@
  * Player verdict labels, room grades, archetype classification, and tags.
  * Pure functions — no side effects.
  */
-import { getKeepCount } from "./marketValue";
+import { getKeepCount, estimatePickValue } from "./marketValue";
 import { clamp } from "./scoringEngine";
 
 export function getVerdict(score) {
@@ -228,6 +228,34 @@ function rankColor(rank, total) {
   if (rank <= third) return "#00f5a0";
   if (rank <= third * 2) return "#ffd84d";
   return "#ff6b35";
+}
+
+// Ranks every team's draft pick capital 1..N across the league. Mutates each
+// team in `leagueTeams` to add `pickRank: { rank, of, value, color }`.
+// Quality = sum of estimated pick values across the team's tradeable picks.
+export function assignPickRanks(leagueTeams, leagueContext, tradeMarket) {
+  const total = leagueTeams.length;
+  if (!total) return;
+
+  const entries = leagueTeams.map((team) => {
+    const value = (team.picks || []).reduce(
+      (sum, pick) => sum + estimatePickValue(pick, leagueContext, tradeMarket),
+      0,
+    );
+    return { team, value };
+  });
+
+  entries.sort((a, b) => b.value - a.value);
+
+  entries.forEach((entry, idx) => {
+    const rank = idx + 1;
+    entry.team.pickRank = {
+      rank,
+      of: total,
+      value: Math.round(entry.value),
+      color: rankColor(rank, total),
+    };
+  });
 }
 
 export function rankLabel(rank) {
