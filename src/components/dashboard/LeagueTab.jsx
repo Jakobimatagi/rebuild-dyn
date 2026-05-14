@@ -2,6 +2,7 @@ import { useState } from "react";
 import { POSITION_PRIORITY } from "../../constants";
 import { getColor, rankLabel } from "../../lib/analysis";
 import { styles } from "../../styles";
+import Avatar from "../Avatar";
 
 const VERDICT_COLOR = {
   buy: "#00f5a0",
@@ -590,6 +591,7 @@ export default function LeagueTab({ leagueTeams, myTeamLabel, isSuperflex }) {
                   >
                     #{rank}
                   </span>
+                  <Avatar src={team.avatar} label={team.label} size={28} />
                   <span
                     style={{
                       fontSize: 14,
