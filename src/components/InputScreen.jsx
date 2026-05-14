@@ -35,7 +35,7 @@ export default function InputScreen({
   return (
     <>
       <div style={styles.header}>
-        <h1 style={styles.title}>Dynasty Advisor</h1>
+        <h1 style={styles.title}>Dynasty Oracle</h1>
         <p style={styles.subtitle}>
           AI-powered dynasty fantasy football analysis for Sleeper &amp; Fleaflicker leagues.
         </p>
@@ -136,10 +136,10 @@ export default function InputScreen({
       <div style={dividerStyle} />
       <div style={sectionHeadStyle}>ABOUT</div>
       <p style={{ ...cardBodyStyle, maxWidth: 640, marginBottom: 48, lineHeight: 1.8 }}>
-        Dynasty Advisor is a free tool built for dynasty fantasy football managers
+        Dynasty Oracle is a free tool built for dynasty fantasy football managers
         on the Sleeper and Fleaflicker platforms. Dynasty leagues differ from redraft leagues in that
         players stay on your roster year after year, making long-term roster
-        construction and age management critical. Dynasty Advisor helps you
+        construction and age management critical. Dynasty Oracle helps you
         understand your roster's strengths and weaknesses, identify trade
         opportunities, and plan your path to competing for a championship.
       </p>
@@ -181,7 +181,7 @@ const steps = [
   },
   {
     title: "Select your dynasty league",
-    body: "Dynasty Advisor automatically detects your dynasty leagues. Pick the one you want to analyze. You can switch between leagues at any time.",
+    body: "Dynasty Oracle automatically detects your dynasty leagues. Pick the one you want to analyze. You can switch between leagues at any time.",
   },
   {
     title: "Review your roster analysis",
@@ -195,7 +195,7 @@ const steps = [
 
 const faq = [
   {
-    q: "Is Dynasty Advisor free?",
+    q: "Is Dynasty Oracle free?",
     a: "Yes, completely free. There is no account required beyond your existing Sleeper username.",
   },
   {
@@ -207,12 +207,12 @@ const faq = [
     a: "Player stats and trade values are fetched fresh each time you load your roster. Historical stats are cached to keep load times fast.",
   },
   {
-    q: "Does Dynasty Advisor store my data?",
+    q: "Does Dynasty Oracle store my data?",
     a: "No. Your username or email is saved in your browser's local storage so you don't have to retype it. All roster and player data is fetched directly from public APIs and never sent to our servers.",
   },
   {
     q: "What is a dynasty fantasy football league?",
-    a: "In a dynasty league, you keep your entire roster from year to year, including rookie draft picks. Unlike redraft leagues, dynasty rewards long-term roster building, age management, and trade savvy — making tools like Dynasty Advisor especially valuable.",
+    a: "In a dynasty league, you keep your entire roster from year to year, including rookie draft picks. Unlike redraft leagues, dynasty rewards long-term roster building, age management, and trade savvy — making tools like Dynasty Oracle especially valuable.",
   },
 ];
 

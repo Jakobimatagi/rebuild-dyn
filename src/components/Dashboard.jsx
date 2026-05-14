@@ -71,7 +71,7 @@ export default function Dashboard({
             alignItems: "flex-start",
           }}
         >
-          <div style={styles.logo}>Dynasty Advisor — {selectedLeague?.name}</div>
+          <div style={styles.logo}>Dynasty Oracle — {selectedLeague?.name}</div>
           <div style={{ display: "flex", gap: 8 }}>
             <button
               className="dyn-btn-ghost"

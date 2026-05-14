@@ -1,4 +1,4 @@
-# Dynasty OS — Architecture Reference
+# Dynasty Oracle — Architecture Reference
 
 Single source of truth for how this app is structured. Replaces the seven scattered `feature_claude.md` files that previously lived alongside the code.
 
@@ -40,7 +40,7 @@ Single source of truth for how this app is structured. Replaces the seven scatte
 ## Root overview
 
 ### What this app is
-Dynasty OS is a browser-only dynasty fantasy football analysis tool. Users connect their Sleeper or Fleaflicker account, pick a dynasty league, and get a full analytical dashboard: player grades, roster room breakdowns, trade tools, league-wide comparisons, rookie rankings, and a multi-year strategy planner.
+Dynasty Oracle is a browser-only dynasty fantasy football analysis tool. Users connect their Sleeper or Fleaflicker account, pick a dynasty league, and get a full analytical dashboard: player grades, roster room breakdowns, trade tools, league-wide comparisons, rookie rankings, and a multi-year strategy planner.
 
 ### Tech stack
 - **React 18 + Vite 6** — SPA, no React Router (App.jsx conditionally renders screens via `step` state). All styling via inline style objects in `src/styles.js` plus Tailwind classes on two standalone admin/public pages.

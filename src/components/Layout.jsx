@@ -51,7 +51,7 @@ export default function Layout({ children }) {
           Privacy Policy
         </a>
         <span style={{ color: "rgba(255,255,255,0.15)", margin: "0 10px" }}>·</span>
-        <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}>© {new Date().getFullYear()} Dynasty Advisor</span>
+        <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}>© {new Date().getFullYear()} Dynasty Oracle</span>
       </footer>
 
       {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
