@@ -11,6 +11,7 @@ import { assignPositionRanks as _assignPositionRanks, assignPickRanks as _assign
 import { buildDraftRecap } from './draftRecap';
 import { buildOcOutlookContext } from './ocAdjustment';
 import { buildCliffCalendar } from './cliffCalendar';
+import { resolveUserAvatar } from './sleeperAvatar';
 
 // Re-exports — consumers that import from 'analysis' still work unchanged.
 export { DEFAULT_SCORING_WEIGHTS, draftTierLabel } from './scoringEngine';
@@ -86,6 +87,9 @@ export function buildRosterAnalysis(
         roster.settings?.team_name ||
         `Roster ${roster.roster_id}`,
     ]),
+  );
+  const userAvatarById = new Map(
+    users.map((user) => [user.user_id, resolveUserAvatar(user, { thumb: true })]),
   );
 
   const leagueContext = getLeagueRulesContext(league);
@@ -166,6 +170,10 @@ export function buildRosterAnalysis(
       completedDraftSeasons,
     ),
   );
+
+  for (const team of leagueTeams) {
+    team.avatar = userAvatarById.get(team.ownerId) || null;
+  }
 
   // Classify all teams relative to each other (contender / retool / rebuild)
   classifyLeagueTeams(leagueTeams, leagueContext);
