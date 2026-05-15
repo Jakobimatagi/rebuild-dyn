@@ -1,5 +1,7 @@
 // Veteran Pivot — trade the past for the present.
 
+import { isPastPeak } from "../ageBands";
+
 const CORE = new Set(["Cornerstone", "Foundational", "Productive Vet"]);
 
 export const veteranPivot = {
@@ -18,7 +20,9 @@ export const veteranPivot = {
       if (player.age <= 25) return true; // young core
       return player.age <= 28 && CORE.has(player.archetype);
     },
-    sellNow: (player) => player.age >= 28 && !CORE.has(player.archetype),
+    sellNow: (player, ctx) =>
+      isPastPeak(player, ctx?.analysis?.ageCurves, 28) &&
+      !CORE.has(player.archetype),
     holdReassess: (player) => player.age === 26 || player.age === 27,
   },
   triageRationales: {
@@ -101,9 +105,9 @@ export const veteranPivot = {
     title: "Veteran Pivot Trades",
     subtitle:
       "Cash the 28+ name-value vets for prime-age (25-27) proven producers. No pick returns — player-for-player.",
-    sellFilter: (p) => {
+    sellFilter: (p, ctx) => {
       if (!p) return false;
-      if (p.age < 28) return false;
+      if (!isPastPeak(p, ctx?.analysis?.ageCurves, 28)) return false;
       if ((p.score || 0) < 50) return false;
       if (p.archetype === "Cornerstone") return false; // keep true elites
       return true;
@@ -157,9 +161,9 @@ export const veteranPivot = {
         )
         .sort((a, b) => (b.score || 0) - (a.score || 0))[0];
     },
-    anchorFilter: (p) => {
+    anchorFilter: (p, ctx) => {
       if (!p) return false;
-      if (p.age < 27) return false;
+      if (!isPastPeak(p, ctx?.analysis?.ageCurves, 27)) return false;
       if ((p.score || 0) < 50) return false;
       if (p.archetype === "Cornerstone") return false;
       return true;

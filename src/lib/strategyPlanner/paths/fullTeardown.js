@@ -1,5 +1,7 @@
 // Full Teardown (Scorched Earth) — bottom out, stockpile picks, swing for fences.
 
+import { isPastPeak } from "../ageBands";
+
 const YOUNG_BUILD_AROUND_ARCHETYPES = new Set([
   "Cornerstone",
   "Foundational",
@@ -23,7 +25,8 @@ export const fullTeardown = {
   triageRules: {
     buildAround: (player) =>
       player.age <= 24 && YOUNG_BUILD_AROUND_ARCHETYPES.has(player.archetype),
-    sellNow: (player) => player.age >= 26,
+    sellNow: (player, ctx) =>
+      isPastPeak(player, ctx?.analysis?.ageCurves, 26),
     holdReassess: (player) => player.age === 25,
   },
   triageRationales: {
@@ -104,9 +107,9 @@ export const fullTeardown = {
     title: "Sell-Side Marquee Moves",
     subtitle:
       "Every player 26+ with name value should be on the block. These are the trades that define the teardown.",
-    sellFilter: (p) => {
+    sellFilter: (p, ctx) => {
       if (!p) return false;
-      if (p.age < 26) return false;
+      if (!isPastPeak(p, ctx?.analysis?.ageCurves, 26)) return false;
       if ((p.score || 0) < 45) return false;
       // Keep only name-value vets — not ancient JAG
       return (
@@ -170,7 +173,7 @@ export const fullTeardown = {
       return (analysis.enriched || [])
         .filter(
           (p) =>
-            p.age >= 26 &&
+            isPastPeak(p, analysis?.ageCurves, 26) &&
             (p.score || 0) >= 65 &&
             Number(p.fantasyCalcValue || 0) >= 2500 &&
             (p.archetype === "Cornerstone" ||

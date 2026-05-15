@@ -20,139 +20,29 @@
 //   title                                — section header override (optional)
 
 import {
+  MIN_RATIO,
+  MAX_RATIO,
+  HARD_OVERPAY_CAP,
+  FC_BAND_MARQUEE,
+  valueOfPlayer,
+  fcOfPlayer,
+  pickKey,
+  formatPick,
+  phaseMatches,
+  passesRealismGates,
+  isPairingUsed,
+  recordPairing,
+  needBonus,
   valueOfPickPhase,
   pickFcValue,
-  pickSlotLabel,
   trendDelta,
-} from "../../marketValue";
+} from "../shared/pickParity";
 import {
   getMarketComps,
   describeMarketComp,
 } from "../../fantasyCalcTradeIndex";
 
-// Re-export so existing planner modules can keep importing from here.
-export { valueOfPickPhase, pickFcValue } from "../../marketValue";
-
-// Parity band: receive / send ratio must sit inside this window.
-// 0.85 — 1.25 = the initiator can net up to 25% upside (contenders pay a
-// win-now premium for vets; rebuilders eat a modest discount for picks).
-const MIN_RATIO = 0.85;
-const MAX_RATIO = 1.25;
-// If even the bare player is more than this over send value, reject —
-// no amount of pick-stripping will save it.
-const HARD_OVERPAY_CAP = 1.3;
-
-// FantasyCalc market sanity thresholds.
-const FC_MAX_PLAYER_RATIO = 1.4;
-const FC_MIN_PLAYER_RATIO = 0.6;
-const FC_PREMIUM_FLOOR = 2500;
 const MAX_PICK_ATTEMPTS = 6;
-
-// Archetype hierarchy — tier 5 is elite, tier 0 is roster cuts.
-const ARCHETYPE_TIER = {
-  Cornerstone: 5,
-  Foundational: 5,
-  Mainstay: 4,
-  "Upside Shot": 4,
-  "Productive Vet": 3,
-  "Short Term League Winner": 3,
-  "Short Term Production": 2,
-  Serviceable: 2,
-  "JAG - Insurance": 1,
-  "JAG - Developmental": 1,
-  Replaceable: 0,
-};
-const tierOf = (arch) => ARCHETYPE_TIER[arch] ?? 2;
-const MAX_TIER_DELTA = 2;
-
-function phaseMatches(partner, wanted) {
-  if (!wanted || wanted === "any") return true;
-  return partner?.teamPhase?.phase === wanted;
-}
-
-function formatPick(pick, ownerPhase) {
-  if (!pick) return null;
-  const year = pick.season || pick.year || "?";
-  const round = pick.round;
-  const suffix =
-    round === 1 ? "1st" : round === 2 ? "2nd" : round === 3 ? "3rd" : `${round}th`;
-  const slotLabel = pickSlotLabel(round, ownerPhase);
-  return slotLabel ? `${year} ${slotLabel} ${suffix}` : `${year} ${suffix}`;
-}
-
-function pickKey(pick) {
-  return `${pick.season || pick.year || "?"}-${pick.round}-${pick.originalOwner || pick.previous_owner_id || ""}`;
-}
-
-// Score-unit value for player parity math (marketValue is score-scale; FC
-// values are dollar-scale and handled as a separate sanity gate).
-export function valueOfPlayer(player) {
-  if (!player) return 0;
-  return Number(player.marketValue || player.score || 40);
-}
-
-// Shared gate. Returns null to reject, or an object describing why it passed
-// so the caller can emit the move.
-export function passesRealismGates(sellPlayer, recvPlayer) {
-  // FantasyCalc market sanity
-  const sendFc = Number(sellPlayer.dynastyMarketValue || sellPlayer.fantasyCalcValue || 0);
-  const recvFc = Number(recvPlayer.dynastyMarketValue || recvPlayer.fantasyCalcValue || 0);
-  if (sendFc > 0 && recvFc > 0) {
-    if (recvFc > sendFc * FC_MAX_PLAYER_RATIO) return null;
-    if (recvFc < sendFc * FC_MIN_PLAYER_RATIO) {
-      // caller may still pass if picks are in the package
-      return { soft: "underpay" };
-    }
-  } else if (recvFc > FC_PREMIUM_FLOOR && sendFc === 0) {
-    return null;
-  } else if (sendFc > FC_PREMIUM_FLOOR && recvFc === 0) {
-    return null;
-  }
-
-  // Archetype hierarchy
-  const sendTier = tierOf(sellPlayer.archetype);
-  const recvTier = tierOf(recvPlayer.archetype);
-  if (recvTier > sendTier + MAX_TIER_DELTA) return null;
-
-  // Roster relevance — targets must be fantasy-relevant or a real stash
-  // with upside, not random bench bodies.
-  const depth = recvPlayer.depthOrder ?? 9;
-  const breakoutProb = Number(recvPlayer.prediction?.breakoutProb || 0);
-  const yearsExp = Number(recvPlayer.yearsExp ?? 5);
-  const age = Number(recvPlayer.age ?? 99);
-  const isStarter = depth <= 1;
-  const isHandcuff = depth <= 2 && recvPlayer.position === "RB";
-  const isBreakoutBet = breakoutProb >= 25;
-  const isRookieStash =
-    yearsExp <= 1 &&
-    (recvPlayer.archetype === "Foundational" ||
-      recvPlayer.archetype === "Cornerstone" ||
-      recvPlayer.archetype === "Upside Shot");
-  // Young stash bucket: 2nd/3rd-year players with real upside signals —
-  // Upside Shot / Foundational archetype OR strong draft pedigree. This
-  // covers the "deep roster spot today, fantasy-relevant tomorrow" case.
-  const hasDraftPedigree =
-    recvPlayer.draftRound != null && Number(recvPlayer.draftRound) <= 3;
-  const isYoungStash =
-    age <= 24 &&
-    yearsExp <= 3 &&
-    (recvPlayer.archetype === "Upside Shot" ||
-      recvPlayer.archetype === "Foundational" ||
-      recvPlayer.archetype === "Cornerstone" ||
-      (recvPlayer.archetype === "Mainstay" && hasDraftPedigree) ||
-      hasDraftPedigree);
-  if (
-    !isStarter &&
-    !isHandcuff &&
-    !isBreakoutBet &&
-    !isRookieStash &&
-    !isYoungStash
-  ) {
-    return null;
-  }
-
-  return { soft: null };
-}
 
 // Trim/add picks on the return side so we land inside the parity band.
 //   - Overpay  (ratio > MAX): strip returned picks largest-first.
@@ -211,18 +101,16 @@ function balanceReturn(ret, sellPlayer, sendValue, partner, leagueContext, pickO
   // FC dynasty-market sanity. Score-scale parity systematically lets
   // pick-heavy returns slip past for low-FC sells (e.g., a WR3 fetching
   // a 1st). Re-validate in FC-dollar space when both player sides have
-  // FC data.
-  const sendFc = Number(sellPlayer.dynastyMarketValue || sellPlayer.fantasyCalcValue || 0);
-  const recvFc = Number(recvPlayer.dynastyMarketValue || recvPlayer.fantasyCalcValue || 0);
+  // FC data. See FC_BAND_MARQUEE rationale in shared/pickParity.
+  const sendFc = fcOfPlayer(sellPlayer);
+  const recvFc = fcOfPlayer(recvPlayer);
   if (sendFc > 0 && recvFc > 0) {
     let receiveFcTotal = recvFc;
     for (const p of pickValues) {
       receiveFcTotal += pickFcValue(p.pick, partnerPhase, leagueContext, pickOverrides);
     }
     const fcRatio = receiveFcTotal / sendFc;
-    // Slightly looser than bombshell (marquee includes both directions);
-    // still tight enough to block "WR3 for a 1st" type slips.
-    if (fcRatio < 0.8 || fcRatio > 1.25) return null;
+    if (fcRatio < FC_BAND_MARQUEE.min || fcRatio > FC_BAND_MARQUEE.max) return null;
   }
 
   return {
@@ -236,11 +124,13 @@ function balanceReturn(ret, sellPlayer, sendValue, partner, leagueContext, pickO
   };
 }
 
-export function generateMarqueeMoves(analysis, path) {
+export function generateMarqueeMoves(analysis, path, opts = {}) {
   const config = path.marqueeMove;
   if (!config || typeof config.sellFilter !== "function") {
     return { title: "Marquee Moves", moves: [] };
   }
+
+  const usedPairings = opts.usedPairings || null;
 
   const ctx = { analysis };
   const leagueContext = analysis?.leagueContext || {};
@@ -281,6 +171,9 @@ export function generateMarqueeMoves(analysis, path) {
     let best = null;
     for (const partner of partners) {
       if (!phaseMatches(partner, config.partnerPhase)) continue;
+      if (isPairingUsed(usedPairings, partner.rosterId, sellPlayer.id, null)) {
+        continue;
+      }
 
       const excludePlayerIds = new Set(usedReceivingPlayerIds);
       const attemptCtx = { ...ctx, excludePlayerIds };
@@ -302,7 +195,14 @@ export function generateMarqueeMoves(analysis, path) {
           leagueContext,
           pickOverrides,
         );
-        if (balanced) break;
+        if (balanced) {
+          if (isPairingUsed(usedPairings, partner.rosterId, null, balanced.player.id)) {
+            balanced = null;
+            excludePlayerIds.add(rawRet.player.id);
+            continue;
+          }
+          break;
+        }
         excludePlayerIds.add(rawRet.player.id);
       }
       if (!balanced) continue;
@@ -321,6 +221,7 @@ export function generateMarqueeMoves(analysis, path) {
       // for a trending-down return player we're acquiring cheaply.
       score += trendDelta(sellPlayer, "sell");
       score += trendDelta(balanced.player, "buy");
+      score += needBonus(balanced.player, analysis);
 
       if (!best || score > best.score) {
         best = { partner, ret: balanced, score };
@@ -329,6 +230,7 @@ export function generateMarqueeMoves(analysis, path) {
     if (!best) continue;
 
     usedReceivingPlayerIds.add(best.ret.player.id);
+    recordPairing(usedPairings, best.partner.rosterId, sellPlayer.id, best.ret.player.id);
 
     let rationale = null;
     if (typeof config.rationale === "function") {

@@ -21,12 +21,20 @@
 // Shot/Cornerstone) no matter how high their score is.
 
 import {
+  tierOf,
+  fcOfPlayer,
+  pickKey,
+  formatPick,
   passesRealismGates,
-  valueOfPickPhase,
+  isPairingUsed,
+  recordPairing,
   pickFcValue,
-} from "./generateMarqueeMoves";
-import { pickSlotLabel, trendDelta } from "../../marketValue";
+  trendDelta,
+} from "../shared/pickParity";
 
+// Tier moves use a tighter parity band than Marquee/Bombshell/Haul on
+// purpose: same-position swaps with a small pick to close the gap have
+// less natural slack than cross-position deals or pick hauls.
 const MIN_RATIO = 0.88;
 const MAX_RATIO = 1.18;
 const MAX_PICKS_PER_PACKAGE = 2;
@@ -48,40 +56,6 @@ function isUntouchableYoung(p) {
     p.archetype === "Foundational" ||
     p.archetype === "Upside Shot"
   );
-}
-
-// Archetype hierarchy (for 1-tier-max delta)
-const ARCHETYPE_TIER = {
-  Cornerstone: 5,
-  Foundational: 5,
-  Mainstay: 4,
-  "Upside Shot": 4,
-  "Productive Vet": 3,
-  "Short Term League Winner": 3,
-  "Short Term Production": 2,
-  Serviceable: 2,
-  "JAG - Insurance": 1,
-  "JAG - Developmental": 1,
-  Replaceable: 0,
-};
-const tierOf = (arch) => ARCHETYPE_TIER[arch] ?? 2;
-
-function pickKey(pick) {
-  return `${pick.season || pick.year || "?"}-${pick.round}-${pick.originalOwner || pick.previous_owner_id || ""}`;
-}
-
-function formatPick(pick, ownerPhase) {
-  if (!pick) return null;
-  const year = pick.season || pick.year || "?";
-  const round = pick.round;
-  const suffix =
-    round === 1 ? "1st" : round === 2 ? "2nd" : round === 3 ? "3rd" : `${round}th`;
-  const slotLabel = pickSlotLabel(round, ownerPhase);
-  return slotLabel ? `${year} ${slotLabel} ${suffix}` : `${year} ${suffix}`;
-}
-
-function fcValue(p) {
-  return Number(p?.dynastyMarketValue || p?.fantasyCalcValue || 0);
 }
 
 // Pad picks to close a value gap. baseValue is the CHEAPER side; target
@@ -116,7 +90,7 @@ function isTierUpSource(p) {
   if (!p) return false;
   if (isUntouchableYoung(p)) return false;
   if (p.archetype === "Cornerstone") return false;
-  const fc = fcValue(p);
+  const fc = fcOfPlayer(p);
   if (fc <= 0) return false; // need FC to compare
   // FC rank gate — only mid-tier players are upgrade candidates
   const rank = Number(p.fantasyCalcRank || 0);
@@ -145,7 +119,7 @@ function isTierDownSource(p) {
   if (!p) return false;
   if (isUntouchableYoung(p)) return false;
   if (p.archetype === "Cornerstone") return false;
-  const fc = fcValue(p);
+  const fc = fcOfPlayer(p);
   if (fc <= 0) return false;
   const age = Number(p.age ?? 99);
   const archetype = p.archetype || "";
@@ -173,8 +147,9 @@ function findTierUp(
   usedTargetIds,
   usedPickKeys,
   pickOverrides,
+  usedPairings,
 ) {
-  const userFc = fcValue(userPlayer);
+  const userFc = fcOfPlayer(userPlayer);
   if (userFc <= 0) return null;
 
   const availablePicks = (userPicks || [])
@@ -187,13 +162,15 @@ function findTierUp(
   let best = null;
 
   for (const partner of partners) {
+    if (isPairingUsed(usedPairings, partner.rosterId, userPlayer.id, null)) continue;
     for (const other of partner.enriched || []) {
       if (!other || !other.position) continue;
       if (other.position !== userPlayer.position) continue;
       if (other.id === userPlayer.id) continue;
       if (usedTargetIds.has(other.id)) continue;
+      if (isPairingUsed(usedPairings, partner.rosterId, null, other.id)) continue;
 
-      const otherFc = fcValue(other);
+      const otherFc = fcOfPlayer(other);
       if (otherFc <= 0) continue; // dynasty market must cover both sides
 
       // Dynasty-value band: clear upgrade but not a star
@@ -255,13 +232,14 @@ function findTierUp(
 }
 
 // ---- TIER-DOWN LOOKUP ----------------------------------------------------
-function findTierDown(userPlayer, partners, leagueContext, usedTargetIds, pickOverrides) {
-  const userFc = fcValue(userPlayer);
+function findTierDown(userPlayer, partners, leagueContext, usedTargetIds, pickOverrides, usedPairings) {
+  const userFc = fcOfPlayer(userPlayer);
   if (userFc <= 0) return null;
 
   let best = null;
 
   for (const partner of partners) {
+    if (isPairingUsed(usedPairings, partner.rosterId, userPlayer.id, null)) continue;
     const partnerPhase = partner.teamPhase?.phase || null;
     const partnerPicks = (partner.picks || []).map((pk) => ({
       pick: pk,
@@ -273,8 +251,9 @@ function findTierDown(userPlayer, partners, leagueContext, usedTargetIds, pickOv
       if (other.position !== userPlayer.position) continue;
       if (other.id === userPlayer.id) continue;
       if (usedTargetIds.has(other.id)) continue;
+      if (isPairingUsed(usedPairings, partner.rosterId, null, other.id)) continue;
 
-      const otherFc = fcValue(other);
+      const otherFc = fcOfPlayer(other);
       if (otherFc <= 0) continue;
 
       // Dynasty-value band for tier-down
@@ -333,10 +312,11 @@ function findTierDown(userPlayer, partners, leagueContext, usedTargetIds, pickOv
 }
 
 // ---- MAIN GENERATOR ------------------------------------------------------
-export function generateTierMoves(analysis, path) {
+export function generateTierMoves(analysis, path, opts = {}) {
   const config = path?.tierMoves || {};
   const showUp = config.showUp !== false;
   const showDown = config.showDown !== false;
+  const usedPairings = opts.usedPairings || null;
 
   const leagueContext = analysis?.leagueContext || {};
   const myRosterId = analysis?.rosterId;
@@ -361,7 +341,7 @@ export function generateTierMoves(analysis, path) {
 
     const upCandidates = myPlayers
       .filter(isTierUpSource)
-      .sort((a, b) => fcValue(b) - fcValue(a))
+      .sort((a, b) => fcOfPlayer(b) - fcOfPlayer(a))
       .slice(0, 12);
 
     for (const userPlayer of upCandidates) {
@@ -375,12 +355,14 @@ export function generateTierMoves(analysis, path) {
         usedTargetIds,
         usedPickKeys,
         pickOverrides,
+        usedPairings,
       );
       if (!match) continue;
 
       usedTargetIds.add(match.target.id);
       usedSenderIds.add(userPlayer.id);
       match.packed.chosen.forEach((c) => usedPickKeys.add(pickKey(c.pick)));
+      recordPairing(usedPairings, match.partner.rosterId, userPlayer.id, match.target.id);
 
       tierUps.push({
         direction: "up",
@@ -414,7 +396,7 @@ export function generateTierMoves(analysis, path) {
 
     const downCandidates = myPlayers
       .filter(isTierDownSource)
-      .sort((a, b) => fcValue(b) - fcValue(a))
+      .sort((a, b) => fcOfPlayer(b) - fcOfPlayer(a))
       .slice(0, 12);
 
     for (const userPlayer of downCandidates) {
@@ -425,11 +407,13 @@ export function generateTierMoves(analysis, path) {
         leagueContext,
         usedTargetIds,
         pickOverrides,
+        usedPairings,
       );
       if (!match) continue;
 
       usedTargetIds.add(match.target.id);
       usedSenderIds.add(userPlayer.id);
+      recordPairing(usedPairings, match.partner.rosterId, userPlayer.id, match.target.id);
 
       tierDowns.push({
         direction: "down",

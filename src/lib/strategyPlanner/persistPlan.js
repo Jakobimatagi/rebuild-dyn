@@ -1,6 +1,14 @@
 // Single-plan-per-league persistence in localStorage.
 // Key: dyn:strategy-plan:{leagueId}:{rosterId}
 
+// Legacy pathKeys are migrated on read so plans saved before the
+// composite "rebuild" path was introduced continue to work. The
+// migrated shape is persisted back so the cost is paid once.
+const LEGACY_PATH_MAP = {
+  fullTeardown: { pathKey: "rebuild", variant: "hard" },
+  retoolRebuild: { pathKey: "rebuild", variant: "measured" },
+};
+
 function storageKey(leagueId, rosterId) {
   return `dyn:strategy-plan:${leagueId}:${rosterId}`;
 }
@@ -30,7 +38,24 @@ export function loadPlan(leagueId, rosterId) {
   try {
     const raw = window.localStorage.getItem(storageKey(leagueId, rosterId));
     if (!raw) return null;
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.pathKey) return parsed;
+    const mapping = LEGACY_PATH_MAP[parsed.pathKey];
+    if (!mapping) return parsed;
+    const migrated = {
+      ...parsed,
+      pathKey: mapping.pathKey,
+      variant: mapping.variant,
+    };
+    try {
+      window.localStorage.setItem(
+        storageKey(leagueId, rosterId),
+        JSON.stringify(migrated),
+      );
+    } catch {
+      /* persist-back is best-effort; the in-memory object still works */
+    }
+    return migrated;
   } catch {
     return null;
   }

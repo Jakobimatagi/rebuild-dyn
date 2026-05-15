@@ -11,3 +11,4 @@ export {
   getPathsForClass,
 } from "./pathDefinitions";
 export { savePlan, loadPlan, clearPlan } from "./persistPlan";
+export { computePlanStaleness } from "./planStaleness";

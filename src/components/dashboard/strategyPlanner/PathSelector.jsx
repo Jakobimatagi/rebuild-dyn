@@ -8,28 +8,25 @@ const RISK_COLORS = {
   High: "#ff6b35",
 };
 
-function PathCard({ path, selected, onClick }) {
+function PathCard({ path, selected, selectedVariant, onSelect }) {
+  const hasVariants = Array.isArray(path.variants) && path.variants.length > 0;
   const riskColor = RISK_COLORS[path.risk] || "#d1d7ea";
-  return (
-    <button
-      onClick={onClick}
-      className="dyn-btn-ghost"
-      style={{
-        ...styles.card,
-        textAlign: "left",
-        cursor: "pointer",
-        borderColor: selected ? "#00f5a0" : "rgba(255,255,255,0.15)",
-        borderWidth: selected ? 2 : 1,
-        background: selected
-          ? "rgba(0,245,160,0.07)"
-          : "rgba(255,255,255,0.05)",
-        width: "100%",
-        marginBottom: 0,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-      }}
-    >
+
+  const cardStyle = {
+    ...styles.card,
+    textAlign: "left",
+    borderColor: selected ? "#00f5a0" : "rgba(255,255,255,0.15)",
+    borderWidth: selected ? 2 : 1,
+    background: selected ? "rgba(0,245,160,0.07)" : "rgba(255,255,255,0.05)",
+    width: "100%",
+    marginBottom: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  };
+
+  const header = (
+    <>
       <div>
         <div
           style={{
@@ -67,6 +64,95 @@ function PathCard({ path, selected, onClick }) {
       <div style={{ fontSize: 12, color: "#d9deef", lineHeight: 1.4 }}>
         {path.tagline}
       </div>
+    </>
+  );
+
+  if (hasVariants) {
+    return (
+      <div style={{ ...cardStyle, cursor: "default" }}>
+        {header}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {path.variants.map((v) => {
+            const active = selected && selectedVariant === v.key;
+            const vRiskColor = RISK_COLORS[v.risk] || "#d1d7ea";
+            return (
+              <button
+                key={v.key}
+                onClick={() => onSelect(path.key, v.key)}
+                className="dyn-btn-ghost"
+                style={{
+                  ...styles.btnGhost,
+                  flex: "1 1 140px",
+                  textAlign: "left",
+                  padding: "8px 10px",
+                  borderColor: active ? "#00f5a0" : "rgba(255,255,255,0.18)",
+                  background: active
+                    ? "rgba(0,245,160,0.12)"
+                    : "rgba(255,255,255,0.04)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: active ? "#00f5a0" : "#fff",
+                    letterSpacing: 1,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {v.label}
+                </div>
+                <div
+                  style={{
+                    fontSize: 10,
+                    color: "#d9deef",
+                    lineHeight: 1.3,
+                  }}
+                >
+                  {v.tagline}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 6,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    marginTop: 2,
+                  }}
+                >
+                  <span style={styles.tag(vRiskColor)}>{v.risk} risk</span>
+                  <span style={{ fontSize: 9, color: "#c8cfe3" }}>
+                    {v.timeToContend}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <div
+          style={{
+            fontSize: 10,
+            color: "#c8cfe3",
+            marginTop: 4,
+            fontStyle: "italic",
+          }}
+        >
+          Best for: {path.bestFor}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => onSelect(path.key, null)}
+      className="dyn-btn-ghost"
+      style={{ ...cardStyle, cursor: "pointer" }}
+    >
+      {header}
       <div
         style={{
           display: "flex",
@@ -76,9 +162,7 @@ function PathCard({ path, selected, onClick }) {
         }}
       >
         <span style={styles.tag(riskColor)}>{path.risk} risk</span>
-        <span
-          style={{ fontSize: 10, color: "#c8cfe3", letterSpacing: 1 }}
-        >
+        <span style={{ fontSize: 10, color: "#c8cfe3", letterSpacing: 1 }}>
           {path.timeToContend}
         </span>
       </div>
@@ -99,6 +183,7 @@ function PathCard({ path, selected, onClick }) {
 export default function PathSelector({
   classification,
   selectedPathKey,
+  selectedVariant,
   onSelectPath,
   showAllPaths,
   onToggleShowAll,
@@ -139,7 +224,8 @@ export default function PathSelector({
             key={path.key}
             path={path}
             selected={selectedPathKey === path.key}
-            onClick={() => onSelectPath(path.key)}
+            selectedVariant={selectedVariant}
+            onSelect={onSelectPath}
           />
         ))}
       </div>

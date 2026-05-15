@@ -1,5 +1,4 @@
-import { fullTeardown } from "./paths/fullTeardown";
-import { retoolRebuild } from "./paths/retoolRebuild";
+import { rebuild } from "./paths/rebuild";
 import { positionalArbitrage } from "./paths/positionalArbitrage";
 import { veteranPivot } from "./paths/veteranPivot";
 import { youthInjection } from "./paths/youthInjection";
@@ -9,8 +8,7 @@ import { surgicalUpgrade } from "./paths/surgicalUpgrade";
 import { softLanding } from "./paths/softLanding";
 
 export const PATHS = {
-  fullTeardown,
-  retoolRebuild,
+  rebuild,
   positionalArbitrage,
   veteranPivot,
   youthInjection,
@@ -21,8 +19,7 @@ export const PATHS = {
 };
 
 export const PATH_ORDER = [
-  "fullTeardown",
-  "retoolRebuild",
+  "rebuild",
   "positionalArbitrage",
   "veteranPivot",
   "youthInjection",

@@ -18,9 +18,82 @@ function formatTimestamp(ts) {
   }
 }
 
+const STALENESS_BANNERS = {
+  aging: {
+    color: "#ffd84d",
+    bg: "rgba(255,216,77,0.07)",
+    border: "rgba(255,216,77,0.4)",
+  },
+  stale: {
+    color: "#ff9800",
+    bg: "rgba(255,152,0,0.08)",
+    border: "rgba(255,152,0,0.45)",
+  },
+  missing: {
+    color: "#ff6b35",
+    bg: "rgba(255,107,53,0.09)",
+    border: "rgba(255,107,53,0.5)",
+  },
+};
+
+function StalenessBanner({ staleness, onRegenerate }) {
+  if (!staleness || staleness.severity === "fresh") return null;
+  const tone = STALENESS_BANNERS[staleness.severity];
+  if (!tone) return null;
+
+  let headline;
+  let detail = null;
+  if (staleness.severity === "missing") {
+    const names = staleness.missingPlayers.map((p) => p.name).join(", ");
+    const n = staleness.missingPlayers.length;
+    headline = `${n} player${n === 1 ? "" : "s"} on this plan ${n === 1 ? "is" : "are"} no longer on your roster.`;
+    detail = names;
+  } else if (staleness.severity === "stale") {
+    headline = `Plan is ${staleness.daysOld} days old — values and rosters have likely shifted.`;
+  } else {
+    headline = `Plan is ${staleness.daysOld} days old.`;
+  }
+
+  return (
+    <div
+      style={{
+        padding: "10px 14px",
+        marginBottom: 16,
+        background: tone.bg,
+        border: `1px solid ${tone.border}`,
+        borderRadius: 4,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 12,
+        flexWrap: "wrap",
+      }}
+    >
+      <div style={{ flex: "1 1 auto", minWidth: 200 }}>
+        <div style={{ fontSize: 12, color: tone.color, fontWeight: 600 }}>
+          {headline}
+        </div>
+        {detail && (
+          <div style={{ fontSize: 11, color: "#d9deef", marginTop: 3 }}>
+            {detail}
+          </div>
+        )}
+      </div>
+      <button
+        className="dyn-btn-ghost"
+        style={{ ...styles.btnGhost, borderColor: tone.border, color: tone.color }}
+        onClick={onRegenerate}
+      >
+        Regenerate
+      </button>
+    </div>
+  );
+}
+
 export default function PlanView({
   plan,
   saved,
+  staleness,
   onSave,
   onRegenerate,
   onClear,
@@ -119,6 +192,8 @@ export default function PlanView({
           {plan.pathMechanic}
         </div>
       </div>
+
+      <StalenessBanner staleness={staleness} onRegenerate={onRegenerate} />
 
       <RosterTriageGrid triage={plan.sections.triage} />
       <TradeTargetList tradeTargets={plan.sections.tradeTargets} />
