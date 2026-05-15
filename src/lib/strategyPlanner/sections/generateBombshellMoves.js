@@ -28,87 +28,29 @@
 //   throwInFilter?(player, ctx) => boolean  (optional — picks-only OK)
 
 import {
-  passesRealismGates,
+  MIN_RATIO,
+  MAX_RATIO,
+  HARD_UNDERPAY_CAP,
+  FC_BAND_BOMBSHELL,
   valueOfPlayer,
+  fcOfPlayer,
+  pickKey,
+  formatPick,
+  phaseMatches,
+  passesRealismGates,
+  passesFcSanity,
+  isPairingUsed,
+  recordPairing,
+  needBonus,
   valueOfPickPhase,
-  pickFcValue,
-} from "./generateMarqueeMoves";
-import { pickSlotLabel, trendDelta } from "../../marketValue";
+  trendDelta,
+} from "../shared/pickParity";
 import {
   getMarketComps,
   describeMarketComp,
 } from "../../fantasyCalcTradeIndex";
 
-const MIN_RATIO = 0.85;
-const MAX_RATIO = 1.25;
-const HARD_UNDERPAY_CAP = 0.6;
 const MAX_PICKS_IN_PACKAGE = 4;
-
-// FC-DOLLAR sanity band. Every bombshell must clear this when both sides
-// have FantasyCalc data. Score-scale parity isn't enough — picks are
-// systematically undervalued in score-scale relative to the dynasty
-// market, which is how Shaheed-for-a-1st slipped through.
-const FC_MIN_RATIO = 0.85;
-const FC_MAX_RATIO = 1.2;
-
-function fcOfPlayer(p) {
-  return Number(p?.dynastyMarketValue || p?.fantasyCalcValue || 0);
-}
-
-// Sums FC dollars on a side: player + picks.
-function fcOfPackage(player, picks, ownerPhase, leagueContext, pickOverrides) {
-  let total = fcOfPlayer(player);
-  for (const pk of picks || []) {
-    total += pickFcValue(pk, ownerPhase, leagueContext, pickOverrides);
-  }
-  return total;
-}
-
-// Dynasty-market sanity check. If anchor has no FC, skip (we can't
-// validate). If anchor has FC, EVERY player in the package needs FC too
-// — otherwise we're estimating one side and it's not safe.
-function passesFcSanity({
-  anchorFc,
-  receivePlayer,
-  receivePicks,
-  receiveOwnerPhase,
-  leagueContext,
-  pickOverrides,
-}) {
-  if (anchorFc <= 0) return true; // can't gate without FC
-  // If a player is on the receive side, they MUST have FC too — no
-  // estimating premium players we can't validate
-  if (receivePlayer && fcOfPlayer(receivePlayer) <= 0) return false;
-  const receiveFc = fcOfPackage(
-    receivePlayer,
-    receivePicks,
-    receiveOwnerPhase,
-    leagueContext,
-    pickOverrides,
-  );
-  if (receiveFc <= 0) return false;
-  const ratio = receiveFc / anchorFc;
-  return ratio >= FC_MIN_RATIO && ratio <= FC_MAX_RATIO;
-}
-
-function pickKey(pick) {
-  return `${pick.season || pick.year || "?"}-${pick.round}-${pick.originalOwner || pick.previous_owner_id || ""}`;
-}
-
-function formatPick(pick, ownerPhase) {
-  if (!pick) return null;
-  const year = pick.season || pick.year || "?";
-  const round = pick.round;
-  const suffix =
-    round === 1 ? "1st" : round === 2 ? "2nd" : round === 3 ? "3rd" : `${round}th`;
-  const slotLabel = pickSlotLabel(round, ownerPhase);
-  return slotLabel ? `${year} ${slotLabel} ${suffix}` : `${year} ${suffix}`;
-}
-
-function phaseMatches(partner, wanted) {
-  if (!wanted || wanted === "any") return true;
-  return partner?.teamPhase?.phase === wanted;
-}
 
 // ---------------------------------------------------------------------------
 // ACQUIRE: user packages anchor + user picks to land a premium target.
@@ -305,12 +247,14 @@ function buildLiquidatePackage(
 // ---------------------------------------------------------------------------
 // Main generator — branches on config.mode.
 // ---------------------------------------------------------------------------
-export function generateBombshellMoves(analysis, path) {
+export function generateBombshellMoves(analysis, path, opts = {}) {
   const config = path.bombshellMove;
   if (!config) {
     return { title: "Bombshell Moves", moves: [], enabled: false };
   }
   const mode = config.mode || "acquire";
+
+  const usedPairings = opts.usedPairings || null;
 
   const ctx = { analysis };
   const leagueContext = analysis?.leagueContext || {};
@@ -372,10 +316,12 @@ export function generateBombshellMoves(analysis, path) {
         target = null;
       }
       if (!target || usedTargetIds.has(target.id)) continue;
+      if (isPairingUsed(usedPairings, partner.rosterId, null, target.id)) continue;
 
       let best = null;
       for (const anchor of anchorCandidates) {
         if (usedAnchorIds.has(anchor.id)) continue;
+        if (isPairingUsed(usedPairings, partner.rosterId, anchor.id, null)) continue;
         const pkg = buildAcquirePackage(
           anchor,
           target,
@@ -401,6 +347,7 @@ export function generateBombshellMoves(analysis, path) {
         // Trending-up target = harder to pry loose (penalty).
         score += trendDelta(anchor, "sell");
         score += trendDelta(target, "buy");
+        score += needBonus(target, analysis);
 
         if (!best || score > best.score) best = { pkg, score };
       }
@@ -410,6 +357,7 @@ export function generateBombshellMoves(analysis, path) {
       usedTargetIds.add(target.id);
       usedAnchorIds.add(pkg.anchor.id);
       pkg.sendPicks.forEach((pk) => usedPickKeys.add(pickKey(pk)));
+      recordPairing(usedPairings, partner.rosterId, pkg.anchor.id, target.id);
 
       let rationale = null;
       if (typeof config.rationale === "function") {
@@ -472,6 +420,7 @@ export function generateBombshellMoves(analysis, path) {
       let best = null;
       for (const partner of partners) {
         if (!phaseMatches(partner, config.partnerPhase)) continue;
+        if (isPairingUsed(usedPairings, partner.rosterId, anchor.id, null)) continue;
         const pkg = buildLiquidatePackage(
           anchor,
           partner,
@@ -495,6 +444,9 @@ export function generateBombshellMoves(analysis, path) {
         score += pkg.receivePicks.length * 3;
         // Trend: trending-down anchor = sell urgency (bonus).
         score += trendDelta(anchor, "sell");
+        // Liquidate-mode receive is picks-dominant, but a throw-in at a
+        // weak position is still a small win — nudge for it when present.
+        if (pkg.target) score += needBonus(pkg.target, analysis);
 
         if (!best || score > best.score) best = { pkg, partner, score };
       }
@@ -503,6 +455,7 @@ export function generateBombshellMoves(analysis, path) {
       const { pkg, partner } = best;
       usedAnchorIds.add(anchor.id);
       if (pkg.target) usedThrowInIds.add(pkg.target.id);
+      recordPairing(usedPairings, partner.rosterId, anchor.id, pkg.target?.id ?? null);
 
       let rationale = null;
       if (typeof config.rationale === "function") {

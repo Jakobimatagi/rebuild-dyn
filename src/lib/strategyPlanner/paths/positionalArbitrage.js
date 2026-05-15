@@ -1,5 +1,7 @@
 // Positional Arbitrage — exploit how your league values positions.
 
+import { isPastPeak } from "../ageBands";
+
 // Identify positions where the league-context premium is meaningfully
 // above or below 1.0 — those are the over/undervalued positions in this
 // specific format.
@@ -35,7 +37,7 @@ export const positionalArbitrage = {
       const { overvalued } = inefficientPositions(ctx.analysis);
       return (
         overvalued.includes(player.position) &&
-        player.age >= 26 &&
+        isPastPeak(player, ctx?.analysis?.ageCurves, 26) &&
         player.verdict !== "cut"
       );
     },
@@ -126,7 +128,9 @@ export const positionalArbitrage = {
       const prem = analysis?.leagueContext?.positionPremiums || {};
       const isOver = (prem[p.position] || 1) <= 0.95;
       if (!isOver) return false;
-      return p.age >= 26 && (p.score || 0) >= 50;
+      return (
+        isPastPeak(p, analysis?.ageCurves, 26) && (p.score || 0) >= 50
+      );
     },
     partnerPhase: "any",
     returnPicker: (partner, sellPlayer, ctx = {}) => {

@@ -35,3 +35,19 @@ export function isInDecline(player, ageCurves) {
   if (!player || player.age == null || !player.position) return false;
   return player.age >= getDeclineAge(player.position, ageCurves);
 }
+
+// True once the player is at or past their position's peak age. The
+// optional `floor` parameter preserves a legacy numeric cutoff: the
+// final threshold is max(floor, peakAge), so positions whose peak is
+// earlier than `floor` (e.g. RB at 24-25 when floor=26) keep the old
+// behavior, while positions whose peak is later (QB, often 28+) get a
+// position-aware threshold instead of being falsely flagged as old.
+//
+// Returns false when player or position data is missing so callers
+// fall through to their pre-existing logic rather than firing on
+// incomplete data.
+export function isPastPeak(player, ageCurves, floor = 0) {
+  if (!player || player.age == null || !player.position) return false;
+  const peak = getPeakAge(player.position, ageCurves);
+  return player.age >= Math.max(floor, peak);
+}

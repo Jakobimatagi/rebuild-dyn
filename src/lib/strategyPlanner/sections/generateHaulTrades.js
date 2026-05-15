@@ -22,24 +22,26 @@
 //   partnerPhase?: string                          — filter partners
 
 import {
-  passesRealismGates,
+  MIN_RATIO,
+  MAX_RATIO,
+  FC_BAND_HAUL,
+  tierOf,
   valueOfPlayer,
+  fcOfPlayer,
+  formatPick,
+  phaseMatches,
+  passesRealismGates,
+  isPairingUsed,
+  recordPairing,
+  needBonus,
   valueOfPickPhase,
   pickFcValue,
-} from "./generateMarqueeMoves";
-import { pickSlotLabel, trendDelta } from "../../marketValue";
+  trendDelta,
+} from "../shared/pickParity";
 import {
   getMarketComps,
   describeMarketComp,
 } from "../../fantasyCalcTradeIndex";
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-const MIN_RATIO = 0.85;
-const MAX_RATIO = 1.25;
-const FC_MIN_RATIO = 0.85;
-const FC_MAX_RATIO = 1.25;
 
 // Consolidation: require 2-4 players on the send side (the "haul feel").
 const CONSOL_MIN_PLAYERS = 2;
@@ -50,54 +52,6 @@ const LIQ_MAX_PICKS = 5;
 // And up to 2 throw-in players received alongside picks.
 const LIQ_MAX_THROW_INS = 2;
 
-// Archetype tiers — same as elsewhere.
-const ARCHETYPE_TIER = {
-  Cornerstone: 5,
-  Foundational: 5,
-  Mainstay: 4,
-  "Upside Shot": 4,
-  "Productive Vet": 3,
-  "Short Term League Winner": 3,
-  "Short Term Production": 2,
-  Serviceable: 2,
-  "JAG - Insurance": 1,
-  "JAG - Developmental": 1,
-  Replaceable: 0,
-};
-const tierOf = (arch) => ARCHETYPE_TIER[arch] ?? 2;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-function fcVal(p) {
-  return Number(p?.dynastyMarketValue || p?.fantasyCalcValue || 0);
-}
-
-function pickKey(pick) {
-  return `${pick.season || pick.year || "?"}-${pick.round}-${pick.originalOwner || pick.previous_owner_id || ""}`;
-}
-
-function formatPick(pick, ownerPhase) {
-  if (!pick) return null;
-  const year = pick.season || pick.year || "?";
-  const round = pick.round;
-  const suffix =
-    round === 1
-      ? "1st"
-      : round === 2
-        ? "2nd"
-        : round === 3
-          ? "3rd"
-          : `${round}th`;
-  const slotLabel = pickSlotLabel(round, ownerPhase);
-  return slotLabel ? `${year} ${slotLabel} ${suffix}` : `${year} ${suffix}`;
-}
-
-function phaseMatches(partner, wanted) {
-  if (!wanted || wanted === "any") return true;
-  return partner?.teamPhase?.phase === wanted;
-}
-
 // ---------------------------------------------------------------------------
 // Default filters
 // ---------------------------------------------------------------------------
@@ -106,7 +60,7 @@ function phaseMatches(partner, wanted) {
 // 50-70, rank 25-80ish). NOT ascending young talent, NOT elite anchors.
 function defaultConsolidationFilter(p) {
   if (!p) return false;
-  const fc = fcVal(p);
+  const fc = fcOfPlayer(p);
   if (fc <= 0) return false;
   const score = Number(p.score || 0);
   if (score < 50 || score > 72) return false;
@@ -131,7 +85,7 @@ function defaultConsolidationFilter(p) {
 // Liquidation anchor pool: genuine stars with dynasty market clout.
 function defaultLiquidationFilter(p) {
   if (!p) return false;
-  const fc = fcVal(p);
+  const fc = fcOfPlayer(p);
   if (fc < 3000) return false; // must be worth a real haul
   const score = Number(p.score || 0);
   if (score < 65) return false;
@@ -164,6 +118,8 @@ function findConsolidation(
   usedPlayerIds,
   usedTargetIds,
   partnerPhaseFilter,
+  usedPairings,
+  analysis,
 ) {
   const results = [];
 
@@ -176,7 +132,8 @@ function findConsolidation(
       .filter((p) => {
         if (!p || !p.position) return false;
         if (usedTargetIds.has(p.id)) return false;
-        const fc = fcVal(p);
+        if (isPairingUsed(usedPairings, partner.rosterId, null, p.id)) return false;
+        const fc = fcOfPlayer(p);
         if (fc < 2500) return false;
         const score = Number(p.score || 0);
         if (score < 68) return false;
@@ -186,10 +143,10 @@ function findConsolidation(
           Number(p.age ?? 99) <= 28
         );
       })
-      .sort((a, b) => fcVal(b) - fcVal(a));
+      .sort((a, b) => fcOfPlayer(b) - fcOfPlayer(a));
 
     for (const target of targets) {
-      const targetFc = fcVal(target);
+      const targetFc = fcOfPlayer(target);
       const targetValue = valueOfPlayer(target);
       if (targetValue <= 0) continue;
 
@@ -206,7 +163,7 @@ function findConsolidation(
           // PACKAGE parity check below handles fairness.
           return true;
         })
-        .sort((a, b) => fcVal(b) - fcVal(a));
+        .sort((a, b) => fcOfPlayer(b) - fcOfPlayer(a));
 
       if (eligible.length < CONSOL_MIN_PLAYERS) continue;
 
@@ -218,7 +175,7 @@ function findConsolidation(
       for (const piece of eligible) {
         if (chosen.length >= CONSOL_MAX_PLAYERS) break;
         const pVal = valueOfPlayer(piece);
-        const pFc = fcVal(piece);
+        const pFc = fcOfPlayer(piece);
         // Don't overshoot — if adding this piece pushes past max, skip
         if (totalSendValue + pVal > targetValue * MAX_RATIO && chosen.length >= CONSOL_MIN_PLAYERS) continue;
         chosen.push(piece);
@@ -241,7 +198,7 @@ function findConsolidation(
       // FC dynasty-market parity
       if (targetFc > 0 && totalSendFc > 0) {
         const fcRatio = totalSendFc / targetFc;
-        if (fcRatio < FC_MIN_RATIO || fcRatio > FC_MAX_RATIO) continue;
+        if (fcRatio < FC_BAND_HAUL.min || fcRatio > FC_BAND_HAUL.max) continue;
       }
 
       // Trend scoring
@@ -252,6 +209,7 @@ function findConsolidation(
         score += trendDelta(piece, "sell"); // trending-down sells = bonus
       }
       score += trendDelta(target, "buy"); // trending-down target = discount
+      score += needBonus(target, analysis);
 
       results.push({
         mode: "consolidation",
@@ -293,19 +251,22 @@ function findLiquidation(
   usedTargetIds,
   partnerPhaseFilter,
   pickOverrides,
+  usedPairings,
+  analysis,
 ) {
   const results = [];
 
   for (const anchor of anchorPool) {
     if (usedPlayerIds.has(anchor.id)) continue;
     const anchorValue = valueOfPlayer(anchor);
-    const anchorFc = fcVal(anchor);
+    const anchorFc = fcOfPlayer(anchor);
     if (anchorValue <= 0 || anchorFc <= 0) continue;
 
     let best = null;
 
     for (const partner of partners) {
       if (!phaseMatches(partner, partnerPhaseFilter)) continue;
+      if (isPairingUsed(usedPairings, partner.rosterId, anchor.id, null)) continue;
       const partnerPhase = partner?.teamPhase?.phase || null;
 
       // Build the pick haul — largest picks first for the bombshell feel
@@ -343,7 +304,7 @@ function findLiquidation(
       for (const ti of throwIns) {
         if (chosenThrowIns.length >= LIQ_MAX_THROW_INS) break;
         const tv = valueOfPlayer(ti);
-        const tfv = fcVal(ti);
+        const tfv = fcOfPlayer(ti);
         if (totalReceive + tv > anchorValue * MAX_RATIO) continue;
         chosenThrowIns.push(ti);
         totalReceive += tv;
@@ -368,13 +329,16 @@ function findLiquidation(
       // FC dynasty-market sanity
       if (anchorFc > 0 && totalReceiveFc > 0) {
         const fcRatio = totalReceiveFc / anchorFc;
-        if (fcRatio < FC_MIN_RATIO || fcRatio > FC_MAX_RATIO) continue;
+        if (fcRatio < FC_BAND_HAUL.min || fcRatio > FC_BAND_HAUL.max) continue;
       }
 
       let score = totalReceiveFc;
       score += chosenPicks.length * 200; // prefer more picks
       score -= Math.abs(1 - ratio) * anchorFc * 0.3;
       score += trendDelta(anchor, "sell"); // declining anchor = sell now
+      // Liquidation receive is picks-dominant; a weak-position throw-in
+      // is a small win when present.
+      for (const ti of chosenThrowIns) score += needBonus(ti, analysis);
 
       if (!best || score > best.score) {
         best = {
@@ -404,10 +368,11 @@ function findLiquidation(
 // ---------------------------------------------------------------------------
 // Main generator
 // ---------------------------------------------------------------------------
-export function generateHaulTrades(analysis, path) {
+export function generateHaulTrades(analysis, path, opts = {}) {
   const config = path?.haulTrades || {};
   const showConsolidation = config.showConsolidation !== false;
   const showLiquidation = config.showLiquidation !== false;
+  const usedPairings = opts.usedPairings || null;
 
   const leagueContext = analysis?.leagueContext || {};
   const myRosterId = analysis?.rosterId;
@@ -446,12 +411,22 @@ export function generateHaulTrades(analysis, path) {
       usedPlayerIds,
       usedTargetIds,
       config.partnerPhase,
+      usedPairings,
+      analysis,
     );
 
     // Mark used
     for (const c of consolidations) {
       usedTargetIds.add(c.target.id);
       for (const p of c.sendPlayers) usedPlayerIds.add(p.id);
+      // Anchor the dedup on the first sendPlayer (the largest piece); the
+      // (partner, target) pair is the more important key anyway.
+      recordPairing(
+        usedPairings,
+        c.partner.rosterId,
+        c.sendPlayers[0]?.id ?? null,
+        c.target.id,
+      );
     }
   }
 
@@ -464,7 +439,7 @@ export function generateHaulTrades(analysis, path) {
         : defaultLiquidationFilter;
     const liqPool = myPlayers
       .filter((p) => !usedPlayerIds.has(p.id) && liqFilter(p))
-      .sort((a, b) => fcVal(b) - fcVal(a));
+      .sort((a, b) => fcOfPlayer(b) - fcOfPlayer(a));
 
     liquidations = findLiquidation(
       liqPool,
@@ -474,7 +449,18 @@ export function generateHaulTrades(analysis, path) {
       usedTargetIds,
       config.partnerPhase,
       pickOverrides,
+      usedPairings,
+      analysis,
     );
+
+    for (const l of liquidations) {
+      recordPairing(
+        usedPairings,
+        l.partner.rosterId,
+        l.anchor.id,
+        l.chosenThrowIns[0]?.id ?? null,
+      );
+    }
   }
 
   // Format output moves

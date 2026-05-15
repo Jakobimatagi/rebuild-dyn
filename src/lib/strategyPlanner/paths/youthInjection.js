@@ -1,5 +1,7 @@
 // Youth Injection — add young legs to a veteran core.
 
+import { isPastPeak } from "../ageBands";
+
 const ELITE_VETS = new Set([
   "Cornerstone",
   "Foundational",
@@ -102,9 +104,9 @@ export const youthInjection = {
     title: "Youth Injection Trades",
     subtitle:
       "Trade aging depth and future picks for locked-in Year-2 starters. Keep your elite vet core.",
-    sellFilter: (p) => {
+    sellFilter: (p, ctx) => {
       if (!p) return false;
-      if (p.age < 27) return false;
+      if (!isPastPeak(p, ctx?.analysis?.ageCurves, 27)) return false;
       // Depth, not elite starters
       if (p.archetype === "Cornerstone" || p.archetype === "Foundational")
         return false;
@@ -171,9 +173,9 @@ export const youthInjection = {
             (b.score || 0) - (a.score || 0),
         )[0];
     },
-    anchorFilter: (p) => {
+    anchorFilter: (p, ctx) => {
       if (!p) return false;
-      if (p.age < 27) return false;
+      if (!isPastPeak(p, ctx?.analysis?.ageCurves, 27)) return false;
       if (p.archetype === "Cornerstone") return false;
       return (p.score || 0) >= 50;
     },
