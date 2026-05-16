@@ -313,9 +313,23 @@ export function draftCapitalScore(round, slot) {
     if (slot <= 20) return 85;
     return 78;
   }
-  if (round === 2) return 62;
-  if (round === 3) return 45;
-  if (round === 4) return 32;
+  if (round === 2) {
+    if (!slot) return 62;
+    if (slot <= 4)  return 72;
+    if (slot <= 8)  return 66;
+    if (slot <= 12) return 62;
+    return 55;
+  }
+  if (round === 3) {
+    if (!slot) return 45;
+    if (slot <= 6) return 50;
+    return 42;
+  }
+  if (round === 4) {
+    if (!slot) return 32;
+    if (slot <= 6) return 36;
+    return 28;
+  }
   return 18;
 }
 

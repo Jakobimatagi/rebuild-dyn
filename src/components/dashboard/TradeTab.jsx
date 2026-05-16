@@ -1,10 +1,118 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { POSITION_PRIORITY } from "../../constants";
 import { evaluateTrade, simulateTrade, buildTradeRationale, suggestBalancingAsset } from "../../lib/tradeEngine";
-import { estimatePickValue } from "../../lib/marketValue";
+import { estimatePickValue, pickSlotLabel } from "../../lib/marketValue";
 import { rankLabel } from "../../lib/playerGrading";
 import { ConvictionChip, ConvictionLegend } from "./OverviewTab";
 import { styles } from "../../styles";
+
+// ---------------------------------------------------------------------------
+// Shared combobox — searchable drop-down for any list of options
+// ---------------------------------------------------------------------------
+
+const COMBO_INPUT = {
+  width: "100%",
+  background: "rgba(0,245,160,0.04)",
+  border: "1px solid rgba(0,245,160,0.18)",
+  color: "#e8e8f0",
+  padding: "8px 12px",
+  fontSize: 12,
+  borderRadius: 3,
+  outline: "none",
+  boxSizing: "border-box",
+};
+
+const COMBO_LIST = {
+  position: "absolute",
+  top: "calc(100% + 4px)",
+  left: 0,
+  right: 0,
+  background: "#0d0d18",
+  border: "1px solid rgba(0,245,160,0.22)",
+  borderRadius: 4,
+  zIndex: 50,
+  maxHeight: 260,
+  overflowY: "auto",
+  boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+};
+
+function ComboBox({ options, onSelect, placeholder, accent = "#00f5a0" }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [cursor, setCursor] = useState(0);
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return options;
+    const q = query.toLowerCase();
+    return options.filter((o) => o.searchText.toLowerCase().includes(q));
+  }, [options, query]);
+
+  useEffect(() => { setCursor(0); }, [filtered]);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const commit = (opt) => {
+    onSelect(opt);
+    setQuery("");
+    setOpen(false);
+    inputRef.current?.blur();
+  };
+
+  const onKey = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setCursor((c) => Math.min(c + 1, filtered.length - 1)); }
+    if (e.key === "ArrowUp")   { e.preventDefault(); setCursor((c) => Math.max(c - 1, 0)); }
+    if (e.key === "Enter" && filtered[cursor]) { e.preventDefault(); commit(filtered[cursor]); }
+    if (e.key === "Escape") { setOpen(false); setQuery(""); }
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <input
+        ref={inputRef}
+        type="text"
+        value={query}
+        placeholder={placeholder}
+        style={{ ...COMBO_INPUT, borderColor: open ? `${accent}55` : "rgba(0,245,160,0.18)" }}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onKeyDown={onKey}
+        autoComplete="off"
+      />
+      {open && filtered.length > 0 && (
+        <div style={COMBO_LIST}>
+          {filtered.map((opt, i) => (
+            <div
+              key={opt.key}
+              onMouseDown={(e) => { e.preventDefault(); commit(opt); }}
+              onMouseEnter={() => setCursor(i)}
+              style={{
+                padding: "8px 12px",
+                background: i === cursor ? "rgba(0,245,160,0.08)" : "transparent",
+                cursor: "pointer",
+                borderBottom: "1px solid rgba(255,255,255,0.04)",
+              }}
+            >
+              {opt.render()}
+            </div>
+          ))}
+        </div>
+      )}
+      {open && query && filtered.length === 0 && (
+        <div style={{ ...COMBO_LIST, padding: "10px 12px" }}>
+          <span style={{ fontSize: 11, color: "#606878" }}>No matches</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Trade Calculator component
@@ -52,6 +160,125 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
     const setter = side === "A" ? setSideA : setSideB;
     setter((prev) => prev.filter((_, i) => i !== index));
   }, []);
+
+  // Team combobox options
+  const teamOptions = useMemo(
+    () =>
+      leagueTeams.map((t) => ({
+        key: String(t.rosterId),
+        searchText: t.label,
+        render: () => (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 12, color: "#e8e8f0" }}>{t.label}</span>
+            {t.teamPhase?.phase && (
+              <span style={{
+                fontSize: 9, letterSpacing: 1, padding: "1px 6px", borderRadius: 2,
+                color: t.teamPhase.phase === "contender" ? "#00f5a0" : t.teamPhase.phase === "rebuild" ? "#ff6b35" : "#ffd84d",
+                background: t.teamPhase.phase === "contender" ? "#00f5a018" : t.teamPhase.phase === "rebuild" ? "#ff6b3518" : "#ffd84d18",
+                border: `1px solid ${t.teamPhase.phase === "contender" ? "#00f5a044" : t.teamPhase.phase === "rebuild" ? "#ff6b3544" : "#ffd84d44"}`,
+              }}>
+                {t.teamPhase.phase}
+              </span>
+            )}
+          </div>
+        ),
+        data: t,
+      })),
+    [leagueTeams],
+  );
+
+  // Build a rosterId → teamPhase map for quick originating-team lookups
+  const rosterPhaseMap = useMemo(
+    () => new Map(leagueTeams.map((t) => [String(t.rosterId), t.teamPhase?.phase ?? null])),
+    [leagueTeams],
+  );
+
+  // Asset combobox options per team
+  const buildAssetOptions = useCallback(
+    (team) => {
+      if (!team) return [];
+
+      const PICK_ROUND_COLOR = { 1: "#00f5a0", 2: "#ffd84d", 3: "#c8cfe3", 4: "#808898" };
+
+      const playerOpts = [...(team.enriched || [])]
+        .sort((a, b) => b.score - a.score)
+        .map((p) => ({
+          key: `player|${p.id}`,
+          searchText: `${p.name} ${p.position}`,
+          render: () => (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <span style={{ fontSize: 12, color: "#e8e8f0" }}>{p.name}</span>
+                <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 8 }}>
+                  {p.position} · {p.age}yo
+                </span>
+              </div>
+              <span style={{ fontSize: 11, color: p.score >= 70 ? "#00f5a0" : "#94a3b8", flexShrink: 0 }}>
+                {p.score}
+              </span>
+            </div>
+          ),
+          onCommit: () => addAsset(team === teamA ? "A" : "B", { ...p, type: "player" }),
+        }));
+
+      const pickOpts = (team.picks || [])
+        .filter((p) => p.round <= 4)
+        .map((p) => {
+          // For acquired picks, value/slot reflects the *originating* team's phase,
+          // not the holding team's — "2027 2nd via Shadow Lord" is valued based on
+          // where Shadow Lord is projected to pick, not who currently holds it.
+          const originPhase = p.isOwn
+            ? (team.teamPhase?.phase ?? null)
+            : (rosterPhaseMap.get(String(p.originalRosterId)) ?? null);
+
+          const val = estimatePickValue(p, leagueContext, tradeMarket, originPhase);
+          const roundColor = PICK_ROUND_COLOR[p.round] || "#808898";
+
+          // slotLabel is pre-stamped by assignDraftSlots ("2.04", "1.08", etc.)
+          // Fall back to early/mid/late for round-1 when slot isn't known
+          const slotDisplay = p.slotLabel
+            ? `slot ${p.slotLabel}`
+            : (p.round === 1 ? pickSlotLabel(p.round, originPhase) : null);
+
+          return {
+            key: `pick|${p.label}`,
+            searchText: p.label,
+            render: () => (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <span style={{ fontSize: 12, color: roundColor }}>{p.label}</span>
+                  {slotDisplay && (
+                    <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 8 }}>
+                      {slotDisplay}
+                    </span>
+                  )}
+                </div>
+                <span style={{ fontSize: 10, color: "#94a3b8", flexShrink: 0 }}>~{val} pts</span>
+              </div>
+            ),
+            onCommit: () => {
+              addAsset(team === teamA ? "A" : "B", {
+                ...p,
+                type: "pick",
+                ownerPhase: originPhase,
+                value: val,
+              });
+            },
+          };
+        });
+
+      return [
+        { key: "__h_players", searchText: "", render: () => <span style={{ fontSize: 9, color: "#606878", letterSpacing: 1.5 }}>PLAYERS</span>, isHeader: true },
+        ...playerOpts,
+        { key: "__h_picks", searchText: "", render: () => <span style={{ fontSize: 9, color: "#606878", letterSpacing: 1.5 }}>PICKS</span>, isHeader: true },
+        ...pickOpts,
+      ].filter((o) => !o.isHeader || (o.isHeader && (o.key === "__h_players" ? playerOpts.length : pickOpts.length) > 0));
+    },
+    [leagueContext, tradeMarket, teamA, addAsset, rosterPhaseMap],
+  );
+
+  const assetOptsA = useMemo(() => buildAssetOptions(teamA), [buildAssetOptions, teamA]);
+  const assetOptsB = useMemo(() => buildAssetOptions(teamB), [buildAssetOptions, teamB]);
 
   const result = useMemo(() => {
     if (!sideA.length || !sideB.length) return null;
@@ -124,16 +351,6 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
 
   if (!leagueTeams?.length) return null;
 
-  const selectStyle = {
-    background: "rgba(0,245,160,0.04)",
-    border: "1px solid rgba(0,245,160,0.18)",
-    color: "#e8e8f0",
-    padding: "8px 12px",
-    fontSize: 12,
-    borderRadius: 3,
-    width: "100%",
-  };
-
   const chipStyle = (color = "#d9deef") => ({
     display: "inline-flex",
     alignItems: "center",
@@ -148,91 +365,7 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
     marginBottom: 6,
   });
 
-  const renderTeamSide = (label, team, side, assets) => (
-    <div style={{ flex: 1 }}>
-      <div
-        style={{
-          fontSize: 10,
-          letterSpacing: 2,
-          color: side === "A" ? "#ffd84d" : "#00f5a0",
-          marginBottom: 8,
-        }}
-      >
-        {label} SENDS
-        {team?.teamPhase && (
-          <span style={{ marginLeft: 8, opacity: 0.7, letterSpacing: 1 }}>
-            ({team.teamPhase.phase})
-          </span>
-        )}
-      </div>
-      <select
-        style={{ ...selectStyle, marginBottom: 8 }}
-        value=""
-        onChange={(e) => {
-          if (!e.target.value) return;
-          const [type, key] = e.target.value.split("|");
-          if (type === "player") {
-            const p = team.enriched.find((p) => String(p.id) === key);
-            if (p) addAsset(side, { ...p, type: "player" });
-          } else {
-            const pick = team.picks.find((p) => p.label === key);
-            if (pick)
-              addAsset(side, {
-                ...pick,
-                type: "pick",
-                value: estimatePickValue(pick, leagueContext, tradeMarket),
-              });
-          }
-        }}
-      >
-        <option value="">+ Add player or pick...</option>
-        <optgroup label="Players">
-          {(team?.enriched || [])
-            .sort((a, b) => b.score - a.score)
-            .map((p) => (
-              <option key={p.id} value={`player|${p.id}`}>
-                {p.name} ({p.position}, {p.score})
-              </option>
-            ))}
-        </optgroup>
-        <optgroup label="Picks">
-          {(team?.picks || [])
-            .filter((p) => p.round <= 4)
-            .map((p) => (
-              <option key={p.label} value={`pick|${p.label}`}>
-                {p.label}
-              </option>
-            ))}
-        </optgroup>
-      </select>
-
-      <div style={{ minHeight: 32 }}>
-        {assets.map((asset, i) => (
-          <span
-            key={asset.type === "pick" ? asset.label : asset.id}
-            style={chipStyle(side === "A" ? "#ffd84d" : "#00f5a0")}
-          >
-            {asset.type === "pick" ? asset.label : `${asset.name} (${asset.position})`}
-            <button
-              type="button"
-              onClick={() => removeAsset(side, i)}
-              style={{
-                background: "none",
-                border: "none",
-                color: "#ff6b35",
-                fontSize: 12,
-                padding: 0,
-                cursor: "pointer",
-                lineHeight: 1,
-              }}
-            >
-              x
-            </button>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
+  const PHASE_COLOR = { contender: "#00f5a0", retool: "#ffd84d", rebuild: "#ff6b35" };
 
   const fairnessColor = {
     Fair: "#00f5a0",
@@ -241,68 +374,96 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
     Lopsided: "#ff2d55",
   };
 
+  const renderSidePanel = (team, side, assets, assetOpts, accent) => (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      {/* Team header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 10, letterSpacing: 2, color: accent }}>{team.label.toUpperCase()} SENDS</span>
+        {team.teamPhase?.phase && (
+          <span style={{
+            fontSize: 9, letterSpacing: 1, padding: "1px 6px", borderRadius: 2,
+            color: PHASE_COLOR[team.teamPhase.phase] || "#a0a8c0",
+            background: `${PHASE_COLOR[team.teamPhase.phase] || "#888"}18`,
+            border: `1px solid ${PHASE_COLOR[team.teamPhase.phase] || "#888"}44`,
+          }}>
+            {team.teamPhase.phase}
+          </span>
+        )}
+      </div>
+
+      {/* Asset search */}
+      <div style={{ marginBottom: 10 }}>
+        <ComboBox
+          key={team.rosterId}
+          options={assetOpts.filter((o) => !o.isHeader)}
+          onSelect={(opt) => opt.onCommit?.()}
+          placeholder="Search players or picks..."
+          accent={accent}
+        />
+      </div>
+
+      {/* Selected asset chips */}
+      <div style={{ minHeight: 32 }}>
+        {assets.map((asset, i) => (
+          <span
+            key={asset.type === "pick" ? asset.label : asset.id}
+            style={chipStyle(accent)}
+          >
+            {asset.type === "pick" ? asset.label : `${asset.name} (${asset.position})`}
+            <button
+              type="button"
+              onClick={() => removeAsset(side, i)}
+              style={{ background: "none", border: "none", color: "#ff6b35", fontSize: 12, padding: 0, cursor: "pointer", lineHeight: 1 }}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div style={{ ...styles.card, borderColor: "rgba(0,245,160,0.22)", marginBottom: 24 }}>
       <div style={styles.sectionLabel}>Trade Calculator</div>
 
+      {/* Team selectors */}
       <div
         className="dyn-grid-2"
         style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}
       >
         <div>
-          <div style={{ fontSize: 10, color: "#c8cfe3", marginBottom: 4, letterSpacing: 1 }}>
-            TEAM A
-          </div>
-          <select
-            style={selectStyle}
-            value={teamAId}
-            onChange={(e) => {
-              setTeamAId(e.target.value);
-              setSideA([]);
-            }}
-          >
-            <option value="">Select team...</option>
-            {leagueTeams.map((t) => (
-              <option key={t.rosterId} value={String(t.rosterId)}>
-                {t.label}
-              </option>
-            ))}
-          </select>
+          <div style={{ fontSize: 10, color: "#c8cfe3", marginBottom: 4, letterSpacing: 1 }}>TEAM A</div>
+          <ComboBox
+            options={teamOptions.filter((o) => String(o.data.rosterId) !== teamBId)}
+            onSelect={(opt) => { setTeamAId(opt.key); setSideA([]); }}
+            placeholder={teamA ? teamA.label : "Search team..."}
+            accent="#ffd84d"
+          />
         </div>
         <div>
-          <div style={{ fontSize: 10, color: "#c8cfe3", marginBottom: 4, letterSpacing: 1 }}>
-            TEAM B
-          </div>
-          <select
-            style={selectStyle}
-            value={teamBId}
-            onChange={(e) => {
-              setTeamBId(e.target.value);
-              setSideB([]);
-            }}
-          >
-            <option value="">Select team...</option>
-            {leagueTeams
-              .filter((t) => String(t.rosterId) !== teamAId)
-              .map((t) => (
-                <option key={t.rosterId} value={String(t.rosterId)}>
-                  {t.label}
-                </option>
-              ))}
-          </select>
+          <div style={{ fontSize: 10, color: "#c8cfe3", marginBottom: 4, letterSpacing: 1 }}>TEAM B</div>
+          <ComboBox
+            options={teamOptions.filter((o) => String(o.data.rosterId) !== teamAId)}
+            onSelect={(opt) => { setTeamBId(opt.key); setSideB([]); }}
+            placeholder={teamB ? teamB.label : "Search team..."}
+            accent="#00f5a0"
+          />
         </div>
       </div>
 
+      {/* Asset pickers — only shown once both teams are selected */}
       {teamA && teamB && (
         <div
           className="dyn-grid-2"
           style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}
         >
-          {renderTeamSide(teamA.label, teamA, "A", sideA)}
-          {renderTeamSide(teamB.label, teamB, "B", sideB)}
+          {renderSidePanel(teamA, "A", sideA, assetOptsA, "#ffd84d")}
+          {renderSidePanel(teamB, "B", sideB, assetOptsB, "#00f5a0")}
         </div>
       )}
 
+      {/* Verdict */}
       {result && (
         <div
           style={{
@@ -312,26 +473,14 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
             padding: 16,
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: 12,
-            }}
-          >
-            <div style={{ fontSize: 13, color: "#fff", fontWeight: 600 }}>
-              Verdict
-            </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: "#fff", fontWeight: 600 }}>Verdict</div>
             <span style={styles.tag(fairnessColor[result.fairnessLabel] || "#d9deef")}>
               {result.fairnessLabel}
             </span>
           </div>
 
-          <div
-            className="dyn-grid-2"
-            style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}
-          >
+          <div className="dyn-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             <div>
               <div style={{ fontSize: 11, color: "#ffd84d", marginBottom: 4 }}>
                 {teamA.label} sends {result.sideAValue} pts
@@ -339,8 +488,7 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
               <div style={{ fontSize: 11, color: "#d9deef" }}>
                 Net value (phase-adjusted):{" "}
                 <span style={{ color: result.teamA.netValue >= 0 ? "#00f5a0" : "#ff6b35" }}>
-                  {result.teamA.netValue >= 0 ? "+" : ""}
-                  {result.teamA.netValue}
+                  {result.teamA.netValue >= 0 ? "+" : ""}{result.teamA.netValue}
                 </span>
               </div>
               <div style={{ fontSize: 10, color: "#c8cfe3", marginTop: 4 }}>
@@ -354,8 +502,7 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
               <div style={{ fontSize: 11, color: "#d9deef" }}>
                 Net value (phase-adjusted):{" "}
                 <span style={{ color: result.teamB.netValue >= 0 ? "#00f5a0" : "#ff6b35" }}>
-                  {result.teamB.netValue >= 0 ? "+" : ""}
-                  {result.teamB.netValue}
+                  {result.teamB.netValue >= 0 ? "+" : ""}{result.teamB.netValue}
                 </span>
               </div>
               <div style={{ fontSize: 10, color: "#c8cfe3", marginTop: 4 }}>
@@ -367,12 +514,7 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
       )}
 
       {(rationaleA || rationaleB) && (
-        <TradeRationale
-          teamA={teamA}
-          teamB={teamB}
-          rationaleA={rationaleA}
-          rationaleB={rationaleB}
-        />
+        <TradeRationale teamA={teamA} teamB={teamB} rationaleA={rationaleA} rationaleB={rationaleB} />
       )}
 
       {balance && <BalanceSuggestion balance={balance} />}

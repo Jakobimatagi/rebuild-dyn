@@ -136,7 +136,7 @@ export function getKeepCount(pos, isSuperflex) {
   return counts[pos] || 2;
 }
 
-export function estimatePickValue(pick, leagueContext, tradeMarket = null) {
+export function estimatePickValue(pick, leagueContext, tradeMarket = null, ownerPhase = null) {
   if (!pick?.round) return 12;
 
   const currentYear = new Date().getFullYear();
@@ -144,8 +144,8 @@ export function estimatePickValue(pick, leagueContext, tradeMarket = null) {
     0,
     Number(pick.season || currentYear) - currentYear,
   );
-  // Use actual projected slot when available, otherwise default mid-round
-  const slot = pick.slot != null ? pick.slot : (pick.round === 1 ? 16 : 24);
+  // Prefer an explicit slot, then phase-projected slot, then fixed mid-round default
+  const slot = pick.slot != null ? pick.slot : phaseSlot(pick.round, ownerPhase);
   let value = draftCapitalScore(pick.round, slot) || 12;
 
   if (pick.round === 1 && leagueContext.isSuperflex) value += 8;
