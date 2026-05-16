@@ -201,7 +201,7 @@ function getAssetTradeValue(
   tradeMarket,
 ) {
   if (asset.type === "pick") {
-    return estimatePickValue(asset, leagueContext, tradeMarket);
+    return estimatePickValue(asset, leagueContext, tradeMarket, asset.ownerPhase ?? null);
   }
 
   const player = playerMarketMap.get(String(asset.id)) || asset;
@@ -353,6 +353,7 @@ function buildOfferPackage(
     targetValue,
   );
   const rules = getPackageRules(target, leagueContext, targetValue);
+  const myPhase = myTeam.teamPhase?.phase ?? null;
   const pickAssets = myTeam.picks
     .filter((pick) => {
       const season = Number(pick.season);
@@ -363,7 +364,8 @@ function buildOfferPackage(
     .map((pick) => ({
       ...pick,
       type: "pick",
-      value: estimatePickValue(pick, leagueContext, tradeMarket),
+      ownerPhase: myPhase,
+      value: estimatePickValue(pick, leagueContext, tradeMarket, myPhase),
     }))
     .sort((a, b) => b.value - a.value);
 
@@ -790,15 +792,16 @@ export function suggestBalancingAsset({
     });
   }
 
+  const adderPhase = adder.teamPhase?.phase ?? null;
   for (const pick of adder.picks || []) {
     if (pick.round > 4) continue;
     const key = `pick:${pick.label}`;
     if (inTrade.has(key)) continue;
-    const value = estimatePickValue(pick, leagueContext, tradeMarket);
+    const value = estimatePickValue(pick, leagueContext, tradeMarket, adderPhase);
     if (value <= 0) continue;
     candidates.push({
       type: "pick",
-      asset: { ...pick, type: "pick", value },
+      asset: { ...pick, type: "pick", ownerPhase: adderPhase, value },
       value,
       partnerFit: false,
       label: pick.label,
@@ -1144,7 +1147,8 @@ function buildSellSuggestions(
           .map((p) => ({
             ...p,
             type: "pick",
-            value: estimatePickValue(p, leagueContext, tradeMarket),
+            ownerPhase: partner.teamPhase?.phase ?? null,
+            value: estimatePickValue(p, leagueContext, tradeMarket, partner.teamPhase?.phase ?? null),
           })),
       ].sort((a, b) => b.value - a.value);
 
