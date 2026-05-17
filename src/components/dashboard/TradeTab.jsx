@@ -115,6 +115,55 @@ function ComboBox({ options, onSelect, placeholder, accent = "#00f5a0" }) {
 }
 
 // ---------------------------------------------------------------------------
+// Positional shift badges — shows what each team is doing at each position
+// ---------------------------------------------------------------------------
+
+const SHIFT_CONFIG = {
+  upgrade:   { label: "↑", color: "#00f5a0", suffix: "upgrade" },
+  downgrade: { label: "↓", color: "#ff6b35", suffix: "tier-down" },
+  buy:       { label: "+", color: "#7b8cff", suffix: "buy" },
+  sell:      { label: "−", color: "#ffd84d", suffix: "sell" },
+  lateral:   { label: "↔", color: "#94a3b8", suffix: "swap" },
+};
+
+function PositionalShiftBadges({ shifts, label, accent }) {
+  if (!shifts?.length) return <div />;
+  // Always show premium-position moves (QB, WR, TE in relevant leagues) even when lateral —
+  // a QB-for-QB swap is meaningful context even if the scores are close.
+  const notable = shifts.filter((s) => s.direction !== "lateral" || s.premium);
+  if (!notable.length) return <div />;
+
+  return (
+    <div>
+      <div style={{ fontSize: 9, color: accent, letterSpacing: 1.5, marginBottom: 5 }}>
+        {label.toUpperCase()}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+        {notable.map((s) => {
+          const cfg = SHIFT_CONFIG[s.direction] || SHIFT_CONFIG.lateral;
+          return (
+            <span
+              key={s.position}
+              style={{
+                fontSize: 10,
+                padding: "2px 7px",
+                borderRadius: 2,
+                background: `${cfg.color}12`,
+                color: cfg.color,
+                border: `1px solid ${cfg.color}35`,
+                letterSpacing: 0.3,
+              }}
+            >
+              {s.position} {cfg.label} {cfg.suffix}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Trade Calculator component
 // ---------------------------------------------------------------------------
 
@@ -473,12 +522,25 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
             padding: 16,
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
             <div style={{ fontSize: 13, color: "#fff", fontWeight: 600 }}>Verdict</div>
             <span style={styles.tag(fairnessColor[result.fairnessLabel] || "#d9deef")}>
               {result.fairnessLabel}
             </span>
           </div>
+
+          {/* Positional shift badges */}
+          {(result.shiftsA?.length > 0 || result.shiftsB?.length > 0 || result.consolidationDiscount) && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+              <PositionalShiftBadges shifts={result.shiftsA} label={teamA.label} accent="#ffd84d" />
+              <PositionalShiftBadges shifts={result.shiftsB} label={teamB.label} accent="#00f5a0" />
+            </div>
+          )}
+          {result.consolidationDiscount && (
+            <div style={{ fontSize: 10, color: "#606878", marginBottom: 10, letterSpacing: 0.3 }}>
+              {Math.round((1 - result.consolidationDiscount) * 100)}% package discount applied to larger side · adjusted gap {result.adjustedGap} pts
+            </div>
+          )}
 
           <div className="dyn-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             <div>

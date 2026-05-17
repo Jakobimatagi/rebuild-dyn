@@ -3,7 +3,7 @@
  * Trade market calibration, offer-package building, and suggestion ranking.
  */
 import { POSITION_PRIORITY, IDEAL_PROPORTION } from "../constants";
-import { estimatePickValue } from "./marketValue";
+import { estimatePickValue, pickFcValue } from "./marketValue";
 import {
   classifyLeagueTeams,
   getRosterNeeds,
@@ -194,6 +194,13 @@ function getSuggestionTier(targetValue, marketGap, rules) {
   return "balanced";
 }
 
+// Scale factor: dynastyMarketValue and pickFcValue are FC dollar scale (~100–9000).
+// Dividing by 100 maps them onto a display range of 1–90 that roughly matches
+// what other dynasty calculators show and preserves real market spreads.
+// Score-based marketValue (0-100 scale) is used as a fallback only when FC
+// data is unavailable — it intentionally stays on the same numeric range.
+const FC_SCALE = 100;
+
 function getAssetTradeValue(
   asset,
   playerMarketMap,
@@ -201,11 +208,23 @@ function getAssetTradeValue(
   tradeMarket,
 ) {
   if (asset.type === "pick") {
-    return estimatePickValue(asset, leagueContext, tradeMarket, asset.ownerPhase ?? null);
+    // pickFcValue returns FC dollar scale; divide to normalize.
+    const fcVal = pickFcValue(asset, asset.ownerPhase ?? null, leagueContext, null);
+    const marketMultiplier = tradeMarket?.pickRoundMultipliers?.[asset.round] || 1;
+    return Math.max(1, Math.round((fcVal / FC_SCALE) * marketMultiplier));
   }
 
   const player = playerMarketMap.get(String(asset.id)) || asset;
   const multiplier = tradeMarket?.positionMultipliers?.[player.position] || 1;
+
+  // Prefer dynastyMarketValue (FC dollar blend) — it preserves the real spread
+  // between elite and good players that the normalized 0-100 score compresses.
+  const dmv = Number(player.dynastyMarketValue || 0);
+  if (dmv > 0) {
+    return Math.max(1, Math.round((dmv / FC_SCALE) * multiplier));
+  }
+
+  // Fallback: score-based marketValue for players with no FC/RA coverage.
   return Math.round((player.marketValue || player.score || 40) * multiplier);
 }
 
@@ -504,6 +523,75 @@ function phaseAdjustment(assets, phase) {
   return adj;
 }
 
+// ---------------------------------------------------------------------------
+// Positional shift detection — for a single team's perspective (outgoing → incoming),
+// classify what's happening at each position: upgrade, downgrade, buy, sell, lateral.
+// ---------------------------------------------------------------------------
+
+function detectPositionalShifts(sent, received, leagueContext) {
+  const sentPlayers = sent.filter((a) => a.type === "player");
+  const recvPlayers = received.filter((a) => a.type === "player");
+
+  const groupByPos = (players) =>
+    players.reduce((acc, p) => {
+      if (!acc[p.position]) acc[p.position] = [];
+      acc[p.position].push(p);
+      return acc;
+    }, {});
+
+  const sentByPos = groupByPos(sentPlayers);
+  const recvByPos = groupByPos(recvPlayers);
+  const allPos = new Set([...Object.keys(sentByPos), ...Object.keys(recvByPos)]);
+
+  const isPremiumPos = (pos) =>
+    (pos === "QB" && leagueContext?.isSuperflex) ||
+    (pos === "TE" && leagueContext?.tePremium) ||
+    pos === "WR";
+
+  const shifts = [];
+
+  for (const pos of allPos) {
+    const bestSent = sentByPos[pos]
+      ? Math.max(...sentByPos[pos].map((p) => p.score || 0))
+      : 0;
+    const bestRecv = recvByPos[pos]
+      ? Math.max(...recvByPos[pos].map((p) => p.score || 0))
+      : 0;
+    const premium = isPremiumPos(pos);
+    // Premium positions use a tighter threshold so near-tier-ups register as upgrades.
+    const threshold = premium ? 5 : 8;
+
+    if (!recvByPos[pos]) {
+      shifts.push({ position: pos, direction: "sell", sentScore: bestSent, recvScore: 0, premium });
+    } else if (!sentByPos[pos]) {
+      shifts.push({ position: pos, direction: "buy", sentScore: 0, recvScore: bestRecv, premium });
+    } else if (bestRecv >= bestSent + threshold) {
+      shifts.push({ position: pos, direction: "upgrade", sentScore: bestSent, recvScore: bestRecv, premium });
+    } else if (bestRecv <= bestSent - threshold) {
+      shifts.push({ position: pos, direction: "downgrade", sentScore: bestSent, recvScore: bestRecv, premium });
+    } else {
+      // Still record the swap for premium positions — a QB-for-QB swap matters even if lateral.
+      shifts.push({ position: pos, direction: "lateral", sentScore: bestSent, recvScore: bestRecv, premium });
+    }
+  }
+
+  return shifts;
+}
+
+// For each detected upgrade at a premium position, boost the received side's
+// effective value — the market pays extra to move up a tier at scarce spots.
+function upgradePremiumMultiplier(shifts, leagueContext) {
+  let mult = 1;
+  for (const s of shifts) {
+    if (s.direction !== "upgrade") continue;
+    if (s.position === "QB" && leagueContext?.isSuperflex) mult += 0.18;
+    else if (s.position === "TE" && leagueContext?.tePremium) mult += 0.10;
+    else if (s.position === "WR") mult += 0.08;
+    else mult += 0.05;
+  }
+  return Math.min(mult, 1.30); // cap at 30% total boost
+}
+
 export function evaluateTrade(
   sideA,
   sideB,
@@ -532,17 +620,53 @@ export function evaluateTrade(
   // Team B sends sideB, receives sideA
   const teamBNet = valueA + teamBPhaseAdj - valueB;
 
+  // Detect positional shifts for each team's perspective
+  // Team A: sends sideA, receives sideB
+  const shiftsA = detectPositionalShifts(sideA, sideB, leagueContext);
+  // Team B: sends sideB, receives sideA
+  const shiftsB = detectPositionalShifts(sideB, sideA, leagueContext);
+
+  // Consolidation discount: packaging multiple pieces always costs a premium in the
+  // real dynasty market — the sum-of-parts overstates what that package actually fetches.
+  const surplus = Math.abs(sideA.length - sideB.length);
+  const consolidationDiscount = surplus >= 3 ? 0.80 : surplus >= 2 ? 0.85 : surplus >= 1 ? 0.94 : 1;
+
+  let effectiveA = valueA;
+  let effectiveB = valueB;
+  if (sideA.length > sideB.length) {
+    effectiveA = Math.round(valueA * consolidationDiscount);
+  } else if (sideB.length > sideA.length) {
+    effectiveB = Math.round(valueB * consolidationDiscount);
+  }
+
+  // Positional upgrade premium: when a team is upgrading at a premium position
+  // (QB in SF, TE in TE-premium, WR), boost the received side's effective value to
+  // reflect what the market actually demands for a tier-up at that spot.
+  const multA = upgradePremiumMultiplier(shiftsA, leagueContext);
+  const multB = upgradePremiumMultiplier(shiftsB, leagueContext);
+  if (multA > 1) effectiveB = Math.round(effectiveB * multA);
+  if (multB > 1) effectiveA = Math.round(effectiveA * multB);
+
+  // Percentage-based gap: a 20-point gap on a 300-point trade is minor, not "Lopsided".
   const rawGap = Math.abs(valueA - valueB);
+  const adjustedGap = Math.abs(effectiveA - effectiveB);
+  const maxEffective = Math.max(effectiveA, effectiveB, 1);
+  const gapPct = adjustedGap / maxEffective;
+
   let fairnessLabel;
-  if (rawGap <= 5) fairnessLabel = "Fair";
-  else if (rawGap <= 12) fairnessLabel = "Slight edge";
-  else if (rawGap <= 20) fairnessLabel = "Uneven";
+  if (gapPct <= 0.07) fairnessLabel = "Fair";
+  else if (gapPct <= 0.20) fairnessLabel = "Slight edge";
+  else if (gapPct <= 0.42) fairnessLabel = "Uneven";
   else fairnessLabel = "Lopsided";
 
   return {
     sideAValue: valueA,
     sideBValue: valueB,
     rawGap,
+    adjustedGap,
+    consolidationDiscount: consolidationDiscount < 1 ? consolidationDiscount : null,
+    shiftsA,
+    shiftsB,
     fairnessLabel,
     teamA: {
       netValue: teamANet,
