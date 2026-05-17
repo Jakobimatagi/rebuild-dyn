@@ -141,6 +141,10 @@ function PositionalShiftBadges({ shifts, label, accent }) {
       <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
         {notable.map((s) => {
           const cfg = SHIFT_CONFIG[s.direction] || SHIFT_CONFIG.lateral;
+          // Picks use count-based label; player positions use standard label.
+          const label = s.position === "picks"
+            ? `${s.sentScore > 0 ? s.sentScore : s.recvScore} pick${(s.sentScore > 1 || s.recvScore > 1) ? "s" : ""}${s.sentEarly > 0 || s.recvEarly > 0 ? ` (${s.sentEarly > 0 ? s.sentEarly : s.recvEarly} early)` : ""} ${cfg.label} ${cfg.suffix}`
+            : `${s.position} ${cfg.label} ${cfg.suffix}`;
           return (
             <span
               key={s.position}
@@ -154,7 +158,7 @@ function PositionalShiftBadges({ shifts, label, accent }) {
                 letterSpacing: 0.3,
               }}
             >
-              {s.position} {cfg.label} {cfg.suffix}
+              {label}
             </span>
           );
         })}
