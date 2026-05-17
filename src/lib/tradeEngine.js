@@ -531,6 +531,8 @@ function phaseAdjustment(assets, phase) {
 function detectPositionalShifts(sent, received, leagueContext) {
   const sentPlayers = sent.filter((a) => a.type === "player");
   const recvPlayers = received.filter((a) => a.type === "player");
+  const sentPicks = sent.filter((a) => a.type === "pick");
+  const recvPicks = received.filter((a) => a.type === "pick");
 
   const groupByPos = (players) =>
     players.reduce((acc, p) => {
@@ -543,10 +545,14 @@ function detectPositionalShifts(sent, received, leagueContext) {
   const recvByPos = groupByPos(recvPlayers);
   const allPos = new Set([...Object.keys(sentByPos), ...Object.keys(recvByPos)]);
 
+  // RB is premium when the league starts 2+ RBs — depth matters as much as WR then.
+  const rbPremium = (leagueContext?.starterCounts?.RB || 0) >= 2;
+
   const isPremiumPos = (pos) =>
     (pos === "QB" && leagueContext?.isSuperflex) ||
     (pos === "TE" && leagueContext?.tePremium) ||
-    pos === "WR";
+    pos === "WR" ||
+    (pos === "RB" && rbPremium);
 
   const shifts = [];
 
@@ -573,6 +579,30 @@ function detectPositionalShifts(sent, received, leagueContext) {
       // Still record the swap for premium positions — a QB-for-QB swap matters even if lateral.
       shifts.push({ position: pos, direction: "lateral", sentScore: bestSent, recvScore: bestRecv, premium });
     }
+  }
+
+  // Picks don't belong to a position room but are always meaningful capital.
+  // Represent them as a virtual "picks" entry so they're never invisible in the verdict.
+  const sentPickCount = sentPicks.length;
+  const recvPickCount = recvPicks.length;
+  if (sentPickCount > 0 || recvPickCount > 0) {
+    const sentEarly = sentPicks.filter((p) => p.round <= 2).length;
+    const recvEarly = recvPicks.filter((p) => p.round <= 2).length;
+    let direction;
+    if (sentPickCount > 0 && recvPickCount === 0) direction = "sell";
+    else if (recvPickCount > 0 && sentPickCount === 0) direction = "buy";
+    else if (recvPickCount > sentPickCount || recvEarly > sentEarly) direction = "upgrade";
+    else if (sentPickCount > recvPickCount || sentEarly > recvEarly) direction = "downgrade";
+    else direction = "lateral";
+    shifts.push({
+      position: "picks",
+      direction,
+      sentScore: sentPickCount,
+      recvScore: recvPickCount,
+      sentEarly,
+      recvEarly,
+      premium: false,
+    });
   }
 
   return shifts;
