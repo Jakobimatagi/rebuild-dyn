@@ -297,6 +297,7 @@ export function buildRosterAnalysis(
       attribution: 'FantasyCalc',
       url: 'https://www.fantasycalc.com/',
     },
+    fantasyCalcTrades,
     draftRecap,
     allDraftRecaps,
     ocOutlook: {

@@ -405,3 +405,73 @@ export async function initOcYear(season) {
   // Ignore errors on the sentinel row; it's just a year marker.
   void error;
 }
+
+// ── Trade Tinder ──────────────────────────────────────────────────────────────
+// Swipes are anonymous — keyed by a random session UUID stored in localStorage,
+// not tied to any Sleeper identity. Swiped hashes are also cached locally so
+// the queue can filter them client-side without a round-trip.
+
+export function getTinderSessionId() {
+  let id = localStorage.getItem("tinder_session_id");
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem("tinder_session_id", id);
+  }
+  return id;
+}
+
+export function getSwipedHashes(leagueId) {
+  try {
+    return new Set(
+      JSON.parse(localStorage.getItem(`tinder_swiped_${leagueId}`) || "[]"),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function persistSwipedHash(leagueId, hash) {
+  const key = `tinder_swiped_${leagueId}`;
+  const current = getSwipedHashes(leagueId);
+  current.add(hash);
+  localStorage.setItem(key, JSON.stringify([...current]));
+}
+
+export async function recordSwipe({
+  leagueId,
+  tradeHash,
+  teamAId,
+  teamBId,
+  assetsA,
+  assetsB,
+  engineVerdict,
+  engineNet,
+  userVerdict,
+}) {
+  persistSwipedHash(leagueId, tradeHash);
+  const { error } = await supabase.from("trade_swipes").upsert(
+    {
+      league_id: leagueId,
+      session_id: getTinderSessionId(),
+      trade_hash: tradeHash,
+      team_a_id: String(teamAId),
+      team_b_id: String(teamBId),
+      assets_a: assetsA,
+      assets_b: assetsB,
+      engine_verdict: engineVerdict,
+      engine_net: engineNet,
+      user_verdict: userVerdict,
+    },
+    { onConflict: "league_id,session_id,trade_hash" },
+  );
+  if (error) throw error;
+}
+
+export async function fetchPerceptionSwipes(leagueId) {
+  const { data, error } = await supabase
+    .from("trade_swipes")
+    .select("assets_a, assets_b, engine_verdict, user_verdict, team_a_id, team_b_id")
+    .eq("league_id", leagueId);
+  if (error) throw error;
+  return data || [];
+}

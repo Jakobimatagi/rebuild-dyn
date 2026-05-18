@@ -1477,3 +1477,356 @@ export function buildTradeSuggestions(
     )
     .slice(0, 8);
 }
+
+// ---------------------------------------------------------------------------
+// Trade Tinder — FantasyCalc real-trade cards
+// ---------------------------------------------------------------------------
+
+function parseFCPickName(name) {
+  if (!name) return null;
+  const year = (name.match(/20\d\d/) || [])[0];
+  const round = /1st/i.test(name) ? 1 : /2nd/i.test(name) ? 2 : /3rd/i.test(name) ? 3 : /4th/i.test(name) ? 4 : null;
+  if (!year || !round) return null;
+  return {
+    type: "pick",
+    id: `fc-pick-${year}-${round}-${name.replace(/\s+/g, "")}`,
+    season: year,
+    round,
+    label: name,
+    isOwn: false,
+    value: null,
+  };
+}
+
+function fcFairnessLabel(valueDiff) {
+  const abs = Math.abs(valueDiff);
+  if (abs < 400) return "Fair";
+  if (abs < 1200) return "Slight edge";
+  if (abs < 2800) return "Uneven";
+  return "Lopsided";
+}
+
+export function buildFCTinderCards(
+  fcTrades,
+  leagueTeams,
+  leagueContext,
+  tradeMarket,
+  { swipedHashes = new Set(), maxCards = 50 } = {},
+) {
+  if (!Array.isArray(fcTrades) || !fcTrades.length) return [];
+
+  const playerMarketMap = new Map(
+    leagueTeams.flatMap((t) => t.enriched.map((p) => [String(p.id), p])),
+  );
+
+  function enrichAsset(raw) {
+    if (!raw) return null;
+    if (raw.position === "PICK" || raw.isPick) return parseFCPickName(raw.name);
+    if (raw.sleeperId) {
+      const player = playerMarketMap.get(String(raw.sleeperId));
+      if (player) return { ...player, type: "player" };
+    }
+    if (!raw.name || !raw.position || raw.position === "PICK") return null;
+    return {
+      type: "player",
+      id: `fc-${raw.sleeperId || raw.name}`,
+      name: raw.name,
+      position: raw.position,
+      score: null,
+      value: null,
+      unknown: true,
+    };
+  }
+
+  const cards = [];
+  const seen = new Set(swipedHashes);
+
+  for (const trade of fcTrades) {
+    if (!trade?.id || !Array.isArray(trade.side1) || !Array.isArray(trade.side2)) continue;
+
+    const tradeHash = `fc-${trade.id}`;
+    if (seen.has(tradeHash)) continue;
+    seen.add(tradeHash);
+
+    const assetsA = trade.side1.map(enrichAsset).filter(Boolean);
+    const assetsB = trade.side2.map(enrichAsset).filter(Boolean);
+    if (!assetsA.length || !assetsB.length) continue;
+
+    // When all assets are matched in the league, use our engine for a
+    // league-context-aware evaluation (format, position premiums, phase).
+    // Otherwise fall back to FantasyCalc's own value differential.
+    const allKnown = [...assetsA, ...assetsB].every((a) => !a.unknown);
+    let fairnessLabel, engineVerdict, engineNet, valueA, valueB;
+
+    if (allKnown) {
+      const ev = evaluateTrade(
+        assetsA,
+        assetsB,
+        null,
+        null,
+        playerMarketMap,
+        leagueContext,
+        tradeMarket,
+      );
+      if (ev.fairnessLabel === "Lopsided") continue;
+      fairnessLabel = ev.fairnessLabel;
+      engineVerdict = fairnessLabel === "Fair" ? "fair" : ev.teamA.netValue > 0 ? "team_a" : "team_b";
+      engineNet = ev.teamA.netValue;
+      valueA = ev.sideAValue;
+      valueB = ev.sideBValue;
+    } else {
+      const valueDiff = Number(trade.maybeTradedValueDiff || 0);
+      fairnessLabel = fcFairnessLabel(valueDiff);
+      if (fairnessLabel === "Lopsided") continue;
+      engineVerdict = fairnessLabel === "Fair" ? "fair" : valueDiff > 0 ? "team_b" : "team_a";
+      engineNet = -valueDiff;
+      valueA = null;
+      valueB = null;
+    }
+
+    cards.push({
+      tradeHash,
+      source: "fc",
+      fcGrade: trade.maybeGrade || null,
+      teamA: { label: "Side A", phase: null, wins: null, losses: null },
+      teamB: { label: "Side B", phase: null, wins: null, losses: null },
+      assetsA,
+      assetsB,
+      valueA,
+      valueB,
+      fairnessLabel,
+      engineVerdict,
+      engineNet,
+    });
+
+    if (cards.length >= maxCards) break;
+  }
+
+  return cards;
+}
+
+// ---------------------------------------------------------------------------
+// Trade Tinder — league-wide trade card queue
+// ---------------------------------------------------------------------------
+
+function mulberry32(seed) {
+  let s = seed | 0;
+  return function () {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function dailySeed() {
+  const d = new Date();
+  return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+}
+
+export function buildTradeHash(assetsA, assetsB) {
+  const key = (a) =>
+    a.type === "pick" ? `pk-${a.season}-${a.round}` : `pl-${a.id}`;
+  const sideA = assetsA.map(key).sort().join(",");
+  const sideB = assetsB.map(key).sort().join(",");
+  return [sideA, sideB].sort().join("|");
+}
+
+export function buildTinderQueue(
+  leagueTeams,
+  leagueContext,
+  tradeMarket,
+  { seed, swipedHashes = new Set(), maxCards = 25 } = {},
+) {
+  const rng = mulberry32(seed ?? dailySeed());
+
+  const playerMarketMap = new Map(
+    leagueTeams.flatMap((t) => t.enriched.map((p) => [String(p.id), p])),
+  );
+
+  const cards = [];
+  const seen = new Set(swipedHashes);
+  // Diversity guards: max 1 card per team-pair, max 2 cards featuring any player
+  const pairSeen = new Set();
+  const playerCount = new Map();
+  const MAX_PLAYER_APPEARANCES = 2;
+
+  const teams = [...leagueTeams].sort(() => rng() - 0.5);
+
+  function pairKey(a, b) {
+    return [a.rosterId, b.rosterId].sort().join("|");
+  }
+
+  function trackPlayers(assetsA, assetsB) {
+    for (const a of [...assetsA, ...assetsB]) {
+      if (a.type === "player" && a.id) {
+        playerCount.set(String(a.id), (playerCount.get(String(a.id)) || 0) + 1);
+      }
+    }
+  }
+
+  function playerOverLimit(assetsA, assetsB) {
+    for (const a of [...assetsA, ...assetsB]) {
+      if (a.type === "player" && a.id) {
+        if ((playerCount.get(String(a.id)) || 0) >= MAX_PLAYER_APPEARANCES) return true;
+      }
+    }
+    return false;
+  }
+
+  function makeCard(teamA, teamB, assetsA, assetsB) {
+    const pk = pairKey(teamA, teamB);
+    if (pairSeen.has(pk)) return false;
+    if (playerOverLimit(assetsA, assetsB)) return false;
+
+    const tradeHash = buildTradeHash(assetsA, assetsB);
+    if (seen.has(tradeHash)) return false;
+
+    const ev = evaluateTrade(
+      assetsA,
+      assetsB,
+      teamA.teamPhase?.phase,
+      teamB.teamPhase?.phase,
+      playerMarketMap,
+      leagueContext,
+      tradeMarket,
+    );
+    if (ev.fairnessLabel === "Lopsided") return false;
+
+    seen.add(tradeHash);
+    pairSeen.add(pk);
+    trackPlayers(assetsA, assetsB);
+
+    let engineVerdict = "fair";
+    if (ev.fairnessLabel !== "Fair") {
+      engineVerdict = ev.teamA.netValue > 0 ? "team_a" : "team_b";
+    }
+
+    cards.push({
+      tradeHash,
+      teamA: {
+        rosterId: teamA.rosterId,
+        label: teamA.label,
+        phase: teamA.teamPhase?.phase ?? "unknown",
+        wins: teamA.wins ?? 0,
+        losses: teamA.losses ?? 0,
+      },
+      teamB: {
+        rosterId: teamB.rosterId,
+        label: teamB.label,
+        phase: teamB.teamPhase?.phase ?? "unknown",
+        wins: teamB.wins ?? 0,
+        losses: teamB.losses ?? 0,
+      },
+      assetsA,
+      assetsB,
+      valueA: ev.sideAValue,
+      valueB: ev.sideBValue,
+      fairnessLabel: ev.fairnessLabel,
+      engineVerdict,
+      engineNet: ev.teamA.netValue,
+    });
+    return true;
+  }
+
+  // ── Path 1: package-for-star ─────────────────────────────────────────────
+  // Each team pair gets at most one card. Pick a random high-value target from
+  // teamB and build a package offer from teamA. One card per pair.
+  const shuffledTeams = [...teams];
+  for (let i = 0; i < shuffledTeams.length && cards.length < maxCards; i++) {
+    const teamA = shuffledTeams[i];
+    const partners = shuffledTeams
+      .filter((t) => t.rosterId !== teamA.rosterId)
+      .sort(() => rng() - 0.5);
+
+    for (const teamB of partners) {
+      if (cards.length >= maxCards) break;
+      if (pairSeen.has(pairKey(teamA, teamB))) continue;
+
+      // Pick one random qualifying target from teamB
+      const candidates = [
+        ...(teamB.targetablePlayers || []),
+        ...(teamB.tradeablePlayers || []),
+      ]
+        .filter((p) => (p.score || 0) > 50)
+        .sort(() => rng() - 0.5);
+
+      let placed = false;
+      for (const target of candidates) {
+        if (playerOverLimit([{ ...target, type: "player" }], [])) continue;
+        const offer = buildOfferPackage(
+          target,
+          teamA,
+          teamB,
+          playerMarketMap,
+          leagueContext,
+          tradeMarket,
+        );
+        if (!offer?.assets?.length) continue;
+        if (makeCard(teamA, teamB, offer.assets, [{ ...target, type: "player" }])) {
+          placed = true;
+          break;
+        }
+      }
+      // Move on to next team pair regardless
+      void placed;
+    }
+  }
+
+  // ── Path 2: star-for-package ──────────────────────────────────────────────
+  // For pairs not yet covered: team A gives a quality star; team B returns
+  // a 2-asset package of comparable value. One card per uncovered pair.
+  for (let i = 0; i < shuffledTeams.length && cards.length < maxCards; i++) {
+    const teamA = shuffledTeams[i];
+    const starsA = (teamA.enriched || [])
+      .filter((p) => (p.score || 0) > 60)
+      .sort(() => rng() - 0.5);
+
+    if (!starsA.length) continue;
+
+    const partners = shuffledTeams
+      .filter((t) => t.rosterId !== teamA.rosterId)
+      .sort(() => rng() - 0.5);
+
+    for (const teamB of partners) {
+      if (cards.length >= maxCards) break;
+      if (pairSeen.has(pairKey(teamA, teamB))) continue;
+
+      const bPlayers = (teamB.enriched || [])
+        .filter((p) => (p.score || 0) > 35)
+        .sort(() => rng() - 0.5)
+        .slice(0, 8)
+        .map((p) => ({ ...p, type: "player" }));
+
+      const bPicks = (teamB.picks || [])
+        .filter((pk) => pk.round <= 2)
+        .map((pk) => ({ ...pk, type: "pick" }));
+
+      const bAssets = [...bPlayers, ...bPicks];
+      if (bAssets.length < 2) continue;
+
+      // Try stars until one generates a valid card for this pair
+      let placed = false;
+      outer: for (const star of starsA) {
+        if (playerOverLimit([{ ...star, type: "player" }], [])) continue;
+        const assetsA = [{ ...star, type: "player" }];
+        for (let ii = 0; ii < bAssets.length && !placed; ii++) {
+          for (let jj = ii + 1; jj < bAssets.length && !placed; jj++) {
+            if (
+              bAssets[ii].type === "player" &&
+              bAssets[jj].type === "player" &&
+              bAssets[ii].id === bAssets[jj].id
+            ) continue;
+            if (makeCard(teamA, teamB, assetsA, [bAssets[ii], bAssets[jj]])) {
+              placed = true;
+              break outer;
+            }
+          }
+        }
+      }
+      void placed;
+    }
+  }
+
+  return cards.sort(() => rng() - 0.5).slice(0, maxCards);
+}
