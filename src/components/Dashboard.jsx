@@ -8,12 +8,66 @@ import OverviewTab from "./dashboard/OverviewTab";
 import RosterTab from "./dashboard/RosterTab";
 import ScoreWeightsModal from "./dashboard/ScoreWeightsModal";
 import TradeTab from "./dashboard/TradeTab";
+import TradeTinderTab from "./dashboard/TradeTinderTab";
+import PerceptionTab from "./dashboard/PerceptionTab";
 import LeagueActivityTab from "./dashboard/LeagueActivityTab";
 import DocumentationTab from "./dashboard/DocumentationTab";
 import DraftRecapTab from "./dashboard/DraftRecapTab";
 import RankingsTab from "./dashboard/RankingsTab";
 import StrategyPlannerTab from "./dashboard/StrategyPlannerTab";
 import RookieRankingsTab from "./dashboard/RookieRankingsTab";
+
+const ROW1 = [
+  { key: "overview",  label: "Overview" },
+  { key: "roster",    label: "Roster" },
+  { key: "trades",    label: "Trades" },
+  { key: "league",    label: "League" },
+  { key: "perception",label: "Market Signals" },
+  { key: "strategy",  label: "Strategy" },
+  { key: "ai",        label: "AI" },
+];
+
+const ROW2 = [
+  { key: "rankings",  label: "Rankings" },
+  { key: "rookies",   label: "Rookies" },
+  { key: "tinder",    label: "Trade Jury" },
+  { key: "activity",  label: "Activity" },
+];
+
+function TabRow({ tabs, activeTab, setActiveTab, extraTabs = [], dimmed = false }) {
+  const all = [...tabs, ...extraTabs];
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center" }}>
+      {all.map((tab) => {
+        const isActive = activeTab === tab.key;
+        return (
+          <button
+            key={tab.key}
+            className="dyn-tab"
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => setActiveTab(tab.key)}
+            style={{
+              padding: "9px 18px",
+              fontSize: 10,
+              letterSpacing: 1.5,
+              textTransform: "uppercase",
+              border: "none",
+              background: "transparent",
+              color: isActive ? "#00f5a0" : dimmed ? "#475569" : "#94a3b8",
+              borderBottom: isActive ? "2px solid #00f5a0" : "2px solid transparent",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              transition: "color 0.15s",
+            }}
+          >
+            {tab.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function Dashboard({
   analysis,
@@ -41,6 +95,8 @@ export default function Dashboard({
   const [strategyUnlocked, setStrategyUnlocked] = useState(false);
   const [unlockInput, setUnlockInput] = useState("");
 
+  const hasDraft = !!(analysis.draftRecap || analysis.allDraftRecaps?.length > 0);
+
   const {
     byPos,
     sells,
@@ -58,29 +114,24 @@ export default function Dashboard({
     tradeMarket,
     fantasyCalcSource,
     rosterAuditSource,
+    fantasyCalcTrades,
   } = analysis;
+
+  const draftTab = hasDraft ? [{ key: "recap", label: "Draft" }] : [];
 
   return (
     <>
+      {/* ── Header ── */}
       <div style={styles.header}>
         <div
           className="dyn-header-top-row"
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-          }}
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}
         >
           <div style={styles.logo}>Dynasty Oracle — {selectedLeague?.name}</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              className="dyn-btn-ghost"
-              style={styles.btnGhost}
-              onClick={onSwitchLeague}
-            >
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <button className="dyn-btn-ghost" style={styles.btnGhost} onClick={onSwitchLeague}>
               Switch League
             </button>
-
             <button
               className="dyn-btn-ghost"
               style={styles.btnGhost}
@@ -96,94 +147,57 @@ export default function Dashboard({
             >
               Admin
             </a>
-            <button
-              className="dyn-btn-ghost"
-              style={styles.btnGhost}
-              onClick={onLogout}
-            >
+            <button className="dyn-btn-ghost" style={styles.btnGhost} onClick={onLogout}>
               Log out
             </button>
             {recalculating && (
-              <div
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 8,
-                  fontSize: 10,
-                  letterSpacing: 1.5,
-                  color: "#d9deef",
-                  textTransform: "uppercase",
-                }}
-              >
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 10, letterSpacing: 1.5, color: "#d9deef", textTransform: "uppercase" }}>
                 <span className="dyn-spinner" />
                 Recalculating
               </div>
             )}
           </div>
         </div>
+
         <div
           className="dyn-header-bottom-row"
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-end",
-          }}
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}
         >
           <div>
             <h1 style={styles.title}>Dynasty Dashboard</h1>
             <p style={styles.subtitle}>
-              Avg age: {avgAge} · Dynasty score: {avgScore}/100 · {picks.length}{" "}
-              picks · {analysis.isSuperflex ? "Superflex" : "1QB"} · Weights A
-              {analysis.scoringWeights?.age ?? 35}/P
-              {analysis.scoringWeights?.prod ?? 30}/V
-              {analysis.scoringWeights?.avail ?? 15}/T
-              {analysis.scoringWeights?.trend ?? 10}/S
+              Avg age: {avgAge} · Dynasty score: {avgScore}/100 · {picks.length} picks ·{" "}
+              {analysis.isSuperflex ? "Superflex" : "1QB"} · Weights A
+              {analysis.scoringWeights?.age ?? 35}/P{analysis.scoringWeights?.prod ?? 30}/V
+              {analysis.scoringWeights?.avail ?? 15}/T{analysis.scoringWeights?.trend ?? 10}/S
               {analysis.scoringWeights?.situ ?? 10}
             </p>
           </div>
-
         </div>
       </div>
 
+      {/* ── Two-row navigation ── */}
       <div
         className="dyn-tabs-row"
         role="tablist"
         aria-label="Dashboard sections"
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "0 0",
-          borderBottom: "1px solid rgba(255,255,255,0.08)",
-          marginBottom: 32,
-        }}
+        style={{ marginBottom: 32 }}
       >
-        {[
-          { key: "overview",  label: "Overview" },
-          { key: "roster",    label: "Roster" },
-          ...(analysis.draftRecap || analysis.allDraftRecaps?.length > 0
-            ? [{ key: "recap", label: "Draft" }]
-            : []),
-          { key: "trades",    label: "Trades" },
-          { key: "strategy",  label: "Strategy" },
-          { key: "rankings",  label: "Rankings" },
-          { key: "rookies",   label: "Rookies" },
-          { key: "ai",        label: "AI" },
-          { key: "league",    label: "League" },
-          { key: "activity",  label: "Activity" },
-          { key: "docs",      label: "Docs" },
-        ].map((tab) => (
-          <button
-            key={tab.key}
-            className="dyn-tab"
-            role="tab"
-            aria-selected={activeTab === tab.key}
-            aria-label={`${tab.label} tab`}
-            style={styles.tab(activeTab === tab.key)}
-            onClick={() => setActiveTab(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
+        {/* Row 1 — primary */}
+        <div style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+          <TabRow tabs={ROW1} activeTab={activeTab} setActiveTab={setActiveTab} />
+        </div>
+
+        {/* Row 2 — secondary, slightly dimmer with more breathing room */}
+        <div style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", paddingTop: 2 }}>
+          <TabRow
+            tabs={ROW2}
+            extraTabs={[...draftTab, { key: "docs", label: "Docs" }]}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            dimmed
+          />
+        </div>
       </div>
 
       {showGradeKey && <GradeKeyModal onClose={() => setShowGradeKey(false)} />}
@@ -237,7 +251,7 @@ export default function Dashboard({
         />
       )}
 
-      {activeTab === "recap" && (analysis.draftRecap || analysis.allDraftRecaps?.length > 0) && (
+      {activeTab === "recap" && hasDraft && (
         <DraftRecapTab
           draftRecap={analysis.draftRecap}
           allDraftRecaps={analysis.allDraftRecaps || []}
@@ -267,6 +281,20 @@ export default function Dashboard({
         />
       )}
 
+      {activeTab === "tinder" && (
+        <TradeTinderTab
+          leagueTeams={analysis.leagueTeams}
+          leagueContext={leagueContext}
+          tradeMarket={tradeMarket}
+          leagueId={selectedLeague?.league_id}
+          fantasyCalcTrades={fantasyCalcTrades}
+        />
+      )}
+
+      {activeTab === "perception" && (
+        <PerceptionTab leagueId={selectedLeague?.league_id} />
+      )}
+
       {activeTab === "strategy" && !strategyPlannerEnabled && !strategyUnlocked && (
         <PremiumGate
           icon="🧪"
@@ -277,12 +305,8 @@ export default function Dashboard({
           onUnlock={setStrategyUnlocked}
         />
       )}
-
       {activeTab === "strategy" && (strategyPlannerEnabled || strategyUnlocked) && (
-        <StrategyPlannerTab
-          analysis={analysis}
-          selectedLeague={selectedLeague}
-        />
+        <StrategyPlannerTab analysis={analysis} selectedLeague={selectedLeague} />
       )}
 
       {activeTab === "rankings" && (
@@ -301,7 +325,6 @@ export default function Dashboard({
           onUnlock={setStrategyUnlocked}
         />
       )}
-
       {activeTab === "ai" && (strategyPlannerEnabled || strategyUnlocked) && (
         <AdviceTab
           aiAdvice={aiAdviceFromAnalyze}
@@ -335,53 +358,23 @@ function PremiumGate({ icon, title, description, unlockInput, setUnlockInput, on
   const tryUnlock = () => {
     if (unlockInput === "LetMeIn!") onUnlock(true);
   };
-
   return (
-    <div style={{
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      minHeight: 340,
-      padding: "48px 24px",
-      textAlign: "center",
-    }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 340, padding: "48px 24px", textAlign: "center" }}>
       <div style={{ fontSize: 48, marginBottom: 16 }}>{icon}</div>
       <h2 style={{ color: "#fff", margin: "0 0 8px", fontSize: 22 }}>{title}</h2>
-      <p style={{ color: "#94a3b8", fontSize: 15, maxWidth: 420, lineHeight: 1.5 }}>
-        {description}
-      </p>
+      <p style={{ color: "#94a3b8", fontSize: 15, maxWidth: 420, lineHeight: 1.5 }}>{description}</p>
       <div style={{ marginTop: 24, display: "flex", gap: 8 }}>
         <input
           type="password"
           placeholder="Enter access code"
           value={unlockInput}
           onChange={(e) => setUnlockInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") tryUnlock();
-          }}
-          style={{
-            padding: "8px 12px",
-            borderRadius: 6,
-            border: "1px solid #334155",
-            background: "#1e2230",
-            color: "#fff",
-            fontSize: 14,
-            outline: "none",
-          }}
+          onKeyDown={(e) => { if (e.key === "Enter") tryUnlock(); }}
+          style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #334155", background: "#1e2230", color: "#fff", fontSize: 14, outline: "none" }}
         />
         <button
           onClick={tryUnlock}
-          style={{
-            padding: "8px 16px",
-            borderRadius: 6,
-            border: "none",
-            background: "#00f5a0",
-            color: "#141722",
-            fontWeight: 700,
-            fontSize: 14,
-            cursor: "pointer",
-          }}
+          style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: "#00f5a0", color: "#141722", fontWeight: 700, fontSize: 14, cursor: "pointer" }}
         >
           Unlock
         </button>
