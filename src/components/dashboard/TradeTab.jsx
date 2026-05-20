@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { POSITION_PRIORITY } from "../../constants";
-import { evaluateTrade, simulateTrade, buildTradeRationale, suggestBalancingAsset } from "../../lib/tradeEngine";
+import { evaluateTrade, evaluateThreeWayTrade, simulateTrade, buildTradeRationale, suggestBalancingAsset } from "../../lib/tradeEngine";
 import { estimatePickValue, pickSlotLabel } from "../../lib/marketValue";
 import { rankLabel } from "../../lib/playerGrading";
 import { ConvictionChip, ConvictionLegend } from "./OverviewTab";
@@ -164,14 +164,263 @@ function PositionalShiftBadges({ shifts, label, accent }) {
 }
 
 // ---------------------------------------------------------------------------
+// Three-way trade UI primitives
+// ---------------------------------------------------------------------------
+
+const TRI_ACCENTS = ["#ffd84d", "#00f5a0", "#7b8cff"];
+
+const PHASE_BADGE_COLOR = { contender: "#00f5a0", retool: "#ffd84d", rebuild: "#ff6b35" };
+
+function PhaseBadge({ phase }) {
+  const c = PHASE_BADGE_COLOR[phase] || "#a0a8c0";
+  return (
+    <span
+      style={{
+        fontSize: 9,
+        letterSpacing: 1,
+        padding: "1px 6px",
+        borderRadius: 2,
+        color: c,
+        background: `${c}18`,
+        border: `1px solid ${c}44`,
+      }}
+    >
+      {phase}
+    </span>
+  );
+}
+
+function ModeToggle({ mode, onChange }) {
+  const btn = (val, label) => {
+    const active = mode === val;
+    return (
+      <button
+        type="button"
+        onClick={() => onChange(val)}
+        style={{
+          fontSize: 9,
+          letterSpacing: 1.5,
+          padding: "5px 12px",
+          cursor: "pointer",
+          textTransform: "uppercase",
+          fontWeight: 700,
+          background: active ? "rgba(0,245,160,0.14)" : "transparent",
+          color: active ? "#00f5a0" : "#808898",
+          border: `1px solid ${active ? "rgba(0,245,160,0.4)" : "rgba(255,255,255,0.12)"}`,
+          borderRadius: 3,
+        }}
+      >
+        {label}
+      </button>
+    );
+  };
+  return (
+    <div style={{ display: "flex", gap: 6 }}>
+      {btn("two", "2-Team")}
+      {btn("three", "3-Team")}
+    </div>
+  );
+}
+
+function AnonymizeToggle({ anonymize, onChange }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!anonymize)}
+      title="Replace team names with Team 1/2/3 — safe for screenshots"
+      style={{
+        fontSize: 9,
+        letterSpacing: 1.5,
+        padding: "5px 12px",
+        cursor: "pointer",
+        textTransform: "uppercase",
+        fontWeight: 700,
+        background: anonymize ? "rgba(123,140,255,0.16)" : "transparent",
+        color: anonymize ? "#7b8cff" : "#808898",
+        border: `1px solid ${anonymize ? "rgba(123,140,255,0.45)" : "rgba(255,255,255,0.12)"}`,
+        borderRadius: 3,
+      }}
+    >
+      {anonymize ? "Names Hidden" : "Hide Names"}
+    </button>
+  );
+}
+
+function TriEmptyHint({ text }) {
+  return (
+    <div style={{ fontSize: 9, color: "#606878", fontStyle: "italic", padding: "2px 0" }}>
+      {text}
+    </div>
+  );
+}
+
+function TriSendChip({ asset, accent, destinations, onRetarget, onRemove }) {
+  const name = asset.type === "pick" ? asset.label : asset.name;
+  const sub = asset.type === "pick" ? "pick" : asset.position;
+  return (
+    <div
+      style={{
+        background: `${accent}12`,
+        border: `1px solid ${accent}33`,
+        borderRadius: 3,
+        padding: "6px 8px",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 11, color: "#e8e8f0" }}>
+          {name} <span style={{ color: "#94a3b8", fontSize: 9 }}>{sub}</span>
+        </span>
+        <button
+          type="button"
+          onClick={onRemove}
+          style={{ background: "none", border: "none", color: "#ff6b35", fontSize: 12, padding: 0, cursor: "pointer", lineHeight: 1 }}
+        >
+          ×
+        </button>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 5, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 9, color: "#606878" }}>→</span>
+        {destinations.map((d) => {
+          const active = asset.to === d.id;
+          return (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => onRetarget(d.id)}
+              style={{
+                fontSize: 9,
+                padding: "2px 7px",
+                borderRadius: 2,
+                cursor: "pointer",
+                background: active ? `${d.accent}22` : "transparent",
+                color: active ? d.accent : "#808898",
+                border: `1px solid ${active ? `${d.accent}66` : "rgba(255,255,255,0.12)"}`,
+              }}
+            >
+              {d.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TriReceiveChip({ asset, fromLabel, fromAccent }) {
+  const name = asset.type === "pick" ? asset.label : asset.name;
+  const sub = asset.type === "pick" ? "pick" : asset.position;
+  return (
+    <div
+      style={{
+        background: "rgba(123,140,255,0.08)",
+        border: "1px solid rgba(123,140,255,0.22)",
+        borderRadius: 3,
+        padding: "6px 8px",
+      }}
+    >
+      <div style={{ fontSize: 11, color: "#e8e8f0" }}>
+        {name} <span style={{ color: "#94a3b8", fontSize: 9 }}>{sub}</span>
+      </div>
+      <div style={{ fontSize: 9, color: fromAccent, marginTop: 2 }}>from {fromLabel}</div>
+    </div>
+  );
+}
+
+function ThreeWayTeamCard({ team, accent }) {
+  const net = team.netValue;
+  const hasShifts = team.shifts?.some((s) => s.direction !== "lateral" || s.premium);
+  return (
+    <div
+      style={{
+        border: `1px solid ${accent}28`,
+        background: `${accent}08`,
+        borderRadius: 4,
+        padding: "10px 12px",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+        <span style={{ fontSize: 11, color: accent, fontWeight: 700 }}>{team.label}</span>
+        <PhaseBadge phase={team.phase} />
+      </div>
+      <div style={{ fontSize: 11, color: "#d9deef", marginBottom: 3 }}>
+        Gets <strong style={{ color: "#fff" }}>{team.valueReceived}</strong>
+        {" · "}Sends <strong style={{ color: "#fff" }}>{team.valueSent}</strong> pts
+      </div>
+      <div style={{ fontSize: 11, color: "#d9deef" }}>
+        Net (phase-adjusted):{" "}
+        <span style={{ color: net >= 0 ? "#00f5a0" : "#ff6b35" }}>
+          {net >= 0 ? "+" : ""}{net}
+        </span>
+      </div>
+      <div style={{ fontSize: 10, color: "#c8cfe3", marginTop: 4 }}>
+        Phase bonus: {team.phaseAdj >= 0 ? "+" : ""}{team.phaseAdj} ({team.phase})
+      </div>
+      {team.consolidationDiscount && (
+        <div style={{ fontSize: 9, color: "#606878", marginTop: 3 }}>
+          {Math.round((1 - team.consolidationDiscount) * 100)}% package discount on incoming
+        </div>
+      )}
+      {hasShifts && (
+        <div style={{ marginTop: 8 }}>
+          <PositionalShiftBadges shifts={team.shifts} label="moves" accent={accent} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ThreeWayVerdict({ result, accents }) {
+  const fairnessColor = {
+    Fair: "#00f5a0",
+    "Slight edge": "#ffd84d",
+    Uneven: "#ff6b35",
+    Lopsided: "#ff2d55",
+  };
+  return (
+    <div
+      style={{
+        background: "rgba(0,245,160,0.04)",
+        border: "1px solid rgba(0,245,160,0.15)",
+        borderRadius: 4,
+        padding: 16,
+        marginTop: 16,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontSize: 13, color: "#fff", fontWeight: 600 }}>Verdict</div>
+        <span style={styles.tag(fairnessColor[result.fairnessLabel] || "#d9deef")}>
+          {result.fairnessLabel}
+        </span>
+      </div>
+      <div
+        className="dyn-grid-3"
+        style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}
+      >
+        {result.teams.map((t, i) => (
+          <ThreeWayTeamCard key={t.id} team={t} accent={accents[i]} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Trade Calculator component
 // ---------------------------------------------------------------------------
 
 function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase }) {
+  const [mode, setMode] = useState("two");
+  // When on, every displayed team name becomes "Team 1/2/3" — screenshot-safe.
+  const [anonymize, setAnonymize] = useState(false);
   const [teamAId, setTeamAId] = useState("");
   const [teamBId, setTeamBId] = useState("");
   const [sideA, setSideA] = useState([]);
   const [sideB, setSideB] = useState([]);
+
+  // Three-way trade — slot-indexed (0,1,2). triSends[i] is the list of assets
+  // team i sends; each asset carries `to` = destination team's rosterId.
+  const [triIds, setTriIds] = useState(["", "", ""]);
+  const [triSends, setTriSends] = useState([[], [], []]);
 
   const playerMarketMap = useMemo(
     () =>
@@ -183,14 +432,17 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
     [leagueTeams],
   );
 
-  const teamA = useMemo(
-    () => leagueTeams?.find((t) => String(t.rosterId) === teamAId),
-    [leagueTeams, teamAId],
-  );
-  const teamB = useMemo(
-    () => leagueTeams?.find((t) => String(t.rosterId) === teamBId),
-    [leagueTeams, teamBId],
-  );
+  // Selected-team objects carry an anonymized `label` when the toggle is on, so
+  // every downstream render and engine call inherits the masked name. Roster
+  // data (rosterId, enriched, picks, teamPhase) is preserved by the spread.
+  const teamA = useMemo(() => {
+    const t = leagueTeams?.find((x) => String(x.rosterId) === teamAId);
+    return t && anonymize ? { ...t, label: "Team 1" } : t;
+  }, [leagueTeams, teamAId, anonymize]);
+  const teamB = useMemo(() => {
+    const t = leagueTeams?.find((x) => String(x.rosterId) === teamBId);
+    return t && anonymize ? { ...t, label: "Team 2" } : t;
+  }, [leagueTeams, teamBId, anonymize]);
 
   const addAsset = useCallback(
     (side, asset) => {
@@ -267,7 +519,7 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
               </span>
             </div>
           ),
-          onCommit: () => addAsset(team === teamA ? "A" : "B", { ...p, type: "player" }),
+          asset: { ...p, type: "player" },
         }));
 
       const pickOpts = (team.picks || [])
@@ -305,14 +557,7 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
                 <span style={{ fontSize: 10, color: "#94a3b8", flexShrink: 0 }}>~{val} pts</span>
               </div>
             ),
-            onCommit: () => {
-              addAsset(team === teamA ? "A" : "B", {
-                ...p,
-                type: "pick",
-                ownerPhase: originPhase,
-                value: val,
-              });
-            },
+            asset: { ...p, type: "pick", ownerPhase: originPhase, value: val },
           };
         });
 
@@ -323,7 +568,7 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
         ...pickOpts,
       ].filter((o) => !o.isHeader || (o.isHeader && (o.key === "__h_players" ? playerOpts.length : pickOpts.length) > 0));
     },
-    [leagueContext, tradeMarket, teamA, addAsset, rosterPhaseMap],
+    [leagueContext, tradeMarket, rosterPhaseMap],
   );
 
   const assetOptsA = useMemo(() => buildAssetOptions(teamA), [buildAssetOptions, teamA]);
@@ -398,6 +643,96 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
     }
   }, [sideA, sideB, teamA, teamB, leagueTeams, leagueContext, playerMarketMap]);
 
+  // --- Three-way derived state ---------------------------------------------
+  const triTeams = useMemo(
+    () =>
+      triIds.map((id, i) => {
+        const t = leagueTeams?.find((x) => String(x.rosterId) === id);
+        if (!t) return null;
+        return anonymize ? { ...t, label: `Team ${i + 1}` } : t;
+      }),
+    [leagueTeams, triIds, anonymize],
+  );
+  const allTriSelected = triTeams.every(Boolean);
+
+  const triAssetOpts = useMemo(
+    () => triTeams.map((t) => (t ? buildAssetOptions(t) : [])),
+    [triTeams, buildAssetOptions],
+  );
+
+  // For each slot, the assets routed *into* it from the other two slots.
+  const triReceives = useMemo(() => {
+    const buckets = [[], [], []];
+    triSends.forEach((sends, fromSlot) => {
+      sends.forEach((asset) => {
+        const toSlot = triIds.indexOf(asset.to);
+        if (toSlot >= 0 && toSlot !== fromSlot) {
+          buckets[toSlot].push({ ...asset, fromSlot });
+        }
+      });
+    });
+    return buckets;
+  }, [triSends, triIds]);
+
+  const triResult = useMemo(() => {
+    if (!allTriSelected) return null;
+    if (triSends.reduce((n, s) => n + s.length, 0) === 0) return null;
+    const legs = triTeams.map((t, i) => ({
+      id: String(t.rosterId),
+      label: t.label,
+      phase: t.teamPhase?.phase || "retool",
+      sends: triSends[i],
+    }));
+    return evaluateThreeWayTrade(
+      legs,
+      playerMarketMap,
+      leagueContext,
+      tradeMarket,
+    );
+  }, [allTriSelected, triTeams, triSends, playerMarketMap, leagueContext, tradeMarket]);
+
+  // Changing a participant invalidates all routing — reset the sent assets.
+  const selectTriTeam = useCallback((slot, rosterId) => {
+    setTriIds((prev) => {
+      const next = [...prev];
+      next[slot] = rosterId;
+      return next;
+    });
+    setTriSends([[], [], []]);
+  }, []);
+
+  const addTriAsset = useCallback(
+    (slot, asset) => {
+      setTriSends((prev) => {
+        const key = asset.type === "pick" ? asset.label : asset.id;
+        if (
+          prev[slot].some((a) => (a.type === "pick" ? a.label : a.id) === key)
+        )
+          return prev;
+        const next = prev.map((s) => [...s]);
+        next[slot].push({ ...asset, to: triIds[(slot + 1) % 3] });
+        return next;
+      });
+    },
+    [triIds],
+  );
+
+  const removeTriAsset = useCallback((slot, idx) => {
+    setTriSends((prev) => {
+      const next = prev.map((s) => [...s]);
+      next[slot].splice(idx, 1);
+      return next;
+    });
+  }, []);
+
+  const retargetTriAsset = useCallback((slot, idx, toId) => {
+    setTriSends((prev) => {
+      const next = prev.map((s) => [...s]);
+      next[slot][idx] = { ...next[slot][idx], to: toId };
+      return next;
+    });
+  }, []);
+
   if (!leagueTeams?.length) return null;
 
   const chipStyle = (color = "#d9deef") => ({
@@ -445,7 +780,7 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
         <ComboBox
           key={team.rosterId}
           options={assetOpts.filter((o) => !o.isHeader)}
-          onSelect={(opt) => opt.onCommit?.()}
+          onSelect={(opt) => opt.asset && addAsset(side, opt.asset)}
           placeholder="Search players or picks..."
           accent={accent}
         />
@@ -472,10 +807,121 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
     </div>
   );
 
+  // --- Three-way render helpers --------------------------------------------
+  const renderTriSelector = (slot) => {
+    const accent = TRI_ACCENTS[slot];
+    const team = triTeams[slot];
+    const takenElsewhere = triIds.filter((_, i) => i !== slot);
+    return (
+      <div key={slot}>
+        <div style={{ fontSize: 10, color: "#c8cfe3", marginBottom: 4, letterSpacing: 1 }}>
+          TEAM {slot + 1}
+        </div>
+        <ComboBox
+          options={teamOptions.filter(
+            (o) => !takenElsewhere.includes(String(o.data.rosterId)),
+          )}
+          onSelect={(opt) => selectTriTeam(slot, opt.key)}
+          placeholder={team ? team.label : "Search team..."}
+          accent={accent}
+        />
+      </div>
+    );
+  };
+
+  const renderTriPanel = (slot) => {
+    const team = triTeams[slot];
+    const accent = TRI_ACCENTS[slot];
+    const sends = triSends[slot];
+    const receives = triReceives[slot];
+    const opts = triAssetOpts[slot] || [];
+    const otherSlots = [(slot + 1) % 3, (slot + 2) % 3];
+    return (
+      <div
+        key={slot}
+        style={{
+          border: `1px solid ${accent}28`,
+          background: `${accent}08`,
+          borderRadius: 4,
+          padding: 12,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <span style={{ fontSize: 11, color: accent, fontWeight: 700 }}>
+            {team.label}
+          </span>
+          {team.teamPhase?.phase && <PhaseBadge phase={team.teamPhase.phase} />}
+        </div>
+
+        <div style={{ fontSize: 9, color: accent, letterSpacing: 1.5, marginBottom: 6 }}>
+          SENDS
+        </div>
+        <ComboBox
+          key={team.rosterId}
+          options={opts.filter((o) => !o.isHeader)}
+          onSelect={(opt) => opt.asset && addTriAsset(slot, opt.asset)}
+          placeholder="Search players or picks..."
+          accent={accent}
+        />
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+          {sends.map((asset, i) => (
+            <TriSendChip
+              key={asset.type === "pick" ? asset.label : asset.id}
+              asset={asset}
+              accent={accent}
+              destinations={otherSlots.map((os) => ({
+                id: triIds[os],
+                label: triTeams[os].label,
+                accent: TRI_ACCENTS[os],
+              }))}
+              onRetarget={(toId) => retargetTriAsset(slot, i, toId)}
+              onRemove={() => removeTriAsset(slot, i)}
+            />
+          ))}
+          {!sends.length && <TriEmptyHint text="No assets sent yet" />}
+        </div>
+
+        <div style={{ fontSize: 9, color: "#7b8cff", letterSpacing: 1.5, margin: "12px 0 6px" }}>
+          RECEIVES
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {receives.map((asset) => (
+            <TriReceiveChip
+              key={`${asset.fromSlot}-${asset.type === "pick" ? asset.label : asset.id}`}
+              asset={asset}
+              fromLabel={triTeams[asset.fromSlot].label}
+              fromAccent={TRI_ACCENTS[asset.fromSlot]}
+            />
+          ))}
+          {!receives.length && <TriEmptyHint text="Nothing incoming" />}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ ...styles.card, borderColor: "rgba(0,245,160,0.22)", marginBottom: 24 }}>
-      <div style={styles.sectionLabel}>Trade Calculator</div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 10,
+          marginBottom: 14,
+        }}
+      >
+        <div style={{ ...styles.sectionLabel, marginBottom: 0 }}>
+          Trade Calculator
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <AnonymizeToggle anonymize={anonymize} onChange={setAnonymize} />
+          <ModeToggle mode={mode} onChange={setMode} />
+        </div>
+      </div>
 
+      {mode === "two" && (
+      <>
       {/* Team selectors */}
       <div
         className="dyn-grid-2"
@@ -582,6 +1028,34 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
       {balance && <BalanceSuggestion balance={balance} />}
 
       {simulation && <PostTradeImpact simulation={simulation} />}
+      </>
+      )}
+
+      {mode === "three" && (
+        <>
+          <div
+            className="dyn-grid-3"
+            style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 14 }}
+          >
+            {[0, 1, 2].map(renderTriSelector)}
+          </div>
+
+          {allTriSelected ? (
+            <div
+              className="dyn-grid-3"
+              style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}
+            >
+              {[0, 1, 2].map(renderTriPanel)}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: "#808898", textAlign: "center", padding: "10px 0" }}>
+              Select all three teams to start building the trade.
+            </div>
+          )}
+
+          {triResult && <ThreeWayVerdict result={triResult} accents={TRI_ACCENTS} />}
+        </>
+      )}
     </div>
   );
 }
