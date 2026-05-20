@@ -467,6 +467,50 @@ export async function recordSwipe({
   if (error) throw error;
 }
 
+export function getSwipedSentimentHashes(leagueId) {
+  try {
+    return new Set(
+      JSON.parse(localStorage.getItem(`sentiment_swiped_${leagueId}`) || "[]"),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function persistSentimentHash(leagueId, hash) {
+  const key = `sentiment_swiped_${leagueId}`;
+  const current = getSwipedSentimentHashes(leagueId);
+  current.add(hash);
+  localStorage.setItem(key, JSON.stringify([...current]));
+}
+
+export async function recordPlayerSentiment({
+  leagueId,
+  playerId,
+  playerName,
+  position,
+  age,
+  value,
+  verdict, // "buy" | "sell" | "ignore"
+}) {
+  const cardHash = `sentiment-${playerId}`;
+  persistSentimentHash(leagueId, cardHash);
+  const { error } = await supabase.from("player_sentiment_swipes").upsert(
+    {
+      league_id: leagueId,
+      session_id: getTinderSessionId(),
+      player_id: playerId,
+      player_name: playerName,
+      position,
+      age,
+      value,
+      verdict,
+    },
+    { onConflict: "league_id,session_id,player_id" },
+  );
+  if (error) throw error;
+}
+
 export async function fetchPerceptionSwipes(leagueId) {
   const { data, error } = await supabase
     .from("trade_swipes")

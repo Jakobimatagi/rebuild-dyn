@@ -682,6 +682,85 @@ export function evaluateTrade(
 }
 
 // ---------------------------------------------------------------------------
+// Three-way trade evaluation — each leg sends a set of assets, and every asset
+// is routed to one of the other two legs (asset.to = destination leg id).
+// Computes per-team value in/out, a phase-adjusted net, positional shifts, and
+// an overall fairness label from the spread of the three teams' raw nets.
+// ---------------------------------------------------------------------------
+
+export function evaluateThreeWayTrade(
+  legs,
+  playerMarketMap,
+  leagueContext,
+  tradeMarket,
+) {
+  const received = new Map(legs.map((l) => [l.id, []]));
+  for (const leg of legs) {
+    for (const asset of leg.sends || []) {
+      if (received.has(asset.to)) {
+        received.get(asset.to).push({ ...asset, from: leg.id });
+      }
+    }
+  }
+
+  const assetVal = (a) =>
+    getAssetTradeValue(a, playerMarketMap, leagueContext, tradeMarket);
+
+  const teams = legs.map((leg) => {
+    const sent = leg.sends || [];
+    const recv = received.get(leg.id) || [];
+    const valueSent = sent.reduce((s, a) => s + assetVal(a), 0);
+    const valueReceivedRaw = recv.reduce((s, a) => s + assetVal(a), 0);
+
+    // Consolidation discount — a bundle of many pieces fetches less than the
+    // sum of its parts, scaled by how many assets land in this team's lap.
+    const n = recv.length;
+    const discount = n >= 4 ? 0.85 : n === 3 ? 0.9 : n === 2 ? 0.96 : 1;
+    const valueReceived = Math.round(valueReceivedRaw * discount);
+
+    const phaseAdj = phaseAdjustment(recv, leg.phase);
+    const rawNet = valueReceived - valueSent;
+    const netValue = rawNet + phaseAdj;
+    const shifts = detectPositionalShifts(sent, recv, leagueContext);
+
+    return {
+      id: leg.id,
+      label: leg.label,
+      phase: leg.phase,
+      sent,
+      received: recv,
+      valueSent,
+      valueReceived,
+      valueReceivedRaw,
+      consolidationDiscount: discount < 1 ? discount : null,
+      phaseAdj,
+      rawNet,
+      netValue,
+      verdict: netValue >= -3 ? "good" : "overpay",
+      shifts,
+    };
+  });
+
+  // Fairness from the spread of raw (pre-phase) nets — in a clean trade the
+  // three nets sum to roughly zero, so a tight spread means everyone pays fair.
+  const rawNets = teams.map((t) => t.rawNet);
+  const spread = Math.max(...rawNets) - Math.min(...rawNets);
+  const maxVolume = Math.max(
+    ...teams.map((t) => Math.max(t.valueSent, t.valueReceived)),
+    1,
+  );
+  const gapPct = spread / maxVolume;
+
+  let fairnessLabel;
+  if (gapPct <= 0.07) fairnessLabel = "Fair";
+  else if (gapPct <= 0.2) fairnessLabel = "Slight edge";
+  else if (gapPct <= 0.42) fairnessLabel = "Uneven";
+  else fairnessLabel = "Lopsided";
+
+  return { teams, spread, gapPct, fairnessLabel };
+}
+
+// ---------------------------------------------------------------------------
 // Per-side rationale — explains *for each team* what's good (positives) and
 // what should give them pause (concerns) about the proposed deal. The rules
 // are intentionally phase-aware: "good" for a contender is "won't help" for a
@@ -1829,4 +1908,62 @@ export function buildTinderQueue(
   }
 
   return cards.sort(() => rng() - 0.5).slice(0, maxCards);
+}
+
+// Build player sentiment cards (Buy / Sell / Ignore) for the Trade Jury queue.
+// Picks interesting players — high value, age-edge, or positionally notable.
+export function buildPlayerSentimentCards(
+  leagueTeams,
+  { swipedHashes = new Set(), maxCards = 15, seed } = {},
+) {
+  const rng = mulberry32(seed ?? dailySeed());
+
+  // Collect all rostered players with enough value to be interesting
+  const allPlayers = [];
+  for (const team of leagueTeams) {
+    for (const p of team.enriched || []) {
+      if (!p.name || !p.position || !p.id) continue;
+      const val = p.score || p.value || 0;
+      if (val < 40) continue; // ignore fringe players
+      allPlayers.push({
+        id: String(p.id),
+        name: p.name,
+        position: p.position,
+        age: p.age,
+        value: Math.round(val),
+        team: p.team || null,
+        ownerLabel: team.label || null,
+      });
+    }
+  }
+
+  // De-duplicate by player id
+  const seen = new Map();
+  for (const p of allPlayers) {
+    if (!seen.has(p.id) || seen.get(p.id).value < p.value) seen.set(p.id, p);
+  }
+
+  // Score each player's "discussion-worthiness"
+  // - Very high value guys are always interesting
+  // - Players on the age bubble (26-30) are buy/sell flashpoints
+  // - Young stars are buy targets people want to debate
+  function interestScore(p) {
+    let s = p.value;
+    const age = p.age || 25;
+    if (age >= 26 && age <= 30) s += 15; // prime sell window
+    if (age <= 23 && p.value >= 60) s += 20; // young stars
+    if (age >= 31) s += 10; // "is he cooked?" debate
+    return s + rng() * 20; // randomize slightly so it shuffles each session
+  }
+
+  const candidates = [...seen.values()]
+    .filter((p) => !swipedHashes.has(`sentiment-${p.id}`))
+    .sort((a, b) => interestScore(b) - interestScore(a))
+    .slice(0, maxCards);
+
+  return candidates.map((p) => ({
+    type: "sentiment",
+    cardHash: `sentiment-${p.id}`,
+    player: p,
+  }));
 }

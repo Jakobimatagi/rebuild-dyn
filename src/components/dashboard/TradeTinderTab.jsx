@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { buildTinderQueue, buildFCTinderCards } from "../../lib/tradeEngine";
+import { buildTinderQueue, buildFCTinderCards, buildPlayerSentimentCards } from "../../lib/tradeEngine";
 import {
   getSwipedHashes,
+  getSwipedSentimentHashes,
   recordSwipe,
+  recordPlayerSentiment,
 } from "../../lib/supabase";
 import TradeCard from "../tinder/TradeCard";
+import PlayerSentimentCard from "../tinder/PlayerSentimentCard";
 
 const SWIPE_LABELS = {
   team_a: "Team A wins",
@@ -79,12 +82,28 @@ export default function TradeTinderTab({
       }
 
       // Interleave: 2 FC, 1 synthetic, repeat (synthetic fills gaps when FC is sparse)
-      const mixed = [];
+      const tradeMixed = [];
       let fi = 0, si = 0;
       while (fi < fcCards.length || si < syntheticCards.length) {
-        if (fi < fcCards.length) mixed.push(fcCards[fi++]);
-        if (fi < fcCards.length) mixed.push(fcCards[fi++]);
-        if (si < syntheticCards.length) mixed.push(syntheticCards[si++]);
+        if (fi < fcCards.length) tradeMixed.push(fcCards[fi++]);
+        if (fi < fcCards.length) tradeMixed.push(fcCards[fi++]);
+        if (si < syntheticCards.length) tradeMixed.push(syntheticCards[si++]);
+      }
+
+      // Inject sentiment cards every ~4 trade cards
+      const sentimentSwiped = getSwipedSentimentHashes(leagueId);
+      const sentimentCards = buildPlayerSentimentCards(leagueTeams, {
+        swipedHashes: sentimentSwiped,
+        maxCards: Math.max(5, Math.floor(tradeMixed.length / 4)),
+        seed,
+      });
+
+      const mixed = [];
+      let ti = 0, seni = 0;
+      while (ti < tradeMixed.length || seni < sentimentCards.length) {
+        // Insert 4 trade cards, then 1 sentiment card
+        for (let k = 0; k < 4 && ti < tradeMixed.length; k++) mixed.push(tradeMixed[ti++]);
+        if (seni < sentimentCards.length) mixed.push(sentimentCards[seni++]);
       }
 
       setQueue(mixed);
@@ -100,13 +119,21 @@ export default function TradeTinderTab({
     loadQueue(false);
   }, [loadQueue]);
 
-  // Keyboard shortcuts: ← = team_a, Space/Enter = fair, → = team_b
+  // Keyboard shortcuts — context-aware based on current card type
   useEffect(() => {
     function onKey(e) {
       if (animating.current) return;
-      if (e.key === "ArrowLeft") handleVote("team_a");
-      if (e.key === "ArrowRight") handleVote("team_b");
-      if (e.key === " " || e.key === "Enter") handleVote("fair");
+      const currentCard = queue[index];
+      if (!currentCard) return;
+      if (currentCard.type === "sentiment") {
+        if (e.key === "ArrowLeft") handleVote("sell");
+        if (e.key === "ArrowRight") handleVote("buy");
+        if (e.key === " " || e.key === "Enter") handleVote("ignore");
+      } else {
+        if (e.key === "ArrowLeft") handleVote("team_a");
+        if (e.key === "ArrowRight") handleVote("team_b");
+        if (e.key === " " || e.key === "Enter") handleVote("fair");
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -118,22 +145,39 @@ export default function TradeTinderTab({
     if (!card) return;
 
     animating.current = true;
-    setLastVote({ verdict, teamALabel: card.teamA.label, teamBLabel: card.teamB.label });
+
+    if (card.type === "sentiment") {
+      setLastVote({ verdict, sentiment: true, playerName: card.player.name });
+    } else {
+      setLastVote({ verdict, teamALabel: card.teamA.label, teamBLabel: card.teamB.label });
+    }
     setVoteCount((c) => c + 1);
     setIndex((i) => i + 1);
 
     try {
-      await recordSwipe({
-        leagueId,
-        tradeHash: card.tradeHash,
-        teamAId: card.teamA.rosterId,
-        teamBId: card.teamB.rosterId,
-        assetsA: card.assetsA,
-        assetsB: card.assetsB,
-        engineVerdict: card.engineVerdict,
-        engineNet: card.engineNet,
-        userVerdict: verdict,
-      });
+      if (card.type === "sentiment") {
+        await recordPlayerSentiment({
+          leagueId,
+          playerId: card.player.id,
+          playerName: card.player.name,
+          position: card.player.position,
+          age: card.player.age,
+          value: card.player.value,
+          verdict,
+        });
+      } else {
+        await recordSwipe({
+          leagueId,
+          tradeHash: card.tradeHash,
+          teamAId: card.teamA.rosterId,
+          teamBId: card.teamB.rosterId,
+          assetsA: card.assetsA,
+          assetsB: card.assetsB,
+          engineVerdict: card.engineVerdict,
+          engineNet: card.engineNet,
+          userVerdict: verdict,
+        });
+      }
     } catch {
       // Swipe still advances locally even if DB write fails
     } finally {
@@ -202,14 +246,23 @@ export default function TradeTinderTab({
             style={{
               fontSize: 11,
               color:
-                lastVote.verdict === "fair"
+                lastVote.verdict === "buy"
+                  ? "#00f5a0"
+                  : lastVote.verdict === "sell"
+                  ? "#e05c5c"
+                  : lastVote.verdict === "fair"
                   ? "#00f5a0"
                   : lastVote.verdict === "team_a"
                   ? "#e05c5c"
+                  : lastVote.sentiment
+                  ? "#94a3b8"
                   : "#60a5fa",
             }}
           >
-            ✓ {SWIPE_LABELS[lastVote.verdict]}
+            ✓{" "}
+            {lastVote.sentiment
+              ? `${lastVote.verdict.charAt(0).toUpperCase() + lastVote.verdict.slice(1)} ${lastVote.playerName}`
+              : SWIPE_LABELS[lastVote.verdict]}
           </span>
         )}
         <span style={{ fontSize: 11, color: "#64748b" }}>
@@ -243,8 +296,16 @@ export default function TradeTinderTab({
         <DoneState voteCount={voteCount} onRefresh={() => loadQueue(true)} />
       ) : (
         <div style={{ position: "relative", height: 380 }}>
-          {nextCard && <TradeCard card={nextCard} onVote={() => {}} stackDepth={1} />}
-          {card && <TradeCard card={card} onVote={handleVote} stackDepth={0} />}
+          {nextCard && (
+            nextCard.type === "sentiment"
+              ? <PlayerSentimentCard card={nextCard} onVote={() => {}} stackDepth={1} />
+              : <TradeCard card={nextCard} onVote={() => {}} stackDepth={1} />
+          )}
+          {card && (
+            card.type === "sentiment"
+              ? <PlayerSentimentCard card={card} onVote={handleVote} stackDepth={0} />
+              : <TradeCard card={card} onVote={handleVote} stackDepth={0} />
+          )}
         </div>
       )}
 
@@ -258,11 +319,18 @@ export default function TradeTinderTab({
             marginTop: 16,
           }}
         >
-          {[
-            { key: "←", label: "Team A wins", color: "#e05c5c" },
-            { key: "Space", label: "Fair", color: "#00f5a0" },
-            { key: "→", label: "Team B wins", color: "#60a5fa" },
-          ].map((k) => (
+          {(card?.type === "sentiment"
+            ? [
+                { key: "←", label: "Sell", color: "#e05c5c" },
+                { key: "Space", label: "Hold", color: "#94a3b8" },
+                { key: "→", label: "Buy", color: "#00f5a0" },
+              ]
+            : [
+                { key: "←", label: "Team A wins", color: "#e05c5c" },
+                { key: "Space", label: "Fair", color: "#00f5a0" },
+                { key: "→", label: "Team B wins", color: "#60a5fa" },
+              ]
+          ).map((k) => (
             <span
               key={k.key}
               style={{ fontSize: 10, color: "#334155", letterSpacing: 0.5 }}

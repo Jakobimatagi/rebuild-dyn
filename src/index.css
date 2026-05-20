@@ -240,6 +240,11 @@ input:focus {
     grid-template-columns: 1fr !important;
   }
 
+  /* 3-col → 1-col on mobile */
+  .dyn-grid-3 {
+    grid-template-columns: 1fr !important;
+  }
+
   /* Full-width buttons */
   .dyn-btn-full-mobile {
     width: 100% !important;

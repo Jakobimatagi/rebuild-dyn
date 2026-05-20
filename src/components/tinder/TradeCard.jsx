@@ -350,6 +350,7 @@ export default function TradeCard({ card, onVote, stackDepth = 0 }) {
             {VERDICT_OPTIONS.map((v) => (
               <button
                 key={v.key}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => onVote(v.key)}
                 onMouseEnter={() => setHoveredVerdict(v.key)}
                 onMouseLeave={() => setHoveredVerdict(null)}
