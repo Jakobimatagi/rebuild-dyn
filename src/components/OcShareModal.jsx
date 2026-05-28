@@ -669,10 +669,12 @@ function leanNote(passRate) {
   if (passRate <= 0.52) return "run-leaning scheme";
   return "balanced scheme";
 }
+// Thresholds are on air-yards-per-completion (team scale ~4–7.5), not the
+// classic per-target aDOT — see the rec_air_yd note in ocUtilization.js.
 function adotNote(adot) {
   if (adot == null) return "—";
-  if (adot >= 8.5) return "downfield passing game";
-  if (adot <= 6.5) return "underneath / quick game";
+  if (adot >= 7) return "downfield passing game";
+  if (adot <= 5.5) return "underneath / quick game";
   return "intermediate passing game";
 }
 

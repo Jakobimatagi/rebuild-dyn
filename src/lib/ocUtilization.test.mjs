@@ -26,7 +26,7 @@ const players = {
 };
 
 const stats = {
-  TEAM_CHI: { rec_tgt: 100, rush_att: 100, rec_air_yd: 1000, rec_rz_tgt: 20, rush_rz_att: 10, pass_att: 110 },
+  TEAM_CHI: { rec_tgt: 100, rush_att: 100, rec_air_yd: 1000, rec_rz_tgt: 20, rush_rz_att: 10, pass_att: 110, pass_cmp: 75 },
   rb1: { rush_att: 80, rush_rz_att: 8, off_snp: 700, tm_off_snp: 1000, rec_tgt: 0,  gp: 16, pts_ppr: 250, rush_yd: 1200, rush_td: 10 },
   rb2: { rush_att: 20, rush_rz_att: 2, off_snp: 300, tm_off_snp: 1000, rec_tgt: 0,  gp: 16, pts_ppr: 90 },
   wr1: { rec_tgt: 60, rec_air_yd: 700, rec_rz_tgt: 14, off_snp: 900, tm_off_snp: 1000, rec: 45, rec_yd: 900, rec_td: 8, gp: 17, pts_ppr: 220 },
@@ -40,6 +40,7 @@ test("teamDenominators reads the TEAM_ aggregate row", () => {
   assert.equal(d.rush_att, 100);
   assert.equal(d.rec_air_yd, 1000);
   assert.equal(d.pass_att, 110);
+  assert.equal(d.pass_cmp, 75);
 });
 
 test("buildTeamUsage computes exact shares against team denominators", () => {
@@ -56,8 +57,8 @@ test("buildTeamUsage computes exact shares against team denominators", () => {
   // target share
   assert.ok(close(wr1.targetShare, 0.6));
   assert.ok(close(te1.targetShare, 0.4));
-  // aDOT = air yards / targets
-  assert.ok(close(wr1.adot, 700 / 60));
+  // depth of completion = air yards / catches (rec), not / targets
+  assert.ok(close(wr1.adot, 700 / 45));
   // WOPR = 1.5*tgt_share + 0.7*air_share  → wr1: 1.5*.6 + .7*.7 = 1.39
   assert.ok(close(wr1.wopr, 1.5 * 0.6 + 0.7 * 0.7));
   // red-zone shares
@@ -103,7 +104,7 @@ test("aggregateOcUsage averages the fingerprint across played stints", () => {
   assert.equal(agg.played.length, 1);
   assert.ok(close(agg.fingerprint.passRate, 110 / 210));
   assert.ok(close(agg.fingerprint.leadCarryShare, 0.8));
-  assert.ok(close(agg.fingerprint.teamAdot, 1000 / 100));
+  assert.ok(close(agg.fingerprint.teamAdot, 1000 / 75));
 });
 
 test("aggregateOcUsage flags unplayed stints (no stats yet)", () => {

@@ -8,10 +8,18 @@
 //
 // Denominators come straight from Sleeper's per-team aggregate rows
 // (`TEAM_{abbr}`), which carry exact team totals for rec_tgt / rush_att /
-// rec_air_yd / rec_rz_tgt / rush_rz_att / pass_att. That makes every share an
-// exact fraction rather than a sum-of-individuals estimate (which would miss
-// targets/carries that went to players we don't surface). Snap share is the one
-// metric that's player-local: off_snp / tm_off_snp, both on the player row.
+// rec_air_yd / rec_rz_tgt / rush_rz_att / pass_att / pass_cmp. That makes every
+// share an exact fraction rather than a sum-of-individuals estimate (which would
+// miss targets/carries that went to players we don't surface). Snap share is the
+// one metric that's player-local: off_snp / tm_off_snp, both on the player row.
+//
+// NOTE on depth: Sleeper's `rec_air_yd` is air yards on *completed* catches, not
+// intended air yards across all targets (it sums to far less than pass_yd, with
+// the remainder being YAC). So our depth metric is "average depth of completion"
+// = rec_air_yd / completions, NOT the classic aDOT (air yards / targets), which
+// Sleeper can't support. Dividing by targets compressed every offense into a
+// 3–5 band and made every scheme read as "shallow"; per-completion spreads them
+// the way the eye test does (vertical schemes ~7+, quick-game ~4-5).
 
 import { NFL_TEAMS } from "./ocData.js";
 
@@ -34,6 +42,7 @@ export function teamDenominators(seasonStats, teamAbbr) {
     rec_rz_tgt:  num(t.rec_rz_tgt),
     rush_rz_att: num(t.rush_rz_att),
     pass_att:    num(t.pass_att),
+    pass_cmp:    num(t.pass_cmp),
   };
 }
 
@@ -100,7 +109,9 @@ export function buildTeamUsage(players, seasonStats, historicalRoster, teamAbbr)
       targetShare,
       airYards,
       airYardShare,
-      adot: ratio(airYards, targets),
+      // average depth of completion (air yards / catches), not depth of target —
+      // see the rec_air_yd note at the top of this file.
+      adot: ratio(airYards, rec),
       // WOPR = 1.5·target-share + 0.7·air-yard-share (Josh Hermsmeyer's metric)
       wopr: (targetShare != null && airYardShare != null)
         ? 1.5 * targetShare + 0.7 * airYardShare
@@ -192,8 +203,8 @@ export function aggregateOcUsage(oc, players, statsByYear, rosterByYear) {
     leadCarryShare:  avg((r) => r.usage.concentration.carry.lead?.share),
     targetHHI:       avg((r) => r.usage.concentration.target.hhi),
     carryHHI:        avg((r) => r.usage.concentration.carry.hhi),
-    // team aDOT = team air yards / team targets (downfield-ness of the scheme)
-    teamAdot:        avg((r) => ratio(r.usage.denom.rec_air_yd, r.usage.denom.rec_tgt)),
+    // team depth = air yards / completions (downfield-ness of the scheme)
+    teamAdot:        avg((r) => ratio(r.usage.denom.rec_air_yd, r.usage.denom.pass_cmp)),
   };
 
   return { stints, played, fingerprint };
@@ -225,7 +236,7 @@ export function buildSeasonUsage(players, seasonStats, historicalRoster, ocByTea
       carryHHI: usage.concentration.carry.hhi,
       leadTarget: usage.concentration.target.lead,
       leadCarry: usage.concentration.carry.lead,
-      teamAdot: ratio(usage.denom.rec_air_yd, usage.denom.rec_tgt),
+      teamAdot: ratio(usage.denom.rec_air_yd, usage.denom.pass_cmp),
     });
     for (const pos of USAGE_POSITIONS) {
       for (const p of usage.byPos[pos]) {
