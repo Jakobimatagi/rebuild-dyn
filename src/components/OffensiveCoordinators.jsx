@@ -21,8 +21,17 @@ import {
 } from "../lib/teamFantasyRanks.js";
 import { fetchHistoricalRoster } from "../lib/historicalRostersApi.js";
 import { getOcSchemes, SCHEMES } from "../lib/ocSchemes.js";
+import {
+  buildTeamUsage,
+  aggregateOcUsage,
+  buildSeasonUsage,
+  pct,
+  dec,
+  concentrationLabel,
+} from "../lib/ocUtilization.js";
 import { fetchOcAnalysis } from "../lib/aiOcAnalyzeApi.js";
 import { loadSession, saveSession, clearSession } from "./rookieAdmin/utils.js";
+import OcShareModal from "./OcShareModal.jsx";
 
 const POS_ACCENT = {
   QB: "text-rose-300",
@@ -83,6 +92,7 @@ export default function OffensiveCoordinators() {
   const [oracleFromCache,   setOracleFromCache]   = useState(false);
   const [oracleGeneratedAt, setOracleGeneratedAt] = useState(null);
   const [schemeKeyOpen,     setSchemeKeyOpen]     = useState(false);
+  const [shareOpen,         setShareOpen]         = useState(false);
 
   // Per-season fantasy data ── lazy-loaded, cached in component state.
   const [players, setPlayers]   = useState(null);
@@ -312,6 +322,10 @@ export default function OffensiveCoordinators() {
             className={`py-3 text-sm font-semibold border-b-2 ${tab === "compare" ? "border-violet-400 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
             Compare
           </button>
+          <button onClick={() => setTab("usage")}
+            className={`py-3 text-sm font-semibold border-b-2 ${tab === "usage" ? "border-sky-400 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
+            Usage Boards
+          </button>
           <button onClick={() => setTab("editor")}
             className={`py-3 text-sm font-semibold border-b-2 ${tab === "editor" ? "border-emerald-400 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
             Editor
@@ -352,6 +366,12 @@ export default function OffensiveCoordinators() {
               <button onClick={() => askOracle()} disabled={oracleLoading}
                 className="text-[10px] text-amber-300 hover:text-amber-100 border border-amber-400/30 bg-amber-500/5 px-2 py-1 rounded-md disabled:opacity-40">
                 {oracleLoading ? "Analyzing…" : "✦ Oracle"}
+              </button>
+            )}
+            {players && (
+              <button onClick={() => setShareOpen(true)}
+                className="text-[10px] text-sky-300 hover:text-sky-100 border border-sky-400/30 bg-sky-500/5 px-2 py-1 rounded-md">
+                ↗ Share
               </button>
             )}
             <span className="text-xs text-slate-500 ml-auto">
@@ -435,6 +455,21 @@ export default function OffensiveCoordinators() {
           />
         )}
 
+        {/* Share-card studio */}
+        {shareOpen && (
+          <OcShareModal
+            players={players}
+            statsByYear={statsByYear}
+            rosterByYear={rosterByYear}
+            setStats={setStats}
+            setRoster={setRoster}
+            effectiveOcData={effectiveOcData}
+            allOcs={allOcs}
+            initialSeason={season}
+            onClose={() => setShareOpen(false)}
+          />
+        )}
+
         {/* Coordinators tab — list + per-stint room ranks */}
         {tab === "coordinators" && (
           <CoordinatorsList
@@ -460,6 +495,18 @@ export default function OffensiveCoordinators() {
             rosterByYear={rosterByYear}
             setStats={setStats}
             setRoster={setRoster}
+          />
+        )}
+
+        {/* Usage Boards tab — league-wide leaderboards for the selected season */}
+        {tab === "usage" && (
+          <UsageLeaderboards
+            players={players}
+            stats={statsByYear[season]}
+            roster={rosterByYear[season]}
+            ocsBySeason={ocsBySeason}
+            season={season}
+            loading={dataLoading}
           />
         )}
 
@@ -720,7 +767,7 @@ function OcHistoryModal({ oc, players, statsByYear, rosterByYear, setStats, setR
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
       onClick={onClose}>
       <div
-        className="relative w-full max-w-4xl max-h-[85vh] flex flex-col rounded-2xl border border-white/10 bg-slate-950 shadow-2xl overflow-hidden"
+        className="relative w-full max-w-[1400px] max-h-[85vh] flex flex-col rounded-2xl border border-white/10 bg-slate-950 shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}>
         {/* Close button — absolute top-right */}
         <button onClick={onClose}
@@ -873,8 +920,149 @@ function CoordinatorStintRow({ stint, players, stats, roster }) {
           );
         })}
       </div>
-      {ranks && (
-        <TopContributors ranks={ranks} />
+      {players && stats && roster && (
+        <StintUsage usage={buildTeamUsage(players, stats, roster, stint.team)} />
+      )}
+    </div>
+  );
+}
+
+// ── Per-stint usage cards (Phase B) ──────────────────────────────────────────
+// For a single team-season, surface how the OC actually deployed the room:
+// snap / target / carry / red-zone shares + aDOT + WOPR per player, with a
+// room-summary header (pass rate, backfield shape, alpha target share).
+const USAGE_ROOMS = [
+  { pos: "RB", label: "Backfield", accent: "text-emerald-300" },
+  { pos: "WR", label: "Wide Receiver", accent: "text-sky-300" },
+  { pos: "TE", label: "Tight End", accent: "text-amber-300" },
+];
+
+// Color-code a share by magnitude so high-usage players pop without needing a
+// bar — keeps every numeric cell a single right-aligned token, so the column
+// data lines up perfectly under its right-aligned header.
+function shareTextColor(v) {
+  if (v == null) return "text-slate-600";
+  if (v >= 0.30) return "text-emerald-300";
+  if (v >= 0.18) return "text-sky-300";
+  if (v >= 0.10) return "text-amber-300";
+  return "text-slate-400";
+}
+
+function ShareCell({ value, digits = 0 }) {
+  return (
+    <span className={`tabular-nums font-semibold ${shareTextColor(value)}`}>
+      {pct(value, digits)}
+    </span>
+  );
+}
+
+function StintUsage({ usage }) {
+  if (!usage) {
+    return <div className="mt-3 text-[11px] text-slate-600">Usage loading…</div>;
+  }
+  if (!usage.played) {
+    return <div className="mt-3 text-[11px] text-slate-600">No usage data yet for this season.</div>;
+  }
+
+  const { concentration, passRate, denom } = usage;
+  const teamAdot = denom.rec_tgt ? denom.rec_air_yd / denom.rec_tgt : null;
+
+  return (
+    <div className="mt-3 space-y-3">
+      {/* Room-summary chips */}
+      <div className="flex flex-wrap items-center gap-2 text-[10px]">
+        <span className="px-2 py-0.5 rounded-full border border-white/10 bg-slate-900/60 text-slate-300">
+          Pass rate <span className="font-semibold text-slate-100">{pct(passRate, 0)}</span>
+        </span>
+        <span className="px-2 py-0.5 rounded-full border border-white/10 bg-slate-900/60 text-slate-300">
+          Backfield <span className="font-semibold text-emerald-300">{concentrationLabel(concentration.carry.hhi)}</span>
+          {concentration.carry.lead && (
+            <span className="text-slate-500"> · {concentration.carry.lead.name.split(" ").slice(-1)} {pct(concentration.carry.lead.share, 0)}</span>
+          )}
+        </span>
+        {concentration.target.lead && (
+          <span className="px-2 py-0.5 rounded-full border border-white/10 bg-slate-900/60 text-slate-300">
+            Alpha tgt <span className="font-semibold text-sky-300">{concentration.target.lead.name.split(" ").slice(-1)} {pct(concentration.target.lead.share, 0)}</span>
+          </span>
+        )}
+        <span className="px-2 py-0.5 rounded-full border border-white/10 bg-slate-900/60 text-slate-300">
+          Team aDOT <span className="font-semibold text-slate-100">{dec(teamAdot)}</span>
+        </span>
+      </div>
+
+      {/* Per-room usage tables */}
+      <div className="grid gap-3 lg:grid-cols-3">
+        {USAGE_ROOMS.map(({ pos, label, accent }) => (
+          <UsageRoomTable key={pos} pos={pos} label={label} accent={accent}
+            playersList={usage.byPos[pos]} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function UsageRoomTable({ pos, label, accent, playersList }) {
+  // Only show players who actually saw the field; cap to keep cards scannable.
+  const rows = (playersList || [])
+    .filter((p) => p.snaps > 0 || p.targets > 0 || p.carries > 0)
+    .slice(0, 6);
+  const isRush = pos === "RB";
+
+  return (
+    <div className="rounded-lg border border-white/5 bg-slate-900/40 overflow-hidden">
+      <div className={`px-3 py-1.5 text-[10px] uppercase tracking-widest font-bold ${accent} border-b border-white/5`}>
+        {label}
+      </div>
+      {rows.length === 0 ? (
+        <div className="px-3 py-3 text-[11px] text-slate-600">No usage.</div>
+      ) : (
+        <table className="w-full text-[10px]">
+          <thead className="text-slate-500">
+            <tr className="border-b border-white/5">
+              <th className="text-left font-normal py-1 px-2">Player</th>
+              <th className="text-right font-normal py-1 px-2" title="Snap share">Snap</th>
+              {isRush ? (
+                <>
+                  <th className="text-right font-normal py-1 px-2" title="Carry share">Car</th>
+                  <th className="text-right font-normal py-1 px-2" title="Red-zone carry share">RZ</th>
+                  <th className="text-right font-normal py-1 px-2" title="Target share">Tgt</th>
+                </>
+              ) : (
+                <>
+                  <th className="text-right font-normal py-1 px-2" title="Target share">Tgt</th>
+                  <th className="text-right font-normal py-1 px-2" title="Red-zone target share">RZ</th>
+                  <th className="text-right font-normal py-1 px-2" title="Air yards per target">aDOT</th>
+                  <th className="text-right font-normal py-1 px-2" title="Weighted Opportunity Rating">WOPR</th>
+                </>
+              )}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {rows.map((p) => (
+              <tr key={p.id} className="hover:bg-slate-900/60">
+                <td className="py-1 px-2">
+                  <div className="text-slate-200 truncate max-w-[160px]">{p.name}</div>
+                  <div className="text-slate-600">{p.gp}g · {Math.round(p.pts)} pts</div>
+                </td>
+                <td className="py-1 px-2 text-right"><ShareCell value={p.snapShare} /></td>
+                {isRush ? (
+                  <>
+                    <td className="py-1 px-2 text-right"><ShareCell value={p.carryShare} /></td>
+                    <td className="py-1 px-2 text-right"><ShareCell value={p.rzCarryShare} /></td>
+                    <td className="py-1 px-2 text-right tabular-nums text-slate-300">{pct(p.targetShare, 0)}</td>
+                  </>
+                ) : (
+                  <>
+                    <td className="py-1 px-2 text-right"><ShareCell value={p.targetShare} /></td>
+                    <td className="py-1 px-2 text-right"><ShareCell value={p.rzTargetShare} /></td>
+                    <td className="py-1 px-2 text-right tabular-nums text-slate-300">{dec(p.adot)}</td>
+                    <td className="py-1 px-2 text-right tabular-nums text-slate-300">{dec(p.wopr, 2)}</td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );
@@ -978,6 +1166,70 @@ function OcSkillProfile({ oc, players, statsByYear, rosterByYear }) {
           avgByPos={avgByPos}
         />
         <SkillHeatmap stintRanks={sortedStints} />
+      </div>
+      <UsageFingerprint oc={oc} players={players} statsByYear={statsByYear} rosterByYear={rosterByYear} />
+    </div>
+  );
+}
+
+// ── OC usage fingerprint (Phase A) ───────────────────────────────────────────
+// One-glance "how this OC deploys a room" signature, averaged across played
+// stints: pass/run lean, backfield concentration, alpha target share, downfield
+// tendency. The number under each tile shows the per-stint spread so a single
+// outlier season is obvious.
+function UsageFingerprint({ oc, players, statsByYear, rosterByYear }) {
+  const agg = useMemo(
+    () => aggregateOcUsage(oc, players, statsByYear, rosterByYear),
+    [oc, players, statsByYear, rosterByYear],
+  );
+  if (!agg || agg.played.length === 0) return null;
+  const { fingerprint, played } = agg;
+  const n = played.length;
+
+  const tiles = [
+    {
+      label: "Pass Lean",
+      value: pct(fingerprint.passRate, 0),
+      sub: fingerprint.passRate == null ? "—"
+        : fingerprint.passRate >= 0.6 ? "Pass-first"
+        : fingerprint.passRate <= 0.52 ? "Run-leaning" : "Balanced",
+      accent: "text-sky-300",
+    },
+    {
+      label: "Backfield",
+      value: concentrationLabel(fingerprint.carryHHI),
+      sub: fingerprint.leadCarryShare != null ? `lead ${pct(fingerprint.leadCarryShare, 0)} carries` : "—",
+      accent: "text-emerald-300",
+    },
+    {
+      label: "Alpha Target",
+      value: pct(fingerprint.leadTargetShare, 0),
+      sub: fingerprint.targetHHI != null
+        ? (fingerprint.targetHHI >= 0.16 ? "concentrated" : "spread") : "—",
+      accent: "text-violet-300",
+    },
+    {
+      label: "Team aDOT",
+      value: dec(fingerprint.teamAdot),
+      sub: fingerprint.teamAdot == null ? "—"
+        : fingerprint.teamAdot >= 5 ? "downfield" : "underneath",
+      accent: "text-amber-300",
+    },
+  ];
+
+  return (
+    <div className="mt-4 pt-4 border-t border-white/10">
+      <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-2">
+        Usage Fingerprint <span className="text-slate-600">· avg across {n} season{n === 1 ? "" : "s"}</span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {tiles.map((t) => (
+          <div key={t.label} className="rounded-lg border border-white/5 bg-slate-900/60 px-3 py-2">
+            <div className="text-[9px] uppercase tracking-widest text-slate-500">{t.label}</div>
+            <div className={`text-base font-bold ${t.accent}`}>{t.value}</div>
+            <div className="text-[10px] text-slate-500">{t.sub}</div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1093,27 +1345,6 @@ function heatCellBg(rank) {
   if (rank <= 16) return "border-sky-400/30 bg-sky-500/10";
   if (rank <= 24) return "border-amber-400/30 bg-amber-500/10";
   return "border-rose-400/30 bg-rose-500/10";
-}
-
-function TopContributors({ ranks }) {
-  return (
-    <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
-      {FANTASY_POSITIONS.map((pos) => {
-        const top = ranks[pos]?.players?.slice(0, 3) || [];
-        if (top.length === 0) return <div key={pos} />;
-        return (
-          <div key={pos} className="text-[10px] text-slate-500 leading-relaxed px-1">
-            {top.map((p) => (
-              <div key={p.id}>
-                <span className="text-slate-300">{p.name}</span>{" "}
-                <span className="text-slate-600">{Math.round(p.points)} pts</span>
-              </div>
-            ))}
-          </div>
-        );
-      })}
-    </div>
-  );
 }
 
 // ── OC Compare Tab ────────────────────────────────────────────────────────────
@@ -1326,6 +1557,116 @@ function ComparePanel({ oc, agg, accent }) {
         {/* Heatmap */}
         <SkillHeatmap stintRanks={agg.sortedStints} />
       </div>
+    </div>
+  );
+}
+
+// ── Usage Leaderboards (Phase C) ─────────────────────────────────────────────
+// League-wide boards for one season, mined from the same usage engine: alpha
+// target hogs, bell-cow backs, pass/run extremes, downfield offenses. Built for
+// "top 10" content pulls.
+function UsageLeaderboards({ players, stats, roster, ocsBySeason, season, loading }) {
+  const data = useMemo(() => {
+    if (!players || !stats || !roster) return null;
+    return buildSeasonUsage(players, stats, roster, ocsBySeason, { minGp: 4 });
+  }, [players, stats, roster, ocsBySeason]);
+
+  if (!data) {
+    return (
+      <div className="rounded-xl border border-white/10 bg-slate-900/40 p-12 text-center text-slate-500 text-sm">
+        {loading ? "Loading season usage…" : "Select a season to build usage boards."}
+      </div>
+    );
+  }
+
+  const { playerRows, teamRows } = data;
+  const teamOf = (p) => `${p.name} · ${p.team}`;
+
+  // Player boards
+  const byTargetShare = topBy(playerRows.filter((p) => p.pos === "WR" || p.pos === "TE"), "targetShare");
+  const byWopr        = topBy(playerRows.filter((p) => p.pos === "WR" || p.pos === "TE"), "wopr");
+  const byAdot        = topBy(playerRows.filter((p) => (p.pos === "WR" || p.pos === "TE") && p.targets >= 40), "adot");
+  const byCarryShare  = topBy(playerRows.filter((p) => p.pos === "RB"), "carryShare");
+  const byRzTgt       = topBy(playerRows.filter((p) => p.pos === "WR" || p.pos === "TE"), "rzTargetShare");
+  const byRzCarry     = topBy(playerRows.filter((p) => p.pos === "RB"), "rzCarryShare");
+
+  // Team / OC boards
+  const passHappy   = topBy(teamRows, "passRate");
+  const runHeavy    = topBy(teamRows, "passRate", { asc: true });
+  const concentrated = topBy(teamRows.filter((t) => t.carryHHI != null), "carryHHI");
+  const downfield   = topBy(teamRows.filter((t) => t.teamAdot != null), "teamAdot");
+
+  return (
+    <div className="space-y-4">
+      <div className="text-[11px] text-slate-500">
+        {season} season · min 4 games for player boards · shares are exact team fractions
+      </div>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <LeaderBoard title="Target Share" accent="text-sky-300"
+          rows={byTargetShare} label={teamOf} value={(p) => pct(p.targetShare, 1)}
+          sub={(p) => `${p.targets} tgt · ${p.oc || "—"}`} />
+        <LeaderBoard title="WOPR" accent="text-sky-300"
+          rows={byWopr} label={teamOf} value={(p) => dec(p.wopr, 2)}
+          sub={(p) => `${pct(p.targetShare, 0)} tgt · ${pct(p.airYardShare, 0)} air`} />
+        <LeaderBoard title="aDOT (40+ tgt)" accent="text-amber-300"
+          rows={byAdot} label={teamOf} value={(p) => dec(p.adot)}
+          sub={(p) => `${p.targets} tgt · ${Math.round(p.recYd)} yds`} />
+        <LeaderBoard title="RB Carry Share" accent="text-emerald-300"
+          rows={byCarryShare} label={teamOf} value={(p) => pct(p.carryShare, 1)}
+          sub={(p) => `${p.carries} car · ${p.oc || "—"}`} />
+        <LeaderBoard title="RZ Target Share" accent="text-rose-300"
+          rows={byRzTgt} label={teamOf} value={(p) => pct(p.rzTargetShare, 0)}
+          sub={(p) => `${p.rzTgt} RZ tgt`} />
+        <LeaderBoard title="RZ Carry Share" accent="text-rose-300"
+          rows={byRzCarry} label={teamOf} value={(p) => pct(p.rzCarryShare, 0)}
+          sub={(p) => `${p.rzCarry} RZ car`} />
+        <LeaderBoard title="Pass-Happiest Offenses" accent="text-sky-300"
+          rows={passHappy} label={(t) => `${t.teamName}`} value={(t) => pct(t.passRate, 0)}
+          sub={(t) => t.oc || "—"} />
+        <LeaderBoard title="Run-Heaviest Offenses" accent="text-emerald-300"
+          rows={runHeavy} label={(t) => `${t.teamName}`} value={(t) => pct(t.passRate, 0)}
+          sub={(t) => t.oc || "—"} />
+        <LeaderBoard title="Most Concentrated Backfields" accent="text-emerald-300"
+          rows={concentrated} label={(t) => t.teamName} value={(t) => concentrationLabel(t.carryHHI)}
+          sub={(t) => t.leadCarry ? `${t.leadCarry.name.split(" ").slice(-1)} ${pct(t.leadCarry.share, 0)} · ${t.oc || "—"}` : (t.oc || "—")} />
+        <LeaderBoard title="Most Downfield Offenses" accent="text-amber-300"
+          rows={downfield} label={(t) => t.teamName} value={(t) => dec(t.teamAdot)}
+          sub={(t) => t.oc || "—"} />
+      </div>
+    </div>
+  );
+}
+
+// Sort a list desc (or asc) by a numeric key, dropping null/0, keep top 10.
+function topBy(rows, key, { asc = false, limit = 10 } = {}) {
+  return [...rows]
+    .filter((r) => r[key] != null && Number.isFinite(r[key]) && r[key] > 0)
+    .sort((a, b) => asc ? a[key] - b[key] : b[key] - a[key])
+    .slice(0, limit);
+}
+
+function LeaderBoard({ title, accent, rows, label, value, sub }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-slate-900/40 overflow-hidden">
+      <div className={`px-3 py-2 text-[10px] uppercase tracking-widest font-bold ${accent} border-b border-white/5`}>
+        {title}
+      </div>
+      {rows.length === 0 ? (
+        <div className="px-3 py-4 text-[11px] text-slate-600">No data.</div>
+      ) : (
+        <ol className="divide-y divide-white/5">
+          {rows.map((r, i) => (
+            <li key={i} className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-900/60">
+              <span className="text-[10px] text-slate-600 w-4 text-right tabular-nums">{i + 1}</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-slate-200 truncate">{label(r)}</div>
+                <div className="text-[10px] text-slate-500 truncate">{sub(r)}</div>
+              </div>
+              <span className="text-sm font-bold text-slate-100 tabular-nums">{value(r)}</span>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

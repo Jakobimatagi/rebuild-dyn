@@ -14,9 +14,10 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 function blurbFingerprint(kind, scope, players) {
   const parts = players.map((p) => {
     if (kind === "top-players") return `${p.id}:${p.finalScore}`;
+    if (kind === "oc-usage") return `${p.id}:${p.metric ?? ""}`;
     return `${p.id}:${p.grade}`;
   });
-  const seed = `${kind}|${scope?.year ?? ""}|${scope?.position ?? ""}|${parts.join(",")}`;
+  const seed = `${kind}|${scope?.year ?? ""}|${scope?.season ?? ""}|${scope?.board ?? ""}|${scope?.position ?? ""}|${parts.join(",")}`;
   let h = 5381;
   for (let i = 0; i < seed.length; i++) h = ((h << 5) + h + seed.charCodeAt(i)) | 0;
   return Math.abs(h).toString(36);
@@ -60,6 +61,7 @@ export async function fetchShareBlurbs(kind, players, scope = {}, { force = fals
     if (cached) {
       return {
         blurbsById: new Map(cached.result.blurbs.map((b) => [b.id, b.blurb])),
+        tweet: cached.result.tweet ?? null,
         cached: true,
         generatedAt: cached.timestamp,
       };
@@ -104,6 +106,7 @@ export async function fetchShareBlurbs(kind, players, scope = {}, { force = fals
 
   return {
     blurbsById: new Map(data.result.blurbs.map((b) => [b.id, b.blurb])),
+    tweet: data.result.tweet ?? null,
     cached: false,
     generatedAt: stamped.timestamp,
   };
@@ -168,4 +171,35 @@ export function buildRookieBlurbInput(player) {
     adp: player.rookieAdp || null,
     recent,
   };
+}
+
+// Compact usage summary for the OC share cards. `subject` is a normalized
+// usage row assembled by OcShareModal (player row, team-season row, OC
+// fingerprint, or single player). Only the present fields are forwarded —
+// the model is told to lean on whichever metric is load-bearing. `metric` is
+// the card's headline value, used for the blurb cache fingerprint.
+export function buildOcBlurbInput(subject) {
+  const round = (v, d = 3) =>
+    v == null || !Number.isFinite(v) ? null : Number(v.toFixed(d));
+  const out = {
+    id: subject.id,
+    name: subject.name ?? null,
+    team: subject.team ?? null,
+    pos: subject.pos ?? null,
+    season: subject.season ?? null,
+    oc: subject.oc ?? null,
+    metric: subject.metric ?? null,
+  };
+  const numFields = [
+    "snapShare", "targetShare", "carryShare", "rzTargetShare", "rzCarryShare",
+    "adot", "airYardShare", "wopr", "passRate", "teamAdot",
+    "leadCarryShare", "leadTargetShare", "carryHHI", "targetHHI",
+  ];
+  for (const f of numFields) {
+    if (subject[f] != null) out[f] = round(subject[f]);
+  }
+  for (const f of ["touches", "targets", "carries", "rzTgt", "rzCarry"]) {
+    if (subject[f] != null) out[f] = subject[f];
+  }
+  return out;
 }

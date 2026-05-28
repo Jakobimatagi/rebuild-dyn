@@ -60,6 +60,45 @@ Return ONLY this JSON, no prose, no markdown, no code fences:
 
 Length of "blurbs" must equal length of input. Every input id must appear in the output. Each blurb ≤ 140 characters.`;
 
+const OC_USAGE_SYSTEM = `You are a dynasty fantasy football analyst writing share-card captions on Twitter, focused on PLAYER USAGE and how offenses deploy talent. You will receive a list of subjects (players, team-seasons, or offensive coordinators) with opportunity metrics. For each, write ONE short sentence (max 140 characters) that turns the usage numbers into a sharp, citable take. Lead with the number that's doing the work.
+
+Subjects can carry any of these fields (only the relevant ones are present):
+  - name, team, pos, season, oc (coordinator)
+  - snapShare: share of team offensive snaps
+  - targetShare: share of team targets
+  - carryShare: share of team carries
+  - rzTargetShare / rzCarryShare: red-zone target / carry share (goal-line equity)
+  - adot: average depth of target (downfield vs underneath)
+  - airYardShare: share of team air yards
+  - wopr: Weighted Opportunity Rating (1.5*targetShare + 0.7*airYardShare); ~0.7+ is alpha
+  - touches, targets, carries: raw volume
+  - passRate: team pass rate (scheme pass/run lean)
+  - leadCarryShare / leadTargetShare: the top claimant's share in this offense
+  - carryHHI / targetHHI: concentration (high = funnel to one guy, low = committee)
+  - teamAdot: how downfield the scheme throws
+
+Frame usage as opportunity, not production: "commands", "funnel", "bell-cow", "alpha", "committee", "vacated", "downfield role". When a share is elite (target share >28%, carry share >55%, WOPR >0.7) say so plainly. When concentration is low, call it a committee. When red-zone share outstrips overall share, flag the scoring equity. Cite exact percentages.
+
+Voice: confident, scout-tone, NO emojis, NO filler hype like "BREAKING" / "SMASH". Reference exact numbers when they're load-bearing.
+
+Also write ONE ready-to-post tweet (the "tweet" field) that captions this whole card for a dynasty fantasy football audience. Open with a hook, build the take from the single strongest number across these subjects, and keep it ≤ 270 characters. At most one or two relevant hashtags, NO emojis, NO "BREAKING"-style hype. It should read like a take a sharp analyst would post, not a list of stats.
+
+Return ONLY this JSON, no prose, no markdown, no code fences:
+{
+  "tweet": "ready-to-post caption, ≤ 270 characters",
+  "blurbs": [
+    { "id": "<exact id from input>", "blurb": "one sentence under 140 chars" }
+  ]
+}
+
+Length of "blurbs" must equal length of input. Every input id must appear in the output. Each blurb ≤ 140 characters. The "tweet" must be ≤ 270 characters.`;
+
+const SYSTEM_BY_KIND = {
+  rookies: ROOKIES_SYSTEM,
+  "top-players": TOP_PLAYERS_SYSTEM,
+  "oc-usage": OC_USAGE_SYSTEM,
+};
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -74,13 +113,15 @@ export default async function handler(req, res) {
   if (!Array.isArray(players) || players.length === 0) {
     return res.status(400).json({ error: "Missing players in body" });
   }
-  if (kind !== "rookies" && kind !== "top-players") {
-    return res.status(400).json({ error: "kind must be 'rookies' or 'top-players'" });
+  const systemPrompt = SYSTEM_BY_KIND[kind];
+  if (!systemPrompt) {
+    return res.status(400).json({ error: "kind must be 'rookies', 'top-players', or 'oc-usage'" });
   }
 
-  const systemPrompt = kind === "rookies" ? ROOKIES_SYSTEM : TOP_PLAYERS_SYSTEM;
   const scopeBit = kind === "rookies"
     ? `Rookie class: ${scope?.year ?? "unknown"}. Position scope: ${scope?.position ?? "all"}.`
+    : kind === "oc-usage"
+    ? `NFL usage data · ${scope?.season ?? "season"}. Card: ${scope?.board ?? "usage"}.`
     : `Top Players board · 12-team SF full-PPR. Position scope: ${scope?.position ?? "all"}.`;
 
   const userPrompt = `${scopeBit}
