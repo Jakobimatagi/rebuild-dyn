@@ -68,14 +68,14 @@ Subjects can carry any of these fields (only the relevant ones are present):
   - targetShare: share of team targets
   - carryShare: share of team carries
   - rzTargetShare / rzCarryShare: red-zone target / carry share (goal-line equity)
-  - adot: average depth of target (downfield vs underneath)
+  - adot: average depth of completion in air yards (air yards per catch; downfield vs quick game). Player reference: ~10+ is a vertical/deep role, ~7-9 intermediate, ~5-6 short, <5 screen/checkdown
   - airYardShare: share of team air yards
   - wopr: Weighted Opportunity Rating (1.5*targetShare + 0.7*airYardShare); ~0.7+ is alpha
   - touches, targets, carries: raw volume
   - passRate: team pass rate (scheme pass/run lean)
   - leadCarryShare / leadTargetShare: the top claimant's share in this offense
   - carryHHI / targetHHI: concentration (high = funnel to one guy, low = committee)
-  - teamAdot: how downfield the scheme throws
+  - teamAdot: scheme depth in air yards per completion. Reference: ~7+ is a downfield/vertical scheme, ~5.5-7 intermediate, <5.5 quick-game/underneath. Do NOT call a scheme "shallow" unless it is genuinely below the rest of the league
 
 Frame usage as opportunity, not production: "commands", "funnel", "bell-cow", "alpha", "committee", "vacated", "downfield role". When a share is elite (target share >28%, carry share >55%, WOPR >0.7) say so plainly. When concentration is low, call it a committee. When red-zone share outstrips overall share, flag the scoring equity. Cite exact percentages.
 

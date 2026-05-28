@@ -1031,7 +1031,7 @@ function UsageRoomTable({ pos, label, accent, playersList }) {
                 <>
                   <th className="text-right font-normal py-1 px-2" title="Target share">Tgt</th>
                   <th className="text-right font-normal py-1 px-2" title="Red-zone target share">RZ</th>
-                  <th className="text-right font-normal py-1 px-2" title="Air yards per target">aDOT</th>
+                  <th className="text-right font-normal py-1 px-2" title="Air yards per catch (average depth of completion)">aDOT</th>
                   <th className="text-right font-normal py-1 px-2" title="Weighted Opportunity Rating">WOPR</th>
                 </>
               )}
@@ -1212,7 +1212,8 @@ function UsageFingerprint({ oc, players, statsByYear, rosterByYear }) {
       label: "Team aDOT",
       value: dec(fingerprint.teamAdot),
       sub: fingerprint.teamAdot == null ? "—"
-        : fingerprint.teamAdot >= 5 ? "downfield" : "underneath",
+        : fingerprint.teamAdot >= 7 ? "downfield"
+        : fingerprint.teamAdot <= 5.5 ? "underneath" : "intermediate",
       accent: "text-amber-300",
     },
   ];
