@@ -13,6 +13,7 @@ import PerceptionTab from "./dashboard/PerceptionTab";
 import LeagueActivityTab from "./dashboard/LeagueActivityTab";
 import DocumentationTab from "./dashboard/DocumentationTab";
 import DraftRecapTab from "./dashboard/DraftRecapTab";
+import LiveDraftTab from "./dashboard/LiveDraftTab";
 import RankingsTab from "./dashboard/RankingsTab";
 import StrategyPlannerTab from "./dashboard/StrategyPlannerTab";
 import RookieRankingsTab from "./dashboard/RookieRankingsTab";
@@ -117,6 +118,10 @@ export default function Dashboard({
     fantasyCalcTrades,
   } = analysis;
 
+  const hasLiveDraft = !!analysis.liveDraft;
+  const liveDraftTab = hasLiveDraft
+    ? [{ key: "live", label: "Live Draft" }]
+    : [];
   const draftTab = hasDraft ? [{ key: "recap", label: "Draft" }] : [];
 
   return (
@@ -192,7 +197,7 @@ export default function Dashboard({
         <div style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", paddingTop: 2 }}>
           <TabRow
             tabs={ROW2}
-            extraTabs={[...draftTab, { key: "docs", label: "Docs" }]}
+            extraTabs={[...liveDraftTab, ...draftTab, { key: "docs", label: "Docs" }]}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             dimmed
@@ -248,6 +253,22 @@ export default function Dashboard({
           posRanks={analysis.posRanks}
           isSuperflex={analysis.leagueContext?.isSuperflex}
           hideDraftCapital={!!analysis.draftRecap}
+        />
+      )}
+
+      {activeTab === "live" && hasLiveDraft && (
+        <LiveDraftTab
+          draft={analysis.liveDraft.draft}
+          initialPicks={analysis.liveDraft.initialPicks}
+          rosterPositions={analysis.liveDraft.rosterPositions}
+          valueBySleeperId={analysis.liveDraft.valueBySleeperId}
+          ppgBySleeperId={analysis.liveDraft.ppgBySleeperId}
+          bestAvailablePool={analysis.liveDraft.bestAvailablePool}
+          leagueId={analysis.liveDraft.leagueId}
+          players={analysis.liveDraft.players}
+          initialTradeTransactions={analysis.liveDraft.tradeTransactions}
+          leagueTeams={analysis.leagueTeams}
+          myRosterId={analysis.rosterId}
         />
       )}
 
