@@ -4,6 +4,7 @@ import { getColor, getVerdict } from "../../lib/analysis";
 import { styles } from "../../styles";
 import { pickSlotLabel, getPickValue, formatPickValue, PHASE_TO_SLOT } from "../../lib/marketValue";
 import PlayerDeepDiveModal from "./PlayerDeepDiveModal";
+import OcImpactPanel from "./OcImpactPanel";
 import ScoreBar from "./ScoreBar";
 
 const POS_RUBRIC = {
@@ -436,6 +437,8 @@ export default function RosterTab({
           onClose={() => setDeepDivePlayer(null)}
         />
       )}
+
+      <OcImpactPanel byPos={byPos} />
 
       {POSITION_PRIORITY.map((pos) => {
         const isRoomCollapsed = !!collapsedRooms[pos];
