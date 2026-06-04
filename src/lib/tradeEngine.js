@@ -201,7 +201,7 @@ function getSuggestionTier(targetValue, marketGap, rules) {
 // data is unavailable — it intentionally stays on the same numeric range.
 const FC_SCALE = 100;
 
-function getAssetTradeValue(
+export function getAssetTradeValue(
   asset,
   playerMarketMap,
   leagueContext,
@@ -224,8 +224,13 @@ function getAssetTradeValue(
     return Math.max(1, Math.round((dmv / FC_SCALE) * multiplier));
   }
 
-  // Fallback: score-based marketValue for players with no FC/RA coverage.
-  return Math.round((player.marketValue || player.score || 40) * multiplier);
+  // Fallback: no FC/RA coverage means the player is off the dynasty radar
+  // (deep bench, aged-out vet). The 0-100 score lives on a different, far more
+  // compressed scale than dmv/FC_SCALE, so using it directly massively
+  // over-values market-abandoned players. Map it onto the trade scale with a
+  // low ceiling instead — an off-market player tops out near roster-filler.
+  const score = Number(player.score || player.marketValue || 0);
+  return Math.max(1, Math.round((score / 100) * 15 * multiplier));
 }
 
 function pushRosterAsset(map, rosterId, asset) {
@@ -1555,6 +1560,81 @@ export function buildTradeSuggestions(
         ) === index,
     )
     .slice(0, 8);
+}
+
+// Purpose-built fair-offer assembler for trade targets. Unlike buildOfferPackage
+// (tuned for win-now acquisitions with anchor/meaningful-asset guards), this just
+// finds the cleanest bundle from your tradeable assets whose total lands in a fair
+// band around the target's value — preferring a single asset, then the fewest
+// pieces, and biasing toward assets the partner needs.
+export function assembleFairPackage(
+  myTeam,
+  targetValue,
+  partner,
+  playerMarketMap,
+  leagueContext,
+  tradeMarket,
+) {
+  const myPhase = myTeam.teamPhase?.phase ?? null;
+  const partnerNeeds = new Set(partner.needs || []);
+  const currentYear = new Date().getFullYear();
+
+  const players = (myTeam.tradeablePlayers || []).map((p) => ({
+    ...p,
+    type: "player",
+    value: getAssetTradeValue(
+      { ...p, type: "player" },
+      playerMarketMap,
+      leagueContext,
+      tradeMarket,
+    ),
+    partnerFit: partnerNeeds.has(p.position),
+  }));
+  const picks = (myTeam.picks || [])
+    .filter((pk) => Number(pk.season) <= currentYear + 1 && pk.round <= 4)
+    .map((pk) => ({
+      ...pk,
+      type: "pick",
+      ownerPhase: myPhase,
+      value: estimatePickValue(pk, leagueContext, tradeMarket, myPhase),
+      partnerFit: false,
+    }));
+
+  const pool = [...players, ...picks].filter((a) => a.value > 0);
+  if (!pool.length) return null;
+
+  const lo = Math.max(1, Math.round(targetValue * 0.92) - 3);
+  const hi = Math.round(targetValue * 1.12) + 4;
+
+  // 1) Single asset inside the band — prefer a partner-need fit, then closest value.
+  const singles = pool
+    .filter((a) => a.value >= lo && a.value <= hi)
+    .sort(
+      (a, b) =>
+        b.partnerFit - a.partnerFit ||
+        Math.abs(a.value - targetValue) - Math.abs(b.value - targetValue),
+    );
+  if (singles.length) {
+    return { assets: [singles[0]], outgoingValue: Math.round(singles[0].value) };
+  }
+
+  // 2) Greedy bundle — pack from the largest asset down without exceeding the
+  //    ceiling, stopping once we clear the floor. Capped at 4 pieces for a clean shape.
+  const sorted = [...pool].sort((a, b) => b.value - a.value);
+  const assets = [];
+  let total = 0;
+  for (const asset of sorted) {
+    if (assets.length >= 4) break;
+    if (total + asset.value <= hi) {
+      assets.push(asset);
+      total += asset.value;
+    }
+    if (total >= lo) break;
+  }
+  if (assets.length && total >= lo && total <= hi) {
+    return { assets, outgoingValue: Math.round(total) };
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

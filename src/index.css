@@ -204,6 +204,9 @@ input:focus {
   border-radius: 3px;
   animation: dyn-pulse 1.6s ease-in-out infinite;
 }
+.dyn-live-dot {
+  animation: dyn-pulse 1.2s ease-in-out infinite;
+}
 
 /* ── Mobile responsive ───────────────────────────────────────────────────── */
 @media (max-width: 640px) {

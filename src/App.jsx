@@ -128,6 +128,8 @@ export default function App() {
       payload.recentDraftPicks,
       payload.allCompletedDrafts,
       payload.allDraftPicksMap,
+      payload.liveDraft,
+      payload.liveDraftPicks,
     );
   }
 
@@ -267,6 +269,18 @@ export default function App() {
         ? (allDraftPicksMap[recentDraft.draft_id] || [])
         : [];
 
+      // In-progress draft (startup, rookie, or in-season). Seed its picks so the
+      // live tracker tab renders immediately; the tab re-polls from there.
+      const liveDraft = sleeperDrafts.find(
+        (d) =>
+          d.status === "drafting" ||
+          d.status === "paused" ||
+          d.status === "pre_draft",
+      ) || null;
+      const liveDraftPicks = liveDraft
+        ? await fetchDraftPicks(liveDraft.draft_id).catch(() => [])
+        : [];
+
       const payload = {
         myRoster,
         players,
@@ -283,6 +297,8 @@ export default function App() {
         sleeperDrafts,
         recentDraft,
         recentDraftPicks,
+        liveDraft,
+        liveDraftPicks,
         allCompletedDrafts,
         allDraftPicksMap,
         users,

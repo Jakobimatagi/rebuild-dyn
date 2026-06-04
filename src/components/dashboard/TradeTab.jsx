@@ -4,6 +4,7 @@ import { evaluateTrade, evaluateThreeWayTrade, simulateTrade, buildTradeRational
 import { estimatePickValue, pickSlotLabel } from "../../lib/marketValue";
 import { rankLabel } from "../../lib/playerGrading";
 import { ConvictionChip, ConvictionLegend } from "./OverviewTab";
+import TradeTargetsPanel from "./TradeTargetsPanel";
 import { styles } from "../../styles";
 
 // ---------------------------------------------------------------------------
@@ -1639,6 +1640,12 @@ export default function TradeTab({
         leagueContext={leagueContext}
         tradeMarket={tradeMarket}
         teamPhase={teamPhase}
+      />
+      <TradeTargetsPanel
+        myRosterId={myRosterId}
+        leagueTeams={leagueTeams}
+        leagueContext={leagueContext}
+        tradeMarket={tradeMarket}
       />
       <div
         style={{

@@ -29,6 +29,83 @@ export {
   getConvictionTier,
 } from './playerGrading';
 
+/**
+ * Combined dynasty value lookup keyed by Sleeper player_id, for grading live
+ * draft rosters. RosterAudit is preferred when present, FantasyCalc fills gaps —
+ * the same precedence buildDraftRecap applies to its player values.
+ */
+function buildValueBySleeperId(fcBySleeperId, raBySleeperId) {
+  const out = {};
+  const add = (map, preferred) => {
+    if (!map?.forEach) return;
+    map.forEach((entry, sleeperId) => {
+      const value = Number(entry?.value || 0);
+      if (value <= 0) return;
+      if (preferred || out[sleeperId] == null) out[sleeperId] = value;
+    });
+  };
+  add(fcBySleeperId, false); // baseline
+  add(raBySleeperId, true); // RA overrides FC
+  return out;
+}
+
+const LIVE_DRAFT_POSITIONS = new Set([
+  "QB", "RB", "WR", "TE", "K", "DEF", "DL", "LB", "DB",
+]);
+
+/**
+ * Value-ranked list of draftable players for the live "Best Available" board.
+ * Joins the combined value map to the Sleeper players map for name/position/team
+ * and keeps the top `limit` to bound the payload.
+ */
+function buildBestAvailablePool(valueBySleeperId, players, limit = 400) {
+  const out = [];
+  for (const [playerId, value] of Object.entries(valueBySleeperId)) {
+    const p = players?.[playerId];
+    if (!p) continue;
+    const position = (p.fantasy_positions?.[0] || p.position || "").toUpperCase();
+    if (!LIVE_DRAFT_POSITIONS.has(position)) continue;
+    const name =
+      p.full_name ||
+      `${p.first_name || ""} ${p.last_name || ""}`.trim() ||
+      `Player ${playerId}`;
+    out.push({ playerId, name, position, team: p.team || "", value });
+  }
+  out.sort((a, b) => b.value - a.value);
+  return out.slice(0, limit);
+}
+
+/**
+ * Per-player points-per-game keyed by Sleeper id, for the live draft's expected
+ * team PPG. Blends the last two seasons (recent weighted heavier) and uses the
+ * scoring column that matches the league's PPR setting. A gp >= 6 floor avoids
+ * small-sample inflation (same convention as scoringEngine). Players with no
+ * qualifying season (e.g. rookies) simply contribute 0.
+ */
+function buildPpgBySleeperId(lastSeasonStats, priorSeasonStats, ppr = 1) {
+  const col = ppr >= 1 ? "pts_ppr" : ppr >= 0.5 ? "pts_half_ppr" : "pts_std";
+  const ppgOf = (stat) => {
+    const gp = Number(stat?.gp || 0);
+    if (gp < 6) return null;
+    return (Number(stat?.[col]) || 0) / gp;
+  };
+
+  const out = {};
+  const ids = new Set([
+    ...Object.keys(lastSeasonStats || {}),
+    ...Object.keys(priorSeasonStats || {}),
+  ]);
+  for (const id of ids) {
+    const recent = ppgOf(lastSeasonStats?.[id]);
+    const prior = ppgOf(priorSeasonStats?.[id]);
+    let ppg;
+    if (recent != null && prior != null) ppg = recent * 0.65 + prior * 0.35;
+    else ppg = recent ?? prior ?? 0;
+    if (ppg > 0) out[id] = ppg;
+  }
+  return out;
+}
+
 export function buildRosterAnalysis(
   myRoster,
   players,
@@ -56,6 +133,8 @@ export function buildRosterAnalysis(
   recentDraftPicks = [],
   allCompletedDrafts = [],
   allDraftPicksMap = {},
+  liveDraft = null,
+  liveDraftPicks = [],
 ) {
   const currentYear = new Date().getFullYear();
   // Sleeper's `season` field on a draft can be the upcoming NFL season (2026)
@@ -262,6 +341,21 @@ export function buildRosterAnalysis(
     }))
     .filter(Boolean);
 
+  // Live-draft value lookup + best-available pool (only built when a draft is in
+  // progress, so we don't pay for it on the normal dashboard path).
+  const liveValueBySleeperId = liveDraft
+    ? buildValueBySleeperId(
+        fantasyCalcContext.bySleeperId,
+        rosterAuditContext.bySleeperId,
+      )
+    : {};
+  const bestAvailablePool = liveDraft
+    ? buildBestAvailablePool(liveValueBySleeperId, players)
+    : [];
+  const livePpgBySleeperId = liveDraft
+    ? buildPpgBySleeperId(stats24, stats23, leagueContext.ppr)
+    : {};
+
   return {
     ...myTeam,
     isSuperflex: leagueContext.isSuperflex,
@@ -300,6 +394,27 @@ export function buildRosterAnalysis(
     fantasyCalcTrades,
     draftRecap,
     allDraftRecaps,
+    // In-progress draft passed straight through; the LiveDraftTab polls Sleeper
+    // for fresh picks rather than depending on this one-time analysis build.
+    // valueBySleeperId lets the tab grade rosters live (RosterAudit preferred,
+    // FantasyCalc fallback — same precedence the draft recap uses).
+    // bestAvailablePool is the value-ranked board the tab filters drafted
+    // players out of.
+    liveDraft: liveDraft
+      ? {
+          draft: liveDraft,
+          initialPicks: liveDraftPicks,
+          rosterPositions: league.roster_positions || [],
+          valueBySleeperId: liveValueBySleeperId,
+          ppgBySleeperId: livePpgBySleeperId,
+          bestAvailablePool,
+          leagueId: league.league_id,
+          players,
+          tradeTransactions: (transactions || []).filter(
+            (t) => t?.type === "trade",
+          ),
+        }
+      : null,
     ocOutlook: {
       targetSeason: ocTargetSeason,
       enabled: !!ocOutlookContext,
