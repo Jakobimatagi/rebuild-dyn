@@ -56,6 +56,11 @@ export default function LeaguePickerScreen({
           )}
         </button>
       ))}
+      {!leagues.length && loading && (
+        <div style={{ color: "#00f5a0", fontSize: 12, marginTop: 12 }}>
+          Loading your leagues…
+        </div>
+      )}
       {!leagues.length && !loading && (
         <div style={{ color: "#d1d7ea", fontSize: 12, marginTop: 12 }}>
           No leagues found for this account in recent seasons.
