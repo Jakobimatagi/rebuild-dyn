@@ -465,6 +465,35 @@ export default function App() {
     setShowScoreWeights(false);
   }
 
+  // Fetch a Sleeper user's dynasty leagues. Shared by the manual entry flow
+  // and the "Switch League" button so switching works even after a reload
+  // (where `leagues` state was never populated).
+  async function fetchSleeperLeagues(uname) {
+    const user = await fetchSleeper(`/user/${uname}`);
+    if (!user?.user_id) throw new Error("User not found");
+
+    const now = new Date();
+    const currentSeason = now.getFullYear();
+
+    let leagueData = await fetchSleeper(
+      `/user/${user.user_id}/leagues/nfl/${currentSeason}`,
+    ).catch(() => []);
+
+    if (!leagueData?.length) {
+      leagueData = await fetchSleeper(
+        `/user/${user.user_id}/leagues/nfl/${currentSeason - 1}`,
+      ).catch(() => []);
+    }
+
+    const dynasty = leagueData.filter(
+      (league) =>
+        league.settings?.type === 2 ||
+        league.name?.toLowerCase().includes("dynasty"),
+    );
+
+    return dynasty.length ? dynasty : leagueData;
+  }
+
   async function handleUsernameSubmit() {
     const trimmed = username.trim();
     if (!trimmed) return;
@@ -474,31 +503,10 @@ export default function App() {
     setError("");
 
     try {
-      const user = await fetchSleeper(`/user/${trimmed}`);
-      if (!user?.user_id) throw new Error("User not found");
-
+      const fetched = await fetchSleeperLeagues(trimmed);
       localStorage.setItem("dynasty_os_platform", "sleeper");
       localStorage.setItem("sleeper_username", trimmed);
-      const now = new Date();
-      const currentSeason = now.getFullYear();
-
-      let leagueData = await fetchSleeper(
-        `/user/${user.user_id}/leagues/nfl/${currentSeason}`,
-      ).catch(() => []);
-
-      if (!leagueData?.length) {
-        leagueData = await fetchSleeper(
-          `/user/${user.user_id}/leagues/nfl/${currentSeason - 1}`,
-        ).catch(() => []);
-      }
-
-      const dynasty = leagueData.filter(
-        (league) =>
-          league.settings?.type === 2 ||
-          league.name?.toLowerCase().includes("dynasty"),
-      );
-
-      setLeagues(dynasty.length ? dynasty : leagueData);
+      setLeagues(fetched);
       setStep("leagues");
     } catch (e) {
       setError(
@@ -507,6 +515,30 @@ export default function App() {
     }
 
     setLoading(false);
+  }
+
+  // Fetch + normalize a Fleaflicker user's leagues. Shared by the manual entry
+  // flow and the "Switch League" button.
+  async function fetchFleaflickerLeagues(email) {
+    const data = await fetchFFUserLeagues(email);
+    if (!data.leagues?.length)
+      throw new Error("No NFL leagues found for this email.");
+
+    const normalizedLeagues = data.leagues.map((lg) => ({
+      league_id: `ff_${lg.id}`,
+      name: lg.name,
+      total_rosters: lg.size || null,
+      season: String(data.season || new Date().getFullYear()),
+      _platform: "fleaflicker",
+      _ff_league_id: lg.id,
+      _ff_team_id: lg.owned_team?.id,
+      _ff_team_name: lg.owned_team?.name,
+    }));
+
+    if (!normalizedLeagues.length)
+      throw new Error("No NFL leagues found for this email.");
+
+    return normalizedLeagues;
   }
 
   async function handleFleaflickerSubmit() {
@@ -523,28 +555,9 @@ export default function App() {
     setError("");
 
     try {
-      const data = await fetchFFUserLeagues(trimmedEmail);
-      if (!data.leagues?.length)
-        throw new Error("No NFL leagues found for this email.");
-
+      const normalizedLeagues = await fetchFleaflickerLeagues(trimmedEmail);
       localStorage.setItem("dynasty_os_platform", "fleaflicker");
-      localStorage.setItem("ff_email", ffEmail);
-
-      const normalizedLeagues = data.leagues
-        .map((lg) => ({
-          league_id: `ff_${lg.id}`,
-          name: lg.name,
-          total_rosters: lg.size || null,
-          season: String(data.season || new Date().getFullYear()),
-          _platform: "fleaflicker",
-          _ff_league_id: lg.id,
-          _ff_team_id: lg.owned_team?.id,
-          _ff_team_name: lg.owned_team?.name,
-        }));
-
-      if (!normalizedLeagues.length)
-        throw new Error("No NFL leagues found for this email.");
-
+      localStorage.setItem("ff_email", trimmedEmail);
       setLeagues(normalizedLeagues);
       setStep("leagues");
     } catch (e) {
@@ -554,6 +567,34 @@ export default function App() {
       );
     }
 
+    setLoading(false);
+  }
+
+  // Switch League: go to the picker and ensure the league list is loaded. When
+  // the dashboard was restored from localStorage on reload, `leagues` was never
+  // populated, so we re-fetch it here for the saved account.
+  async function handleSwitchLeague() {
+    localStorage.removeItem("sleeper_league");
+    localStorage.removeItem("ff_league");
+    setStep("leagues");
+
+    if (leagues.length) return;
+
+    setLoading(true);
+    setError("");
+    try {
+      if (platform === "fleaflicker") {
+        const savedEmail = ffEmail || localStorage.getItem("ff_email") || "";
+        if (savedEmail) setLeagues(await fetchFleaflickerLeagues(savedEmail));
+      } else {
+        const savedUsername =
+          username || localStorage.getItem("sleeper_username") || "";
+        if (savedUsername)
+          setLeagues(await fetchSleeperLeagues(savedUsername));
+      }
+    } catch (e) {
+      setError(e.message || "Could not load your leagues. Try again.");
+    }
     setLoading(false);
   }
 
@@ -645,11 +686,7 @@ export default function App() {
           expandedBars={expandedBars}
           onToggleRoom={toggleRoom}
           onToggleBars={toggleBars}
-          onSwitchLeague={() => {
-            localStorage.removeItem("sleeper_league");
-            localStorage.removeItem("ff_league");
-            setStep("leagues");
-          }}
+          onSwitchLeague={handleSwitchLeague}
           onLogout={handleLogout}
 
           showScoreWeights={showScoreWeights}
