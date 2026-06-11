@@ -13,6 +13,7 @@ import {
   type Strategy,
   type TradeArchetypeId,
   type TradeTarget,
+  type TradeOffer,
   type ValueGap,
   type ArchetypeResult,
   type OcOutlook,
@@ -173,6 +174,61 @@ function ValueGapBar({ gap }: { gap: ValueGap }) {
 }
 
 // ---------------------------------------------------------------------------
+// One buyer package option (sell-high multi-offer)
+// ---------------------------------------------------------------------------
+
+function OfferRow({ offer }: { offer: TradeOffer }) {
+  const fairColor = FAIRNESS_COLOR[offer.fairnessLabel] || "#a0a8c0";
+  return (
+    <div
+      style={{
+        border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: 4,
+        padding: "9px 11px",
+        marginBottom: 8,
+        background: "rgba(255,255,255,0.015)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          marginBottom: 7,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+          <span style={{ fontSize: 11, color: "#e8e8f0" }}>{offer.owner.label}</span>
+          <PhaseBadge phase={offer.owner.phase} />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          <span
+            style={{
+              fontSize: 9,
+              letterSpacing: 0.5,
+              padding: "2px 7px",
+              borderRadius: 2,
+              color: fairColor,
+              background: `${fairColor}18`,
+              border: `1px solid ${fairColor}44`,
+            }}
+          >
+            {offer.fairnessLabel}
+          </span>
+          <span style={{ fontSize: 10, color: "#808898" }}>{offer.incomingValue} value</span>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+        {offer.receive.map((a, i) => (
+          <AssetChip key={`or-${i}`} asset={a} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Target card
 // ---------------------------------------------------------------------------
 
@@ -227,9 +283,15 @@ function TargetCard({ target }: { target: TradeTarget }) {
               flexWrap: "wrap",
             }}
           >
-            <span>{isSell ? "on your roster" : `from ${target.owner.label}`}</span>
-            {!isSell && <PhaseBadge phase={target.owner.phase} />}
-            {!isSell && target.owner.matchScore >= 60 && (
+            <span>
+              {isSell
+                ? target.receive.length > 0
+                  ? `sell to ${target.owner.label}`
+                  : "on your roster"
+                : `from ${target.owner.label}`}
+            </span>
+            {(!isSell || target.receive.length > 0) && <PhaseBadge phase={target.owner.phase} />}
+            {target.owner.matchScore >= 60 && (
               <span style={{ color: ACCENT }}>matchable partner</span>
             )}
           </div>
@@ -270,25 +332,45 @@ function TargetCard({ target }: { target: TradeTarget }) {
 
           <ValueGapBar gap={target.valueGap} />
 
-          {!isSell && (
+          {/* Multiple buyer packages (sell-high): one YOU SEND, several returns. */}
+          {target.offers && target.offers.length > 0 ? (
             <>
               <div style={{ fontSize: 9, color: ACCENT, letterSpacing: 1.5, marginBottom: 6 }}>
                 YOU SEND — {target.outgoingValue} value
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 10 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 12 }}>
                 {target.send.map((a, i) => (
                   <AssetChip key={`s-${i}`} asset={a} />
                 ))}
               </div>
-              <div style={{ fontSize: 9, color: REBUILD, letterSpacing: 1.5, marginBottom: 6 }}>
-                YOU GET — {target.incomingValue} value
+              <div style={{ fontSize: 9, color: REBUILD, letterSpacing: 1.5, marginBottom: 8 }}>
+                {target.offers.length} BUYER{target.offers.length > 1 ? "S" : ""} — PICK A RETURN
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 12 }}>
-                {target.receive.map((a, i) => (
-                  <AssetChip key={`r-${i}`} asset={a} />
-                ))}
-              </div>
+              {target.offers.map((offer, i) => (
+                <OfferRow key={`o-${i}`} offer={offer} />
+              ))}
             </>
+          ) : (
+            (!isSell || target.receive.length > 0) && (
+              <>
+                <div style={{ fontSize: 9, color: ACCENT, letterSpacing: 1.5, marginBottom: 6 }}>
+                  YOU SEND — {target.outgoingValue} value
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 10 }}>
+                  {target.send.map((a, i) => (
+                    <AssetChip key={`s-${i}`} asset={a} />
+                  ))}
+                </div>
+                <div style={{ fontSize: 9, color: REBUILD, letterSpacing: 1.5, marginBottom: 6 }}>
+                  YOU GET — {target.incomingValue} value
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 12 }}>
+                  {target.receive.map((a, i) => (
+                    <AssetChip key={`r-${i}`} asset={a} />
+                  ))}
+                </div>
+              </>
+            )
           )}
 
           {target.rationale.positives.length > 0 && (

@@ -124,6 +124,16 @@ export interface TradeRationale {
   concerns: string[];
 }
 
+/** One alternative deal for a target — a specific buyer and the return they'd send. */
+export interface TradeOffer {
+  owner: PartnerMatch;
+  receive: SendAsset[];
+  incomingValue: number;
+  fairnessLabel: string;
+  /** Headline line describing this specific package. */
+  lead: string;
+}
+
 export interface TradeTarget {
   /** Stable, unique within a model: `${archetype}:${ownerRosterId}:${playerId}`. */
   id: string;
@@ -151,6 +161,12 @@ export interface TradeTarget {
   fairnessLabel: string;
   rationale: TradeRationale;
   fitScore: number;
+  /**
+   * Alternative deals for this target — distinct buyers, each with their own
+   * fair return. When present (sell-high), the top-level owner/receive mirror
+   * offers[0] and the card renders the full list of choices.
+   */
+  offers?: TradeOffer[];
 }
 
 export interface ArchetypeResult {
@@ -388,10 +404,86 @@ function buildBuyLow(
 // Archetype: Sell High
 // ---------------------------------------------------------------------------
 // Your players whose market price tops their production (FC > RA), or who sit at
-// a trend peak while aging — sell before the inevitable slide. This is a "shop
-// this asset" flag, not a packaged offer.
+// a trend peak while aging — sell before the inevitable slide. Each card names a
+// realistic buyer and the fair return (players / picks) they'd send back.
 
-function buildSellHigh(myTeam: LeagueTeam, strategy: Strategy): TradeTarget[] {
+/** How many alternative buyer packages to surface per sell-high asset. */
+const MAX_SELL_OFFERS = 3;
+
+/**
+ * Find the realistic buyers for a sell-high asset and the package each would
+ * return. Buyers who need the position and are contending rank first (they pay
+ * up for win-now help); each return is assembled from that partner's movable
+ * assets, biased toward your needs. Returns up to MAX_SELL_OFFERS distinct
+ * buyers so the user gets a choice of deals.
+ */
+function buildSellOffers(
+  p: PlayerLike,
+  sellValue: number,
+  myTeam: LeagueTeam,
+  leagueTeams: LeagueTeam[],
+  playerMarketMap: Map<string, PlayerLike>,
+  leagueContext: any,
+  tradeMarket: any,
+): TradeOffer[] {
+  const ranked = leagueTeams
+    .filter((t) => String(t.rosterId) !== String(myTeam.rosterId))
+    .map((partner) => {
+      const phase = phaseOf(partner);
+      let score = 0;
+      if (phase === "contender") score += 12;
+      else if (phase === "retool") score += 4;
+      if ((partner.needs || []).includes(p.position)) score += 10;
+      if ((partner.surplusPositions || []).includes(p.position)) score -= 8;
+      return { partner, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  const offers: TradeOffer[] = [];
+  const outgoing = [{ ...p, type: "player" }];
+
+  for (const { partner } of ranked) {
+    if (offers.length >= MAX_SELL_OFFERS) break;
+    const offer = assembleFairPackage(
+      partner,
+      sellValue,
+      myTeam,
+      playerMarketMap,
+      leagueContext,
+      tradeMarket,
+    );
+    if (!offer?.assets?.length) continue;
+
+    const ev = evaluateTrade(
+      outgoing,
+      offer.assets,
+      phaseOf(myTeam),
+      phaseOf(partner),
+      playerMarketMap,
+      leagueContext,
+      tradeMarket,
+    );
+
+    offers.push({
+      owner: toPartnerMatch(partner, p),
+      receive: offer.assets.map(toSendAsset),
+      incomingValue: Math.round(num(offer.outgoingValue)),
+      fairnessLabel: ev?.fairnessLabel ?? "Fair",
+      lead: `Sell to ${partner.label} for ${offer.assets.map((a) => assetLabel(a)).join(" + ")}.`,
+    });
+  }
+
+  return offers;
+}
+
+function buildSellHigh(
+  myTeam: LeagueTeam,
+  leagueTeams: LeagueTeam[],
+  strategy: Strategy,
+  playerMarketMap: Map<string, PlayerLike>,
+  leagueContext: any,
+  tradeMarket: any,
+): TradeTarget[] {
   const out: TradeTarget[] = [];
 
   for (const p of myTeam.tradeablePlayers || []) {
@@ -432,17 +524,41 @@ function buildSellHigh(myTeam: LeagueTeam, strategy: Strategy): TradeTarget[] {
       positives.push(`Still posting ${num(p.ppg)} PPG, so contenders will pay starter prices.`);
     }
 
+    // Trade value (FC scale) drives the return target; `market` is for display.
+    const sellValue = getAssetTradeValue(
+      { ...p, type: "player" },
+      playerMarketMap,
+      leagueContext,
+      tradeMarket,
+    );
+    const offers = buildSellOffers(
+      p,
+      sellValue,
+      myTeam,
+      leagueTeams,
+      playerMarketMap,
+      leagueContext,
+      tradeMarket,
+    );
+    const primary = offers[0] ?? null;
+
+    if (offers.length) {
+      const more = offers.length > 1 ? ` (+${offers.length - 1} more buyer${offers.length > 2 ? "s" : ""})` : "";
+      positives.unshift(`${primary!.lead}${more} — fair returns while the price is hot.`);
+    }
+
     out.push({
       id: `sell-high:${myTeam.rosterId}:${p.id}`,
       archetype: "sell-high",
       player: targetPlayerShape(p),
-      owner: {
-        rosterId: myTeam.rosterId,
-        label: "Your roster",
-        phase: phaseOf(myTeam),
-        needs: myTeam.needs || [],
-        matchScore: 0,
-      },
+      owner:
+        primary?.owner ?? {
+          rosterId: myTeam.rosterId,
+          label: "Your roster",
+          phase: phaseOf(myTeam),
+          needs: myTeam.needs || [],
+          matchScore: 0,
+        },
       valueGap: gap,
       send: [
         {
@@ -452,12 +568,14 @@ function buildSellHigh(myTeam: LeagueTeam, strategy: Strategy): TradeTarget[] {
           position: p.position,
         },
       ],
-      receive: [],
+      receive: primary?.receive ?? [],
       outgoingValue: market,
-      incomingValue: 0,
+      incomingValue: primary?.incomingValue ?? 0,
       fairnessLabel: overpriced ? "Sell high" : aging ? "Sell before decline" : "Shop now",
       rationale: { positives, concerns },
-      fitScore: market + Math.max(0, -gap.deltaPct) + (aging ? 8 : 0),
+      fitScore:
+        market + Math.max(0, -gap.deltaPct) + (aging ? 8 : 0) + (offers.length ? 6 : 0),
+      offers: offers.length ? offers : undefined,
     });
   }
 
@@ -963,7 +1081,7 @@ export function buildTradeTargetsModel(
   const playerMarketMap = buildPlayerMarketMap(leagueTeams);
 
   const buyLow = buildBuyLow(myTeam, leagueTeams, strategy, playerMarketMap, leagueContext, tradeMarket);
-  const sellHigh = buildSellHigh(myTeam, strategy);
+  const sellHigh = buildSellHigh(myTeam, leagueTeams, strategy, playerMarketMap, leagueContext, tradeMarket);
   const tierDown = buildTierDown(myTeam, leagueTeams, strategy, playerMarketMap, leagueContext, tradeMarket);
   const insulation = buildInsulation(myTeam, leagueTeams, playerMarketMap, leagueContext, tradeMarket);
 

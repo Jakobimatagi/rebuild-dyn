@@ -1,5 +1,5 @@
 import { DEFAULT_SCORING_WEIGHTS, buildBenchmarks } from './scoringEngine';
-import { buildFantasyCalcContext } from './fantasyCalcBlend';
+import { buildFantasyCalcContext, buildFantasyCalcPickMap } from './fantasyCalcBlend';
 import { buildFantasyCalcTradeIndex } from './fantasyCalcTradeIndex';
 import { buildRosterAuditContext } from './rosterAuditApi';
 import { buildRosterSnapshot, classifyLeagueTeams, assignDraftSlots } from './rosterBuilder';
@@ -182,6 +182,11 @@ export function buildRosterAnalysis(
     lastSeasonYear,
   );
   const fantasyCalcContext = buildFantasyCalcContext(fantasyCalcValues);
+  // Make FantasyCalc's own pick values the source of truth for pick pricing, so
+  // picks and players share one market scale everywhere getAssetTradeValue →
+  // pickFcValue runs (Trade Calculator, Targets, Finder). Attached to the
+  // leagueContext that flows to those surfaces.
+  leagueContext.fcPickValues = buildFantasyCalcPickMap(fantasyCalcValues);
   const marketCompsBySleeperId = buildFantasyCalcTradeIndex(fantasyCalcTrades);
   const raFormat = leagueContext.isSuperflex ? 'sf' : '1qb';
   const rosterAuditContext = buildRosterAuditContext(

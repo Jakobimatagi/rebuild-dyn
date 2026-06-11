@@ -208,6 +208,43 @@ export function valueOfPickPhase(pick, ownerPhase, leagueContext) {
 // NOTE: this is the canonical fallback. If RosterAudit `/picks` data is
 // available in `pickValueOverrides`, those values take precedence — they're
 // market-calibrated rather than estimated.
+// Resolve a roster pick against FantasyCalc's own pick values (built by
+// buildFantasyCalcPickMap). Prefers an exact known slot, then a phase-implied
+// slot for current-year firsts, then FC's generic per-round value. Returns null
+// when FC has no data for it so the caller falls back to the static table.
+function lookupFcPickValue(pick, ownerPhase, fcMap) {
+  if (!fcMap?.hasData || !pick?.round) return null;
+  const currentYear = new Date().getFullYear();
+  const year = Number(pick.season) || currentYear;
+  const round = pick.round;
+
+  // Exact slot — from a stamped slotLabel ("1.05") or numeric slot.
+  let slot = null;
+  if (pick.slot != null && Number.isFinite(Number(pick.slot))) {
+    slot = Number(pick.slot);
+  } else if (pick.slotLabel) {
+    const m = String(pick.slotLabel).match(/^\d+\.(\d+)$/);
+    if (m) slot = Number(m[1]);
+  }
+  // FC only ships slotted picks for the current draft year. For a round-1 pick
+  // with no known slot, approximate the slot from the owner's phase so a
+  // rebuilder's 1st prices early and a contender's prices late.
+  if (slot == null && round === 1 && year === currentYear) {
+    slot =
+      ownerPhase === "rebuild" ? 3
+      : ownerPhase === "contender" ? 10
+      : ownerPhase === "retool" ? 6
+      : null;
+  }
+  if (slot != null) {
+    const v = fcMap.slot[`${year}:${round}:${slot}`];
+    if (v != null) return v;
+  }
+
+  const generic = fcMap.gen[`${year}:${round}`];
+  return generic != null ? generic : null;
+}
+
 export function pickFcValue(
   pick,
   ownerPhase,
@@ -255,6 +292,17 @@ export function pickFcValue(
       if (round === 1 && leagueContext?.tePremium) v *= 1.05;
       return Math.max(50, Math.round(v));
     }
+  }
+
+  // FantasyCalc market pick values — the source of truth when present, so picks
+  // and players price on one scale. FC values are already format- and
+  // year-discount aware; only the TE-premium nudge (which FC doesn't track) is
+  // layered on. Ranks below RA overrides above, above the static table below.
+  const fcPick = lookupFcPickValue(pick, ownerPhase, leagueContext?.fcPickValues);
+  if (fcPick != null) {
+    let v = fcPick;
+    if (round === 1 && leagueContext?.tePremium) v *= 1.05;
+    return Math.max(50, Math.round(v));
   }
 
   let base;

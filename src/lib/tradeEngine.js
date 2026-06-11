@@ -3,7 +3,7 @@
  * Trade market calibration, offer-package building, and suggestion ranking.
  */
 import { POSITION_PRIORITY, IDEAL_PROPORTION } from "../constants";
-import { estimatePickValue, pickFcValue } from "./marketValue";
+import { pickFcValue } from "./marketValue";
 import {
   classifyLeagueTeams,
   getRosterNeeds,
@@ -207,30 +207,34 @@ export function getAssetTradeValue(
   leagueContext,
   tradeMarket,
 ) {
+  // Trade value tracks FantasyCalc directly: a player/pick is worth exactly its
+  // FC market price (÷100), with no league position multiplier and no
+  // RosterAudit blend layered on top. FC already prices the league format
+  // (superflex, PPR, team count) via its query params, so any extra multiplier
+  // double-counts. RA still drives the Value Gap's "production" line elsewhere.
   if (asset.type === "pick") {
-    // pickFcValue returns FC dollar scale; divide to normalize.
+    // pickFcValue resolves to FC's own pick value when present (FC dollar scale).
     const fcVal = pickFcValue(asset, asset.ownerPhase ?? null, leagueContext, null);
-    const marketMultiplier = tradeMarket?.pickRoundMultipliers?.[asset.round] || 1;
-    return Math.max(1, Math.round((fcVal / FC_SCALE) * marketMultiplier));
+    return Math.max(1, Math.round(fcVal / FC_SCALE));
   }
 
   const player = playerMarketMap.get(String(asset.id)) || asset;
-  const multiplier = tradeMarket?.positionMultipliers?.[player.position] || 1;
 
-  // Prefer dynastyMarketValue (FC dollar blend) — it preserves the real spread
-  // between elite and good players that the normalized 0-100 score compresses.
-  const dmv = Number(player.dynastyMarketValue || 0);
-  if (dmv > 0) {
-    return Math.max(1, Math.round((dmv / FC_SCALE) * multiplier));
+  const fc = Number(player.fantasyCalcValue || 0);
+  if (fc > 0) {
+    return Math.max(1, Math.round(fc / FC_SCALE));
   }
 
-  // Fallback: no FC/RA coverage means the player is off the dynasty radar
-  // (deep bench, aged-out vet). The 0-100 score lives on a different, far more
-  // compressed scale than dmv/FC_SCALE, so using it directly massively
-  // over-values market-abandoned players. Map it onto the trade scale with a
-  // low ceiling instead — an off-market player tops out near roster-filler.
+  // Fallbacks when FC has no coverage for this player. dynastyMarketValue (the
+  // FC/RA blend) is the next best market proxy; failing that the player is off
+  // the dynasty radar (deep bench, aged-out vet) and the 0-100 score is mapped
+  // onto the trade scale with a low ceiling so it can't over-value filler.
+  const dmv = Number(player.dynastyMarketValue || 0);
+  if (dmv > 0) {
+    return Math.max(1, Math.round(dmv / FC_SCALE));
+  }
   const score = Number(player.score || player.marketValue || 0);
-  return Math.max(1, Math.round((score / 100) * 15 * multiplier));
+  return Math.max(1, Math.round((score / 100) * 15));
 }
 
 function pushRosterAsset(map, rosterId, asset) {
@@ -389,7 +393,12 @@ function buildOfferPackage(
       ...pick,
       type: "pick",
       ownerPhase: myPhase,
-      value: estimatePickValue(pick, leagueContext, tradeMarket, myPhase),
+      value: getAssetTradeValue(
+        { ...pick, type: "pick", ownerPhase: myPhase },
+        playerMarketMap,
+        leagueContext,
+        tradeMarket,
+      ),
     }))
     .sort((a, b) => b.value - a.value);
 
@@ -1005,7 +1014,12 @@ export function suggestBalancingAsset({
     if (pick.round > 4) continue;
     const key = `pick:${pick.label}`;
     if (inTrade.has(key)) continue;
-    const value = estimatePickValue(pick, leagueContext, tradeMarket, adderPhase);
+    const value = getAssetTradeValue(
+      { ...pick, type: "pick", ownerPhase: adderPhase },
+      playerMarketMap,
+      leagueContext,
+      tradeMarket,
+    );
     if (value <= 0) continue;
     candidates.push({
       type: "pick",
@@ -1356,7 +1370,12 @@ function buildSellSuggestions(
             ...p,
             type: "pick",
             ownerPhase: partner.teamPhase?.phase ?? null,
-            value: estimatePickValue(p, leagueContext, tradeMarket, partner.teamPhase?.phase ?? null),
+            value: getAssetTradeValue(
+              { ...p, type: "pick", ownerPhase: partner.teamPhase?.phase ?? null },
+              playerMarketMap,
+              leagueContext,
+              tradeMarket,
+            ),
           })),
       ].sort((a, b) => b.value - a.value);
 
@@ -1596,23 +1615,37 @@ export function assembleFairPackage(
       ...pk,
       type: "pick",
       ownerPhase: myPhase,
-      value: estimatePickValue(pk, leagueContext, tradeMarket, myPhase),
+      value: getAssetTradeValue(
+        { ...pk, type: "pick", ownerPhase: myPhase },
+        playerMarketMap,
+        leagueContext,
+        tradeMarket,
+      ),
       partnerFit: false,
     }));
 
   const pool = [...players, ...picks].filter((a) => a.value > 0);
   if (!pool.length) return null;
 
-  const lo = Math.max(1, Math.round(targetValue * 0.92) - 3);
-  const hi = Math.round(targetValue * 1.12) + 4;
+  const lo = Math.max(1, Math.round(targetValue * 0.90) - 3);
+  // Acquisitions must not ship materially more than the target is worth — a
+  // "buy-low" that overpays isn't a buy-low. Keep the overpay ceiling tight so
+  // the assembler never proposes giving up a more valuable asset than you get.
+  const hi = Math.round(targetValue * 1.05) + 2;
 
-  // 1) Single asset inside the band — prefer a partner-need fit, then closest value.
+  // Prefer fair-or-slight-underpay: penalize overpay so a piece at/just below
+  // the target beats one above it, even at the same nominal distance.
+  const overpayDist = (v) =>
+    v > targetValue ? (v - targetValue) * 1.6 : targetValue - v;
+
+  // 1) Single asset inside the band — prefer a partner-need fit, then the piece
+  //    that's fair without overpaying.
   const singles = pool
     .filter((a) => a.value >= lo && a.value <= hi)
     .sort(
       (a, b) =>
         b.partnerFit - a.partnerFit ||
-        Math.abs(a.value - targetValue) - Math.abs(b.value - targetValue),
+        overpayDist(a.value) - overpayDist(b.value),
     );
   if (singles.length) {
     return { assets: [singles[0]], outgoingValue: Math.round(singles[0].value) };

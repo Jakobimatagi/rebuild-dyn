@@ -71,6 +71,47 @@ export function buildFantasyCalcContext(fantasyCalcValues = []) {
   };
 }
 
+/**
+ * Index FantasyCalc's own draft-pick values so picks price on the exact same
+ * market scale as players. FC returns two shapes:
+ *   - slotted (current draft year only): "2026 Pick 1.05" → year/round/slot
+ *   - generic (all years, rounds 1-4):   "2026 1st", "2027 2nd" → year/round
+ * Values are FC-dollar scale (same as player `value`), already format- and
+ * year-discount aware. Returns { slot, gen } keyed maps plus a hasData flag so
+ * pickFcValue() can treat FC as the source of truth when present.
+ */
+const ORDINAL_ROUND = { "1st": 1, "2nd": 2, "3rd": 3, "4th": 4 };
+
+export function buildFantasyCalcPickMap(fantasyCalcValues = []) {
+  const slot = Object.create(null); // `${year}:${round}:${slot}` → value
+  const gen = Object.create(null); // `${year}:${round}` → value
+  let hasData = false;
+
+  for (const entry of fantasyCalcValues) {
+    const name = entry?.player?.name;
+    if (!name || entry?.player?.position !== "PICK") continue;
+    const value = Number(entry?.value || 0);
+    if (!(value > 0)) continue;
+
+    const slotted = name.match(/^(\d{4})\s+Pick\s+(\d+)\.(\d+)$/i);
+    if (slotted) {
+      slot[`${slotted[1]}:${Number(slotted[2])}:${Number(slotted[3])}`] = value;
+      hasData = true;
+      continue;
+    }
+    const generic = name.match(/^(\d{4})\s+(1st|2nd|3rd|4th)$/i);
+    if (generic) {
+      const round = ORDINAL_ROUND[generic[2].toLowerCase()];
+      if (round) {
+        gen[`${generic[1]}:${round}`] = value;
+        hasData = true;
+      }
+    }
+  }
+
+  return { slot, gen, hasData };
+}
+
 export function normalizeFantasyCalcValue(entry, context) {
   if (!entry) return null;
 
