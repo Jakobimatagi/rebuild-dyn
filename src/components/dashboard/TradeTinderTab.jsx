@@ -21,6 +21,7 @@ export default function TradeTinderTab({
   tradeMarket,
   leagueId,
   fantasyCalcTrades,
+  global = false,
 }) {
   const [queue, setQueue] = useState([]);
   const [index, setIndex] = useState(0);
@@ -33,6 +34,40 @@ export default function TradeTinderTab({
   // fresh=true skips the swiped filter and uses a new random seed so the
   // "Generate New Cards" button always produces a different deck.
   const loadQueue = useCallback((fresh = false) => {
+    // Explore (no-login) mode: there are no league rosters, so we serve only
+    // real FantasyCalc community trades. Every asset is "unknown" to our engine,
+    // which makes buildFCTinderCards fall back to FC's own value differential —
+    // no leagueTeams/leagueContext/tradeMarket needed. Synthetic + sentiment
+    // cards are skipped since they require real rosters.
+    if (global) {
+      setLoading(true);
+      setError(null);
+      setVoteCount(0);
+      setLastVote(null);
+      try {
+        let swiped = getSwipedHashes(leagueId);
+        let fcCards = buildFCTinderCards(
+          fantasyCalcTrades, [], null, null,
+          { swipedHashes: swiped, maxCards: 25 },
+        );
+        // Everything seen — wipe local cache and regenerate from scratch.
+        if (fcCards.length === 0 && swiped.size > 0) {
+          localStorage.removeItem(`tinder_swiped_${leagueId}`);
+          fcCards = buildFCTinderCards(
+            fantasyCalcTrades, [], null, null,
+            { swipedHashes: new Set(), maxCards: 25 },
+          );
+        }
+        setQueue(fcCards);
+        setIndex(0);
+      } catch (e) {
+        setError("Could not load community trades. Try again shortly.");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     if (!leagueTeams?.length || !leagueContext || !tradeMarket) return;
     setLoading(true);
     setError(null);
@@ -113,7 +148,7 @@ export default function TradeTinderTab({
     } finally {
       setLoading(false);
     }
-  }, [leagueTeams, leagueContext, tradeMarket, leagueId, fantasyCalcTrades]);
+  }, [global, leagueTeams, leagueContext, tradeMarket, leagueId, fantasyCalcTrades]);
 
   useEffect(() => {
     loadQueue(false);

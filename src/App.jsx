@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Dashboard from "./components/Dashboard";
 import DashboardSkeleton from "./components/DashboardSkeleton";
 import ErrorBoundary from "./components/ErrorBoundary";
+import ExploreScreen from "./components/ExploreScreen";
 import InputScreen from "./components/InputScreen";
 import Layout from "./components/Layout";
 import LeaguePickerScreen from "./components/LeaguePickerScreen";
@@ -645,7 +646,16 @@ export default function App() {
           onSetPlatform={setPlatform}
           ffEmail={ffEmail}
           setFfEmail={setFfEmail}
+          onExplore={() => setStep("explore")}
         />
+      </Layout>
+    );
+  }
+
+  if (step === "explore") {
+    return (
+      <Layout>
+        <ExploreScreen onConnect={() => setStep("input")} />
       </Layout>
     );
   }

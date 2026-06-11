@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchPerceptionSwipes } from "../../lib/supabase";
+import { fetchPerceptionSwipes, fetchGlobalPerceptionSwipes } from "../../lib/supabase";
 
 const MIN_APPEARANCES = 5;
 
@@ -83,18 +83,21 @@ function computePerception(swipes) {
 
 const POS_COLOR = { QB: "#a78bfa", WR: "#60a5fa", RB: "#34d399", TE: "#fbbf24" };
 
-export default function PerceptionTab({ leagueId }) {
+export default function PerceptionTab({ leagueId, global = false }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [posFilter, setPosFilter] = useState("ALL");
 
   useEffect(() => {
-    fetchPerceptionSwipes(leagueId)
+    const load = global
+      ? fetchGlobalPerceptionSwipes()
+      : fetchPerceptionSwipes(leagueId);
+    load
       .then((swipes) => setData(computePerception(swipes)))
       .catch(() => setError("Could not load perception data."))
       .finally(() => setLoading(false));
-  }, [leagueId]);
+  }, [leagueId, global]);
 
   if (loading) {
     return (
