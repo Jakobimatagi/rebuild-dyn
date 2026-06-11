@@ -1,10 +1,11 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { POSITION_PRIORITY } from "../../constants";
-import { evaluateTrade, evaluateThreeWayTrade, simulateTrade, buildTradeRationale, suggestBalancingAsset } from "../../lib/tradeEngine";
-import { estimatePickValue, pickSlotLabel } from "../../lib/marketValue";
+import { evaluateTrade, evaluateThreeWayTrade, simulateTrade, buildTradeRationale, suggestBalancingAsset, getAssetTradeValue } from "../../lib/tradeEngine";
+import { pickSlotLabel } from "../../lib/marketValue";
 import { rankLabel } from "../../lib/playerGrading";
 import { ConvictionChip, ConvictionLegend } from "./OverviewTab";
 import TradeTargetsPanel from "./TradeTargetsPanel";
+import TradeFinderPanel from "./TradeFinderPanel";
 import { styles } from "../../styles";
 
 // ---------------------------------------------------------------------------
@@ -533,7 +534,14 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
             ? (team.teamPhase?.phase ?? null)
             : (rosterPhaseMap.get(String(p.originalRosterId)) ?? null);
 
-          const val = estimatePickValue(p, leagueContext, tradeMarket, originPhase);
+          // Value on the same trade scale the verdict uses (FC-aware via
+          // pickFcValue), so the dropdown hint matches the calculated trade.
+          const val = getAssetTradeValue(
+            { ...p, type: "pick", ownerPhase: originPhase },
+            playerMarketMap,
+            leagueContext,
+            tradeMarket,
+          );
           const roundColor = PICK_ROUND_COLOR[p.round] || "#808898";
 
           // slotLabel is pre-stamped by assignDraftSlots ("2.04", "1.08", etc.)
@@ -569,7 +577,7 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
         ...pickOpts,
       ].filter((o) => !o.isHeader || (o.isHeader && (o.key === "__h_players" ? playerOpts.length : pickOpts.length) > 0));
     },
-    [leagueContext, tradeMarket, rosterPhaseMap],
+    [leagueContext, tradeMarket, rosterPhaseMap, playerMarketMap],
   );
 
   const assetOptsA = useMemo(() => buildAssetOptions(teamA), [buildAssetOptions, teamA]);
@@ -1640,6 +1648,12 @@ export default function TradeTab({
         leagueContext={leagueContext}
         tradeMarket={tradeMarket}
         teamPhase={teamPhase}
+      />
+      <TradeFinderPanel
+        myRosterId={myRosterId}
+        leagueTeams={leagueTeams}
+        leagueContext={leagueContext}
+        tradeMarket={tradeMarket}
       />
       <TradeTargetsPanel
         myRosterId={myRosterId}
