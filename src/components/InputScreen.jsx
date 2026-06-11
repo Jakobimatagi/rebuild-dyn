@@ -11,6 +11,7 @@ export default function InputScreen({
   onSetPlatform,
   ffEmail,
   setFfEmail,
+  onExplore,
 }) {
   const isSleeper = platform === "sleeper";
 
@@ -81,7 +82,7 @@ export default function InputScreen({
             {error}
           </div>
         )}
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
           <button
             className="dyn-btn"
             style={styles.btn}
@@ -90,6 +91,15 @@ export default function InputScreen({
           >
             {loading ? "Loading..." : "Connect →"}
           </button>
+          {onExplore && (
+            <button
+              type="button"
+              onClick={onExplore}
+              style={exploreLinkStyle}
+            >
+              or browse the data — no login →
+            </button>
+          )}
         </div>
       </div>
 
@@ -215,6 +225,19 @@ const faq = [
     a: "In a dynasty league, you keep your entire roster from year to year, including rookie draft picks. Unlike redraft leagues, dynasty rewards long-term roster building, age management, and trade savvy — making tools like Dynasty Oracle especially valuable.",
   },
 ];
+
+const exploreLinkStyle = {
+  background: "transparent",
+  border: "none",
+  color: "#00f5a0",
+  fontSize: 12,
+  letterSpacing: 1,
+  textTransform: "uppercase",
+  cursor: "pointer",
+  fontFamily: "inherit",
+  padding: 0,
+  opacity: 0.85,
+};
 
 const dividerStyle = {
   borderBottom: "1px solid rgba(0,245,160,0.1)",

@@ -519,3 +519,13 @@ export async function fetchPerceptionSwipes(leagueId) {
   if (error) throw error;
   return data || [];
 }
+
+// Community-wide perception: every league's swipes aggregated. Powers the
+// no-login Explore view, where there is no single league to scope to.
+export async function fetchGlobalPerceptionSwipes() {
+  const { data, error } = await supabase
+    .from("trade_swipes")
+    .select("assets_a, assets_b, engine_verdict, user_verdict, team_a_id, team_b_id");
+  if (error) throw error;
+  return data || [];
+}
