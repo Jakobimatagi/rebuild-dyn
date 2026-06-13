@@ -1,0 +1,45 @@
+name: Weekly Projections
+
+# Publishes weekly player point projections to Supabase.
+# - Manual: run anytime from the Actions tab (optionally pin a season/week).
+# - Scheduled: Wednesday 10:00 UTC during the NFL season (the cron fires
+#   year-round; in the offseason the publish step is a graceful no-op because
+#   NFL state reports week 0).
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: "Season (blank = current NFL season)"
+        required: false
+      week:
+        description: "Week (blank = current NFL week)"
+        required: false
+  schedule:
+    - cron: "0 10 * * 3"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: python/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Publish projections
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.season }}" ]; then ARGS="$ARGS --season ${{ github.event.inputs.season }}"; fi
+          if [ -n "${{ github.event.inputs.week }}" ]; then ARGS="$ARGS --week ${{ github.event.inputs.week }}"; fi
+          python -m projections publish $ARGS

@@ -17,10 +17,12 @@ import LiveDraftTab from "./dashboard/LiveDraftTab";
 import RankingsTab from "./dashboard/RankingsTab";
 import StrategyPlannerTab from "./dashboard/StrategyPlannerTab";
 import RookieRankingsTab from "./dashboard/RookieRankingsTab";
+import ProjectionsTab from "./dashboard/ProjectionsTab";
 
 const ROW1 = [
   { key: "overview",  label: "Overview" },
   { key: "roster",    label: "Roster" },
+  { key: "projections", label: "Projections" },
   { key: "trades",    label: "Trades" },
   { key: "league",    label: "League" },
   { key: "perception",label: "Market Signals" },
@@ -283,6 +285,15 @@ export default function Dashboard({
           tradeMarket={tradeMarket}
           leagueTeams={analysis.leagueTeams}
           raPickValues={rosterAuditSource?.pickValues}
+        />
+      )}
+
+      {activeTab === "projections" && (
+        <ProjectionsTab
+          leagueTeams={analysis.leagueTeams}
+          myRosterId={analysis.rosterId}
+          leagueId={selectedLeague?.league_id}
+          rosterPositions={selectedLeague?.roster_positions}
         />
       )}
 
