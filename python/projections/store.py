@@ -8,10 +8,27 @@ docs/sql/projections.sql.
 
 from __future__ import annotations
 
+import math
 import os
 from datetime import datetime, timezone
 
 import pandas as pd
+
+
+def _json_safe(o):
+    """Recursively replace NaN/Inf with None so a record serializes to valid JSON.
+
+    Supabase's client rejects non-compliant floats (``nan``/``inf``), and a single
+    one anywhere in a batch fails the whole upsert. numpy/pandas NaNs are floats,
+    so the float branch catches them (incl. NaN left in object/string columns).
+    """
+    if isinstance(o, float):
+        return None if (math.isnan(o) or math.isinf(o)) else o
+    if isinstance(o, dict):
+        return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_safe(v) for v in o]
+    return o
 
 try:
     from supabase import create_client
@@ -50,7 +67,7 @@ def _records(df: pd.DataFrame) -> list[dict]:
             "model_version": r["model_version"],
             "updated_at": now,
         })
-    return recs
+    return [_json_safe(rec) for rec in recs]
 
 
 def publish_projections(df: pd.DataFrame, run_metrics: dict | None = None) -> int:
@@ -58,6 +75,20 @@ def publish_projections(df: pd.DataFrame, run_metrics: dict | None = None) -> in
     if df.empty:
         print("Nothing to publish (empty projection).")
         return 0
+
+    # A weekly projection needs a team and an opponent. Preseason backfill projects
+    # every player with usable history — including retired/free-agent players who
+    # aren't on a current roster, so they carry no team, no opponent, and 0 points.
+    # Drop them so we only publish players actually slated to play that week.
+    before = len(df)
+    df = df[df["team"].notna() & df["opponent"].notna()]
+    dropped = before - len(df)
+    if dropped:
+        print(f"Skipped {dropped} players with no current team/opponent.")
+    if df.empty:
+        print("Nothing to publish after filtering.")
+        return 0
+
     client = _client()
     recs = _records(df)
     # Chunk to stay well under payload limits.

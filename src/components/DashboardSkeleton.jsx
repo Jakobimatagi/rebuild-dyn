@@ -23,8 +23,14 @@ function SkeletonCard({ height = 140 }) {
   );
 }
 
-export default function DashboardSkeleton({ leagueName = "your league" }) {
+export default function DashboardSkeleton({ leagueName = "your league", progress = null }) {
   const tabs = [80, 60, 60, 72, 80, 118, 60, 70];
+
+  // Hold the bar just shy of 100% until the dashboard actually swaps in, so it
+  // never visually "completes" while the analysis crunch is still running.
+  const pct = progress
+    ? Math.min(99, Math.round((progress.done / progress.total) * 100))
+    : 0;
 
   return (
     <div>
@@ -72,17 +78,60 @@ export default function DashboardSkeleton({ leagueName = "your league" }) {
         ))}
       </div>
 
-      {/* Loading label */}
-      <div
-        style={{
-          fontSize: 10,
-          letterSpacing: 2,
-          color: "#4a5068",
-          marginBottom: 24,
-          textTransform: "uppercase",
-        }}
-      >
-        Loading {leagueName}…
+      {/* Loading label + progress bar */}
+      <div style={{ marginBottom: 24 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            marginBottom: 8,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              letterSpacing: 2,
+              color: "#4a5068",
+              textTransform: "uppercase",
+            }}
+          >
+            {progress?.label
+              ? `${progress.label}…`
+              : `Loading ${leagueName}…`}
+          </div>
+          {progress && (
+            <div
+              style={{
+                fontSize: 10,
+                letterSpacing: 1,
+                color: "#6b7390",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {progress.done} / {progress.total}
+            </div>
+          )}
+        </div>
+        <div
+          style={{
+            height: 3,
+            width: "100%",
+            background: "rgba(255,255,255,0.06)",
+            borderRadius: 2,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              width: `${pct}%`,
+              background: "#00f5a0",
+              borderRadius: 2,
+              transition: "width 0.3s ease",
+            }}
+          />
+        </div>
       </div>
 
       {/* Overview skeleton — phase card + 2-col grid + player list */}
