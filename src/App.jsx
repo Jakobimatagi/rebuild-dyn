@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Dashboard from "./components/Dashboard";
 import DashboardSkeleton from "./components/DashboardSkeleton";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -76,7 +76,19 @@ export default function App() {
     }
   });
   const [loading, setLoading] = useState(false);
+  const [loadProgress, setLoadProgress] = useState(null);
+  const [enriching, setEnriching] = useState(false);
   const [error, setError] = useState("");
+
+  // Monotonic token: bumped at the start of every load so background enrichment
+  // from a superseded load (e.g. the user switched leagues) can detect it's stale
+  // and skip its setState instead of clobbering the current league's analysis.
+  const loadTokenRef = useRef(0);
+  // Latest scoring weights, readable from an in-flight enrichment closure without
+  // recapturing — keeps a weight change made during enrichment from being undone.
+  // Seeded with the default (scoringWeights state is declared below); an effect
+  // keeps it in sync.
+  const scoringWeightsRef = useRef(DEFAULT_SCORING_WEIGHTS);
   const [analysis, setAnalysis] = useState(null);
   const [activeTab, setActiveTab] = useState("overview");
   const [showGradeKey, setShowGradeKey] = useState(false);
@@ -148,6 +160,10 @@ export default function App() {
   }, [username, ffEmail, platform]);
 
   useEffect(() => {
+    scoringWeightsRef.current = scoringWeights;
+  }, [scoringWeights]);
+
+  useEffect(() => {
     const savedPlatform = localStorage.getItem("dynasty_os_platform");
 
     if (savedPlatform === "fleaflicker") {
@@ -169,14 +185,52 @@ export default function App() {
   }, []);
 
   async function loadDashboard(league, uname, { returnToLeagues = false } = {}) {
+    const token = (loadTokenRef.current += 1);
     setSelectedLeague(league);
     setLoading(true);
+    setEnriching(false);
     setError("");
 
     try {
       const now = new Date();
       const lastSeason =
         now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+
+      // Per-request progress: each fetch ticks the counter as it resolves so the
+      // skeleton can show a real "x of N" bar instead of a static spinner. Promise.all
+      // resolves in arbitrary order, so `label` reflects the most recent completion.
+      let done = 0;
+      let total = 0;
+      const track = (label, p) =>
+        p.finally(() => {
+          done += 1;
+          setLoadProgress({ done, total, label });
+        });
+      const step = (label) => {
+        done += 1;
+        setLoadProgress({ done, total, label });
+      };
+
+      // ----- Tier 1 (core): everything needed for a correct Overview / Roster /
+      // Trades / League first paint. The dashboard renders the moment these land.
+      const coreTasks = [
+        track("League managers", fetchSleeper(`/league/${league.league_id}/users`)),
+        track("Rosters", fetchSleeper(`/league/${league.league_id}/rosters`)),
+        track("Player database", fetchSleeper(`/players/nfl`).catch(() => ({}))),
+        track("Traded picks", fetchSleeper(`/league/${league.league_id}/traded_picks`).catch(
+          () => [],
+        )),
+        track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason}`).catch(() => ({}))),
+        track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason - 1}`).catch(() => ({}))),
+        track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason - 2}`).catch(() => ({}))),
+        track("League activity", fetchLeagueTransactions(league).catch(() => [])),
+        track("Player values", fetchFantasyCalcValues(league).catch(() => [])),
+        track("Player values", fetchRosterAuditValues(league).catch(() => [])),
+        track("Pick values", fetchRosterAuditPicks().catch(() => null)),
+        track("Drafts", fetchSleeper(`/league/${league.league_id}/drafts`).catch(() => [])),
+      ];
+      total = coreTasks.length + 1; // +1 analysis crunch
+      setLoadProgress({ done: 0, total, label: "Connecting…" });
 
       const [
         users,
@@ -188,59 +242,10 @@ export default function App() {
         stats22,
         transactions,
         fantasyCalcValues,
-        stats21,
-        stats20,
-        stats19,
-        stats18,
-        // Deep historical seasons (2009-2017) for richer age curves and comp matching.
-        // Cached 30 days — these seasons never change. Sleeper has real data back
-        // to 2009; 2008 and earlier return placeholder zeros so we stop there.
-        stats17,
-        stats16,
-        stats15,
-        stats14,
-        stats13,
-        stats12,
-        stats11,
-        stats10,
-        stats09,
         rosterAuditValues,
         rosterAuditPicks,
         sleeperDrafts,
-        fantasyCalcTrades,
-      ] = await Promise.all([
-        fetchSleeper(`/league/${league.league_id}/users`),
-        fetchSleeper(`/league/${league.league_id}/rosters`),
-        fetchSleeper(`/players/nfl`).catch(() => ({})),
-        fetchSleeper(`/league/${league.league_id}/traded_picks`).catch(
-          () => [],
-        ),
-        fetchSleeper(`/stats/nfl/regular/${lastSeason}`).catch(() => ({})),
-        fetchSleeper(`/stats/nfl/regular/${lastSeason - 1}`).catch(() => ({})),
-        fetchSleeper(`/stats/nfl/regular/${lastSeason - 2}`).catch(() => ({})),
-        fetchLeagueTransactions(league).catch(() => []),
-        fetchFantasyCalcValues(league).catch(() => []),
-        // Recent historical seasons: 7-day cache
-        fetchHistoricalStats(2021),
-        fetchHistoricalStats(2020),
-        fetchHistoricalStats(2019),
-        fetchHistoricalStats(2018),
-        // Deep historical seasons: 30-day cache
-        fetchDeepHistoricalStats(2017),
-        fetchDeepHistoricalStats(2016),
-        fetchDeepHistoricalStats(2015),
-        fetchDeepHistoricalStats(2014),
-        fetchDeepHistoricalStats(2013),
-        fetchDeepHistoricalStats(2012),
-        fetchDeepHistoricalStats(2011),
-        fetchDeepHistoricalStats(2010),
-        fetchDeepHistoricalStats(2009),
-        // RosterAudit — second dynasty value source
-        fetchRosterAuditValues(league).catch(() => []),
-        fetchRosterAuditPicks().catch(() => null),
-        fetchSleeper(`/league/${league.league_id}/drafts`).catch(() => []),
-        fetchFantasyCalcTrades(league).catch(() => []),
-      ]);
+      ] = await Promise.all(coreTasks);
 
       const userObj = users.find(
         (u) => u.display_name?.toLowerCase() === uname.toLowerCase(),
@@ -251,38 +256,24 @@ export default function App() {
       const myRoster = rosters.find((r) => r.owner_id === userObj.user_id);
       if (!myRoster) throw new Error("Roster not found.");
 
+      // Draft metadata is derived from the (already-fetched) drafts list — no
+      // network. The picks themselves are fetched in Tier 2.
       const recentDraft = pickRecentCompletedDraft(sleeperDrafts);
-
-      // Fetch picks for all completed drafts (most recent 5) so the recap tab
-      // can offer a season switcher. recentDraftPicks is kept for compat.
       const allCompletedDrafts = [...sleeperDrafts]
         .filter((d) => d.status === "complete" && d.start_time)
         .sort((a, b) => Number(b.start_time) - Number(a.start_time))
         .slice(0, 5);
-      const allDraftPicksResults = await Promise.all(
-        allCompletedDrafts.map((d) => fetchDraftPicks(d.draft_id).catch(() => [])),
-      );
-      const allDraftPicksMap = {};
-      allCompletedDrafts.forEach((d, i) => {
-        allDraftPicksMap[d.draft_id] = allDraftPicksResults[i];
-      });
-      const recentDraftPicks = recentDraft
-        ? (allDraftPicksMap[recentDraft.draft_id] || [])
-        : [];
-
-      // In-progress draft (startup, rookie, or in-season). Seed its picks so the
-      // live tracker tab renders immediately; the tab re-polls from there.
       const liveDraft = sleeperDrafts.find(
         (d) =>
           d.status === "drafting" ||
           d.status === "paused" ||
           d.status === "pre_draft",
       ) || null;
-      const liveDraftPicks = liveDraft
-        ? await fetchDraftPicks(liveDraft.draft_id).catch(() => [])
-        : [];
 
-      const payload = {
+      // Tier-2 fields start empty; buildRosterAnalysis already defaults them, so
+      // the first render is correct, just lighter (no deep age curves, market
+      // comps, or draft recaps yet).
+      const corePayload = {
         myRoster,
         players,
         league,
@@ -292,52 +283,119 @@ export default function App() {
         stats22,
         transactions,
         fantasyCalcValues,
-        fantasyCalcTrades,
+        fantasyCalcTrades: [],
         rosterAuditValues,
         rosterAuditPicks,
         sleeperDrafts,
         recentDraft,
-        recentDraftPicks,
+        recentDraftPicks: [],
         liveDraft,
-        liveDraftPicks,
+        liveDraftPicks: [],
         allCompletedDrafts,
-        allDraftPicksMap,
+        allDraftPicksMap: {},
         users,
         rosters,
         lastSeason,
-        historicalStats: [
-          { year: 2021, stats: stats21 },
-          { year: 2020, stats: stats20 },
-          { year: 2019, stats: stats19 },
-          { year: 2018, stats: stats18 },
-          { year: 2017, stats: stats17 },
-          { year: 2016, stats: stats16 },
-          { year: 2015, stats: stats15 },
-          { year: 2014, stats: stats14 },
-          { year: 2013, stats: stats13 },
-          { year: 2012, stats: stats12 },
-          { year: 2011, stats: stats11 },
-          { year: 2010, stats: stats10 },
-          { year: 2009, stats: stats09 },
-        ],
+        historicalStats: [],
       };
 
-      setAnalysisPayload(payload);
-      const nextAnalysis = computeAnalysis(payload, scoringWeights);
-      setAnalysis(nextAnalysis);
+      step("Crunching analysis");
+      setAnalysisPayload(corePayload);
+      setAnalysis(computeAnalysis(corePayload, scoringWeightsRef.current));
       setStep("dashboard");
+      setLoading(false);
+      setLoadProgress(null);
+
+      // ----- Tier 2 (enrichment): deep history, market comps, and draft picks,
+      // fetched after first paint. Recompute the full analysis when they land.
+      setEnriching(true);
+      (async () => {
+        try {
+          const [
+            stats21, stats20, stats19, stats18,
+            stats17, stats16, stats15, stats14,
+            stats13, stats12, stats11, stats10, stats09,
+            fantasyCalcTrades,
+            liveDraftPicks,
+          ] = await Promise.all([
+            fetchHistoricalStats(2021),
+            fetchHistoricalStats(2020),
+            fetchHistoricalStats(2019),
+            fetchHistoricalStats(2018),
+            fetchDeepHistoricalStats(2017),
+            fetchDeepHistoricalStats(2016),
+            fetchDeepHistoricalStats(2015),
+            fetchDeepHistoricalStats(2014),
+            fetchDeepHistoricalStats(2013),
+            fetchDeepHistoricalStats(2012),
+            fetchDeepHistoricalStats(2011),
+            fetchDeepHistoricalStats(2010),
+            fetchDeepHistoricalStats(2009),
+            fetchFantasyCalcTrades(league).catch(() => []),
+            liveDraft
+              ? fetchDraftPicks(liveDraft.draft_id).catch(() => [])
+              : Promise.resolve([]),
+          ]);
+
+          const allDraftPicksResults = await Promise.all(
+            allCompletedDrafts.map((d) => fetchDraftPicks(d.draft_id).catch(() => [])),
+          );
+          const allDraftPicksMap = {};
+          allCompletedDrafts.forEach((d, i) => {
+            allDraftPicksMap[d.draft_id] = allDraftPicksResults[i];
+          });
+          const recentDraftPicks = recentDraft
+            ? (allDraftPicksMap[recentDraft.draft_id] || [])
+            : [];
+
+          // A newer load (e.g. league switch) superseded us — drop this result.
+          if (loadTokenRef.current !== token) return;
+
+          const fullPayload = {
+            ...corePayload,
+            fantasyCalcTrades,
+            recentDraftPicks,
+            liveDraftPicks,
+            allDraftPicksMap,
+            historicalStats: [
+              { year: 2021, stats: stats21 },
+              { year: 2020, stats: stats20 },
+              { year: 2019, stats: stats19 },
+              { year: 2018, stats: stats18 },
+              { year: 2017, stats: stats17 },
+              { year: 2016, stats: stats16 },
+              { year: 2015, stats: stats15 },
+              { year: 2014, stats: stats14 },
+              { year: 2013, stats: stats13 },
+              { year: 2012, stats: stats12 },
+              { year: 2011, stats: stats11 },
+              { year: 2010, stats: stats10 },
+              { year: 2009, stats: stats09 },
+            ],
+          };
+
+          setAnalysisPayload(fullPayload);
+          setAnalysis(computeAnalysis(fullPayload, scoringWeightsRef.current));
+        } catch {
+          // Enrichment is best-effort; the core analysis already rendered.
+        } finally {
+          if (loadTokenRef.current === token) setEnriching(false);
+        }
+      })();
     } catch (e) {
       localStorage.removeItem("sleeper_league");
       setError(e.message || "Failed to load dashboard. Try selecting your league again.");
       setStep(returnToLeagues ? "leagues" : "input");
+      setLoading(false);
+      setLoadProgress(null);
     }
-
-    setLoading(false);
   }
 
   async function loadFleaflickerDashboard(league, { returnToLeagues = false } = {}) {
+    const token = (loadTokenRef.current += 1);
     setSelectedLeague(league);
     setLoading(true);
+    setEnriching(false);
     setError("");
 
     try {
@@ -345,66 +403,53 @@ export default function App() {
       const lastSeason =
         now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
 
-      // Phase 1: Fetch Sleeper player DB + historical stats in parallel
-      const [
-        players,
-        stats24,
-        stats23,
-        stats22,
-        stats21,
-        stats20,
-        stats19,
-        stats18,
-        stats17,
-        stats16,
-        stats15,
-        stats14,
-        stats13,
-        stats12,
-        stats11,
-        stats10,
-        stats09,
-      ] = await Promise.all([
-        fetchSleeper("/players/nfl").catch(() => ({})),
-        fetchSleeper(`/stats/nfl/regular/${lastSeason}`).catch(() => ({})),
-        fetchSleeper(`/stats/nfl/regular/${lastSeason - 1}`).catch(() => ({})),
-        fetchSleeper(`/stats/nfl/regular/${lastSeason - 2}`).catch(() => ({})),
-        fetchHistoricalStats(2021),
-        fetchHistoricalStats(2020),
-        fetchHistoricalStats(2019),
-        fetchHistoricalStats(2018),
-        fetchDeepHistoricalStats(2017),
-        fetchDeepHistoricalStats(2016),
-        fetchDeepHistoricalStats(2015),
-        fetchDeepHistoricalStats(2014),
-        fetchDeepHistoricalStats(2013),
-        fetchDeepHistoricalStats(2012),
-        fetchDeepHistoricalStats(2011),
-        fetchDeepHistoricalStats(2010),
-        fetchDeepHistoricalStats(2009),
-      ]);
+      // Per-request progress: each fetch ticks the counter so the skeleton can show
+      // a real "x of N" bar. See loadDashboard for the same pattern.
+      let done = 0;
+      let total = 0;
+      const track = (label, p) =>
+        p.finally(() => {
+          done += 1;
+          setLoadProgress({ done, total, label });
+        });
+      const step = (label) => {
+        done += 1;
+        setLoadProgress({ done, total, label });
+      };
+
+      // ----- Tier 1 (core): Sleeper player DB + recent stats, then normalize the
+      // Fleaflicker league, then current-season values. Enough for first paint.
+      const corePhase1 = [
+        track("Player database", fetchSleeper("/players/nfl").catch(() => ({}))),
+        track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason}`).catch(() => ({}))),
+        track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason - 1}`).catch(() => ({}))),
+        track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason - 2}`).catch(() => ({}))),
+      ];
+      // +1 Fleaflicker normalize, +3 value fetches, +1 analysis crunch.
+      total = corePhase1.length + 1 + 3 + 1;
+      setLoadProgress({ done: 0, total, label: "Connecting…" });
+
+      const [players, stats24, stats23, stats22] = await Promise.all(corePhase1);
 
       // Phase 2: Normalize Fleaflicker data (mutates players with synthetic entries)
+      step("Your league");
       const ffData = await loadFleaflickerLeague(
         league._ff_league_id,
         league._ff_team_id,
         players,
       );
 
-      // Phase 3: Fetch FantasyCalc values using normalized league settings
-      const [
-        fantasyCalcValues,
-        fantasyCalcTrades,
-        rosterAuditValues,
-        rosterAuditPicks,
-      ] = await Promise.all([
-        fetchFantasyCalcValues(ffData.league).catch(() => []),
-        fetchFantasyCalcTrades(ffData.league).catch(() => []),
-        fetchRosterAuditValues(ffData.league).catch(() => []),
-        fetchRosterAuditPicks().catch(() => null),
-      ]);
+      // Phase 3: current-season values, using normalized league settings.
+      const [fantasyCalcValues, rosterAuditValues, rosterAuditPicks] =
+        await Promise.all([
+          track("Player values", fetchFantasyCalcValues(ffData.league).catch(() => [])),
+          track("Player values", fetchRosterAuditValues(ffData.league).catch(() => [])),
+          track("Pick values", fetchRosterAuditPicks().catch(() => null)),
+        ]);
 
-      const payload = {
+      // Tier-2 fields (deep history, market comps) start empty — defaulted by
+      // buildRosterAnalysis — and are filled in after first paint.
+      const corePayload = {
         myRoster: ffData.myRoster,
         players,
         league: ffData.league,
@@ -415,40 +460,86 @@ export default function App() {
         stats22,
         transactions: ffData.transactions,
         fantasyCalcValues,
-        fantasyCalcTrades,
+        fantasyCalcTrades: [],
         rosterAuditValues,
         rosterAuditPicks,
         users: ffData.users,
         rosters: ffData.rosters,
         lastSeason,
-        historicalStats: [
-          { year: 2021, stats: stats21 },
-          { year: 2020, stats: stats20 },
-          { year: 2019, stats: stats19 },
-          { year: 2018, stats: stats18 },
-          { year: 2017, stats: stats17 },
-          { year: 2016, stats: stats16 },
-          { year: 2015, stats: stats15 },
-          { year: 2014, stats: stats14 },
-          { year: 2013, stats: stats13 },
-          { year: 2012, stats: stats12 },
-          { year: 2011, stats: stats11 },
-          { year: 2010, stats: stats10 },
-          { year: 2009, stats: stats09 },
-        ],
+        historicalStats: [],
       };
 
-      setAnalysisPayload(payload);
-      const nextAnalysis = computeAnalysis(payload, scoringWeights);
-      setAnalysis(nextAnalysis);
+      step("Crunching analysis");
+      setAnalysisPayload(corePayload);
+      setAnalysis(computeAnalysis(corePayload, scoringWeightsRef.current));
       setStep("dashboard");
+      setLoading(false);
+      setLoadProgress(null);
+
+      // ----- Tier 2 (enrichment): deep history + market comps after first paint.
+      const ffLeague = ffData.league;
+      setEnriching(true);
+      (async () => {
+        try {
+          const [
+            stats21, stats20, stats19, stats18,
+            stats17, stats16, stats15, stats14,
+            stats13, stats12, stats11, stats10, stats09,
+            fantasyCalcTrades,
+          ] = await Promise.all([
+            fetchHistoricalStats(2021),
+            fetchHistoricalStats(2020),
+            fetchHistoricalStats(2019),
+            fetchHistoricalStats(2018),
+            fetchDeepHistoricalStats(2017),
+            fetchDeepHistoricalStats(2016),
+            fetchDeepHistoricalStats(2015),
+            fetchDeepHistoricalStats(2014),
+            fetchDeepHistoricalStats(2013),
+            fetchDeepHistoricalStats(2012),
+            fetchDeepHistoricalStats(2011),
+            fetchDeepHistoricalStats(2010),
+            fetchDeepHistoricalStats(2009),
+            fetchFantasyCalcTrades(ffLeague).catch(() => []),
+          ]);
+
+          if (loadTokenRef.current !== token) return;
+
+          const fullPayload = {
+            ...corePayload,
+            fantasyCalcTrades,
+            historicalStats: [
+              { year: 2021, stats: stats21 },
+              { year: 2020, stats: stats20 },
+              { year: 2019, stats: stats19 },
+              { year: 2018, stats: stats18 },
+              { year: 2017, stats: stats17 },
+              { year: 2016, stats: stats16 },
+              { year: 2015, stats: stats15 },
+              { year: 2014, stats: stats14 },
+              { year: 2013, stats: stats13 },
+              { year: 2012, stats: stats12 },
+              { year: 2011, stats: stats11 },
+              { year: 2010, stats: stats10 },
+              { year: 2009, stats: stats09 },
+            ],
+          };
+
+          setAnalysisPayload(fullPayload);
+          setAnalysis(computeAnalysis(fullPayload, scoringWeightsRef.current));
+        } catch {
+          // Enrichment is best-effort; the core analysis already rendered.
+        } finally {
+          if (loadTokenRef.current === token) setEnriching(false);
+        }
+      })();
     } catch (e) {
       localStorage.removeItem("ff_league");
       setError(e.message || "Failed to load Fleaflicker dashboard. Try selecting your league again.");
       setStep(returnToLeagues ? "leagues" : "input");
+      setLoading(false);
+      setLoadProgress(null);
     }
-
-    setLoading(false);
   }
 
   async function handleConfirmScoreWeights(nextWeights) {
@@ -664,7 +755,7 @@ export default function App() {
     if (loading && selectedLeague) {
       return (
         <Layout>
-          <DashboardSkeleton leagueName={selectedLeague.name} />
+          <DashboardSkeleton leagueName={selectedLeague.name} progress={loadProgress} />
         </Layout>
       );
     }
@@ -709,6 +800,38 @@ export default function App() {
           onGetAIAdvice={handleGetAIAdvice}
         />
       </Layout>
+      {enriching && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 16,
+            right: 16,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "8px 14px",
+            borderRadius: 20,
+            background: "rgba(10,14,20,0.92)",
+            border: "1px solid rgba(0,245,160,0.25)",
+            color: "#6b7390",
+            fontSize: 11,
+            letterSpacing: 0.5,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+            zIndex: 50,
+          }}
+        >
+          <span
+            className="dyn-spinner"
+            style={{
+              width: 12,
+              height: 12,
+              border: "2px solid rgba(0,245,160,0.2)",
+              borderTopColor: "#00f5a0",
+            }}
+          />
+          Loading market &amp; draft data…
+        </div>
+      )}
       </ErrorBoundary>
     );
   }
@@ -716,7 +839,7 @@ export default function App() {
   if (selectedLeague) {
     return (
       <Layout>
-        <DashboardSkeleton leagueName={selectedLeague.name} />
+        <DashboardSkeleton leagueName={selectedLeague.name} progress={loadProgress} />
       </Layout>
     );
   }
