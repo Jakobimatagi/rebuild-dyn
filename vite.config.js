@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // Mounts a Vercel-style /api handler as Vite dev-server middleware so client
@@ -47,11 +47,21 @@ function devApiHandler(routePath, importPath) {
   }
 }
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
+  // Vite only exposes VITE_* vars to the client. The dev /api shims run in Node
+  // and read server-only secrets (e.g. CFBD_KEY) from process.env, which Vite
+  // doesn't populate — so mirror non-VITE keys from .env.local into process.env
+  // for `npm run dev`. In production these come from the Vercel project env.
+  const env = loadEnv(mode, process.cwd(), '')
+  for (const [k, v] of Object.entries(env)) {
+    if (!k.startsWith('VITE_') && process.env[k] === undefined) process.env[k] = v
+  }
+
   return {
     plugins: [
       react(),
       devApiHandler('/api/historical-rosters', '/api/historical-rosters.js'),
+      devApiHandler('/api/cfbd', '/api/cfbd.js'),
     ],
     server: {
       proxy: {

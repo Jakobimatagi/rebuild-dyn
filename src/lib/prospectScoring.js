@@ -1,5 +1,7 @@
 // Shared prospect scoring logic — used by RookieProspector (admin) and public rankings pages.
 
+import { TEAM_SITU } from "./teamTalent.js";
+
 export const BLUE_BLOOD_TEAMS = new Set([
   "Alabama","Georgia","Ohio State","Michigan","LSU","Texas","Oklahoma","Notre Dame",
   "Clemson","USC","Penn State","Oregon","Florida","Miami","Tennessee","Auburn",
@@ -73,6 +75,16 @@ export const TIER_GRADE_NUDGE = {
   "Replaceable":              -22,
 };
 
+// Situation score for a school in a given season. Prefers CFBD's year-specific
+// recruiting talent composite (TEAM_SITU); falls back to the hand-maintained
+// CONFERENCE_SCORES, then a neutral 40. Year-aware so a program's rise/fall is
+// reflected (e.g. 2020 Oregon ≠ 2024 Oregon).
+export function situForSchool(school, year) {
+  const t = year != null ? TEAM_SITU[year]?.[school] : undefined;
+  if (t != null) return t;
+  return CONFERENCE_SCORES[school] ?? 40;
+}
+
 export function deriveSchool(p) {
   if (!p.seasons || !p.seasons.length) return p.school || "";
   const sorted = [...p.seasons].sort((a, b) => Number(a.season_year) - Number(b.season_year));
@@ -93,7 +105,7 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
   const num = (v) => parseFloat(v) || 0;
 
   if (!prospect.seasons || prospect.seasons.length === 0) {
-    return { total: 35, components: { age: 55, prod: 35, avail: 25, trend: 50, situ: CONFERENCE_SCORES[school] ?? 40, athletic: 0, mkt: null, confidence: 50 } };
+    return { total: 35, components: { age: 55, prod: 35, avail: 25, trend: 50, situ: situForSchool(school), athletic: 0, mkt: null, confidence: 50 } };
   }
 
   const sorted = [...prospect.seasons].sort((a, b) => Number(a.season_year) - Number(b.season_year));
@@ -190,6 +202,29 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
     prodComp = Math.round(Math.min(100, Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60));
   }
 
+  // RB total-offense dominator (CFBD): the back's share of team scrimmage
+  // yards/TDs — a workhorse signal raw per-game stats miss. Stored per season in
+  // the athletic bag by the importer; blended into production at 15% when present.
+  // 38%+ ≈ elite (≈100), 25% ≈ 65, 20% ≈ 52.
+  if (position === "RB" && athletic?.dom) {
+    const dom = parseFloat(athletic.dom[recent.season_year]);
+    if (Number.isFinite(dom) && dom > 0) {
+      const domScore = Math.min(100, dom * 2.6);
+      prodComp = Math.round(prodComp * 0.85 + domScore * 0.15);
+    }
+  }
+
+  // WR/TE QB-help context (CFBD): production behind a weak passer is underrated,
+  // behind an elite passer slightly inflated. `qb[year] = { p: percentile }` from
+  // the importer. Light, capped at ±4 (50th pct = no change).
+  if ((position === "WR" || position === "TE") && athletic?.qb) {
+    const qbPct = parseFloat(athletic.qb[recent.season_year]?.p);
+    if (Number.isFinite(qbPct)) {
+      const nudge = Math.max(-4, Math.min(4, (50 - qbPct) / 12.5));
+      prodComp = Math.max(0, Math.min(100, prodComp + nudge));
+    }
+  }
+
   // Ball-security penalty: lost fumbles per game (caps at -12)
   const fumblesLost = num(recent.fumbles_lost) || num(recent.fumbles);
   const fumblesPg   = fumblesLost / Math.max(1, num(recent.games));
@@ -228,7 +263,7 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
     if (reducedAvail && prevElite && trendComp < 55) trendComp = 55;
   }
 
-  const situComp = CONFERENCE_SCORES[school] ?? 40;
+  const situComp = situForSchool(school, recent.season_year);
 
   // Combine/pro-day data is unreliable until a player declares — gate the bonus.
   let athleticBonus = 0;

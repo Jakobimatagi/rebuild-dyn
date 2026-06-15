@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { deriveSchool } from "../../lib/prospectScoring.js";
-import { compsReport } from "../../lib/historicalComps.js";
+import { compsReport, rankProductionComps } from "../../lib/historicalComps.js";
 import { computeCurrentDraftYear } from "./utils.js";
 import { GradeBadge, Pill, TierSelect, CapitalSelect, StatBar } from "./Atoms.jsx";
 import ProspectStats from "./ProspectStats.jsx";
@@ -8,7 +8,7 @@ import ProspectStats from "./ProspectStats.jsx";
 export default function ProspectCard({
   p, rank, adp, grade, components, valueScore, delta, gold,
   annotation, onAnnotate, onDeclareYear, sleeperDeclared, onEdit,
-  compIndex,
+  compIndex, prospectPool = [],
 }) {
   const [expanded, setExpanded]       = useState(false);
   const [pickingYear, setPickingYear] = useState(false);
@@ -18,6 +18,12 @@ export default function ProspectCard({
   const comps = useMemo(
     () => compsReport(p, compIndex, p.comparablePlayer),
     [p, compIndex],
+  );
+  // Production-profile comps from past classes (CFBD stats) — only meaningful
+  // once there's a pool of imported past prospects to match against.
+  const prodComps = useMemo(
+    () => rankProductionComps(p, prospectPool, 5),
+    [p, prospectPool],
   );
 
   return (
@@ -43,6 +49,36 @@ export default function ProspectCard({
                 {comps.namedSummary && <span className="text-violet-400/80"> · {comps.namedSummary}</span>}
               </span>
             )}
+            {p.athletic?.recruitingStars > 0 && (
+              <span className="text-[10px] text-amber-300 bg-amber-500/15 border border-amber-400/30 px-1.5 py-0.5 rounded font-semibold"
+                title={`${p.athletic.committedTo ? p.athletic.committedTo + " commit · " : ""}${p.athletic.recruitingRank ? "#" + p.athletic.recruitingRank + " nationally · " : ""}CFBD recruiting`}>
+                {"★".repeat(p.athletic.recruitingStars)} recruit
+              </span>
+            )}
+            {p.position === "RB" && p.athletic?.dom && (() => {
+              const peak = Math.max(...Object.values(p.athletic.dom).map(Number).filter(Number.isFinite));
+              return peak > 0 ? (
+                <span className="text-[10px] text-cyan-300 bg-cyan-500/15 border border-cyan-400/30 px-1.5 py-0.5 rounded font-semibold"
+                  title="Peak share of team scrimmage yards + TDs (CFBD)">
+                  {peak.toFixed(0)}% dominator
+                </span>
+              ) : null;
+            })()}
+            {(p.position === "WR" || p.position === "TE") && p.athletic?.qb && (() => {
+              // QB help in the most recent season (their final college situation).
+              const recent = seasons[seasons.length - 1];
+              const q = recent && p.athletic.qb[recent.season_year];
+              if (!q || !q.r) return null;
+              const tone = q.p >= 66 ? "text-emerald-300 bg-emerald-500/10 border-emerald-400/30"
+                : q.p >= 33 ? "text-slate-300 bg-slate-500/10 border-slate-400/30"
+                : "text-amber-300 bg-amber-500/10 border-amber-400/30";
+              return (
+                <span className={`text-[10px] border px-1.5 py-0.5 rounded font-semibold ${tone}`}
+                  title={`Primary QB ranked #${q.r} of ${q.n} FBS passers that season (CFBD passer rating)`}>
+                  QB help #{q.r}
+                </span>
+              );
+            })()}
           </div>
           <div className="text-xs text-slate-400 flex gap-3 flex-wrap">
             <span>{deriveSchool(p) || "—"}</span>
@@ -115,6 +151,9 @@ export default function ProspectCard({
           {comps.knn.length > 0 && (
             <HistoricalComps comps={comps.knn} />
           )}
+          {prodComps.length > 0 && (
+            <ProductionComps comps={prodComps} />
+          )}
           <div className="grid md:grid-cols-2 gap-6">
           <div>
             <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-2">Grade Breakdown</div>
@@ -171,6 +210,38 @@ export default function ProspectCard({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Production-profile comps (CFBD, all positions) ───────────────────────────
+// Closest past-class players by college production, with how they got drafted.
+function ProductionComps({ comps }) {
+  const capClass = (c) =>
+    /_1$/.test(c) ? "text-emerald-400"
+    : /_2$/.test(c) ? "text-sky-300"
+    : /_3$/.test(c) ? "text-amber-300"
+    : c === "udfa" ? "text-rose-400"
+    : "text-slate-400";
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-2">
+        <div className="text-[10px] uppercase tracking-widest text-slate-500">Production Comps</div>
+        <div className="text-[10px] text-slate-600">closest college stat profiles · your archive</div>
+      </div>
+      <div className="space-y-1">
+        {comps.map(({ p, distance, capital }) => (
+          <div key={p.id}
+               className="flex items-center gap-3 text-xs px-3 py-1.5 rounded bg-slate-800/40 border border-white/5">
+            <span className="text-slate-200 font-semibold w-44 shrink-0 truncate">{p.name}</span>
+            <span className="text-slate-500 w-12 shrink-0">{p.projectedDraftYear || "—"}</span>
+            <span className={`flex-1 capitalize ${capClass(capital)}`}>
+              {capital ? capital.replace(/_/g, " ") : "undrafted"}
+            </span>
+            <span className="text-slate-600 text-[10px] tabular-nums">d={distance.toFixed(2)}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

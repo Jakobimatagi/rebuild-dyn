@@ -197,6 +197,104 @@ export function rankCompsForProspect(prospect, index, limit = 5) {
   return candidates.slice(0, limit);
 }
 
+// ── Production-profile comps (CFBD-driven, all positions) ────────────────────
+// The KNN above keys on athletic measurables (forty, speed score, BMI), which
+// CFBD can't supply. This second engine matches on COLLEGE PRODUCTION instead —
+// the stats CFBD does fill — so it works for QB/TE too and compares a prospect
+// against your imported past classes (the `pool`), surfacing how the closest
+// statistical comps actually panned out (draft capital).
+
+const PROD_KEYS = {
+  WR: ["ts", "ypg", "ypr", "tdpg", "cr"],
+  TE: ["ts", "ypg", "ypr", "tdpg", "cr"],
+  RB: ["rupg", "ypc", "tdpg", "recpg"],
+  QB: ["ypa", "cp", "tdrate", "intrate", "rtg"],
+};
+
+// Peak-season production vector for a prospect (in-app shape). Peak = the season
+// with the most primary yardage, so a player is judged by their best tape.
+function productionFeatures(p) {
+  const seasons = p.seasons || [];
+  if (!seasons.length) return null;
+  const g = (s) => Math.max(1, num(s.games) || 1);
+  const pos = p.position;
+
+  if (pos === "WR" || pos === "TE") {
+    const peak = seasons.reduce((a, b) => ((num(b.receiving_yards) || 0) > (num(a.receiving_yards) || 0) ? b : a));
+    return {
+      ts:   num(peak.target_share_pct),
+      ypg:  (num(peak.receiving_yards) ?? 0) / g(peak),
+      ypr:  num(peak.yards_per_reception),
+      tdpg: (num(peak.receiving_tds) ?? 0) / g(peak),
+      cr:   num(peak.catch_rate_pct),
+    };
+  }
+  if (pos === "RB") {
+    const peak = seasons.reduce((a, b) => ((num(b.rushing_yards) || 0) > (num(a.rushing_yards) || 0) ? b : a));
+    const tds = (num(peak.total_tds) ?? ((num(peak.rushing_tds) || 0) + (num(peak.receiving_tds) || 0)));
+    return {
+      rupg:  (num(peak.rushing_yards) ?? 0) / g(peak),
+      ypc:   num(peak.yards_per_carry),
+      tdpg:  tds / g(peak),
+      recpg: (num(peak.receptions) ?? 0) / g(peak),
+    };
+  }
+  if (pos === "QB") {
+    const peak = seasons.reduce((a, b) => ((num(b.passing_yards) || 0) > (num(a.passing_yards) || 0) ? b : a));
+    const att = Math.max(1, num(peak.pass_attempts) || 1);
+    return {
+      ypa:     num(peak.yards_per_attempt),
+      cp:      num(peak.completion_pct),
+      tdrate:  (num(peak.passing_tds) ?? 0) / att * 100,
+      intrate: (num(peak.interceptions) ?? 0) / att * 100,
+      rtg:     num(peak.passer_rating),
+    };
+  }
+  return null;
+}
+
+function prodStats(pool, position) {
+  const keys = PROD_KEYS[position] || [];
+  const stats = {};
+  for (const k of keys) {
+    const vals = pool
+      .filter((x) => x.position === position)
+      .map((x) => productionFeatures(x)?.[k])
+      .filter((v) => v != null);
+    if (!vals.length) { stats[k] = { mean: 0, std: 1 }; continue; }
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length) || 1;
+    stats[k] = { mean, std };
+  }
+  return stats;
+}
+
+// Nearest production comps for `prospect` within `pool` (past prospects, each
+// carrying a `_capital` outcome). Returns [{ p, distance, capital }].
+export function rankProductionComps(prospect, pool, limit = 5) {
+  const keys = PROD_KEYS[prospect?.position];
+  if (!keys || !pool?.length) return [];
+  const target = productionFeatures(prospect);
+  if (!target) return [];
+  const present = keys.filter((k) => target[k] != null);
+  if (present.length < 2) return [];
+
+  const stats = prodStats(pool, prospect.position);
+  const cands = [];
+  for (const x of pool) {
+    if (x.position !== prospect.position) continue;
+    if (x.id === prospect.id) continue;
+    if (x.name && prospect.name && normalizeName(x.name) === normalizeName(prospect.name)) continue;
+    const xf = productionFeatures(x);
+    if (!xf) continue;
+    const dist = zDistance(target, xf, stats, present);
+    if (dist == null) continue;
+    cands.push({ p: x, distance: dist, capital: x._capital || "" });
+  }
+  cands.sort((a, b) => a.distance - b.distance);
+  return cands.slice(0, limit);
+}
+
 // Outcome blurb for a historical row — used by both UI paths.
 export function summarizeOutcome(h) {
   if (!h) return "";

@@ -6,6 +6,9 @@ import { POS_COLORS, PAGE_SIZE } from "./rookieAdmin/constants.js";
 import { loadSession, saveSession, clearSession, normalizeName, computeCurrentDraftYear, blankSeason, initAddForm, computeValueScore } from "./rookieAdmin/utils.js";
 import { GradeBadge, Pill, TierSelect, CapitalSelect, Pagination, AddPlayerSeasonRow } from "./rookieAdmin/Atoms.jsx";
 import ProspectCard from "./rookieAdmin/ProspectCard.jsx";
+import CfbdAutofill from "./rookieAdmin/CfbdAutofill.jsx";
+import BulkImport from "./rookieAdmin/BulkImport.jsx";
+import ModelCheck from "./rookieAdmin/ModelCheck.jsx";
 import ProspectEditorTab from "./rookieAdmin/ProspectEditorTab.jsx";
 import DraftPlanTab from "./rookieAdmin/DraftPlanTab.jsx";
 import RookieShareModal from "./rookieAdmin/RookieShareModal.jsx";
@@ -26,6 +29,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     tab: "board",
     filters: { QB: true, RB: true, WR: true, TE: true },
     yearFilter: String(computeCurrentDraftYear()),
+    archiveYear: "all",
     compareYearA: computeCurrentDraftYear(),
     compareYearB: computeCurrentDraftYear() + 1,
     prospects: [],
@@ -79,6 +83,12 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
       });
   }, []);
 
+  // Re-pull prospects + annotations from the DB (used after a bulk import).
+  async function reloadData() {
+    const { prospects, annotations } = await fetchAllData();
+    update({ prospects, annotations });
+  }
+
   async function setExpertRanking(prospectId, rankOrder) {
     if (!state.user) return;
     const next = { ...state.expertRankings };
@@ -107,6 +117,52 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
 
   function setFormField(field, value) {
     setAddForm((f) => ({ ...f, [field]: value }));
+  }
+
+  // Merge a CFBD auto-fill patch into the form. Before merging, name-match
+  // (normalized name + position) against the DB: if we already have this
+  // player, fold that record into the form first — id, plus manual fields
+  // (tier, comp, landing spot, ADP, declared, prior athletic) from the
+  // prospect + its annotation — so the save *overwrites* the existing player
+  // instead of creating a duplicate, and refreshes stats without wiping
+  // scouting inputs. The form header flips to "Editing: …" as the signal.
+  // Seasons replace wholesale; draftCapital only fills an empty slot;
+  // recruiting (athletic patch) merges over whatever's there.
+  function applyCfbd(patch) {
+    setAddForm((f) => {
+      const wantName = normalizeName(patch.name || f.name);
+      const existing = !f.id && wantName
+        ? state.prospects.find(
+            (p) => normalizeName(p.name) === wantName && p.position === f.position,
+          )
+        : null;
+
+      let base = f;
+      if (existing) {
+        const ann = state.annotations[existing.id] || {};
+        base = {
+          ...f,
+          id:                 existing.id,
+          projectedDraftYear: String(existing.projectedDraftYear || f.projectedDraftYear),
+          draftCapital:       ann.draftCapital   || existing.draftCapital   || f.draftCapital,
+          comparablePlayer:   existing.comparablePlayer || f.comparablePlayer,
+          declared:           ann.declared       ?? f.declared,
+          rookieDraftAdp:     ann.rookieDraftAdp  || f.rookieDraftAdp,
+          landingSpot:        ann.landingSpot     || f.landingSpot,
+          tier:               ann.tier            || f.tier,
+          athletic:           { ...(existing.athletic || {}), ...f.athletic },
+        };
+      }
+
+      return {
+        ...base,
+        ...(patch.name ? { name: patch.name } : {}),
+        ...(patch.seasons ? { seasons: patch.seasons } : {}),
+        ...(patch.draftCapital && !base.draftCapital ? { draftCapital: patch.draftCapital } : {}),
+        ...(patch.declared ? { declared: true } : {}),
+        ...(patch.athletic ? { athletic: { ...base.athletic, ...patch.athletic } } : {}),
+      };
+    });
   }
 
   function updateFormSeason(si, field, value) {
@@ -581,6 +637,26 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
       return b.grade - a.grade;
     });
 
+  // Reference pool for production comps: past-class prospects that reached the
+  // NFL (carry a draft-capital outcome). Each gets `_capital` so a current
+  // prospect's closest statistical matches show how they actually got drafted.
+  const prospectPool = state.prospects
+    .filter((p) => p.projectedDraftYear < currentDraftYear)
+    .map((p) => {
+      const ann = state.annotations[p.id] || {};
+      const cap = ann.draftCapital || p.draftCapital || p.draft_capital || "";
+      return cap ? { ...p, _capital: cap } : null;
+    })
+    .filter(Boolean);
+
+  // Distinct past draft classes present in the archive, newest first, plus the
+  // selected-year subset for the archive's own year filter.
+  const archiveYears = [...new Set(archiveProspects.map((x) => x.p.projectedDraftYear).filter(Boolean))]
+    .sort((a, b) => Number(b) - Number(a));
+  const archiveFiltered = state.archiveYear === "all"
+    ? archiveProspects
+    : archiveProspects.filter((x) => String(x.p.projectedDraftYear) === String(state.archiveYear));
+
   const maxListPages  = Math.max(Math.ceil(byGrade.length / PAGE_SIZE), rankedAllPages, 1);
   const page          = Math.min(state.page, maxListPages);
   const totalPages    = Math.ceil(byGrade.length / PAGE_SIZE);
@@ -591,12 +667,14 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
 
   const TABS = [
     { id: "add",       label: "Add Player" },
+    { id: "import",    label: "Bulk Import" },
     { id: "upcoming",  label: "Upcoming Draft" },
     { id: "board",     label: "Prospect Board" },
     { id: "compare",   label: "VS" },
     { id: "value",     label: "My Value" },
     { id: "draftplan", label: "Draft Plan" },
     { id: "archive",   label: "Archive" },
+    { id: "modelcheck", label: "Model Check" },
   ];
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -665,6 +743,16 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                   {pos}
                 </button>
               ))}
+            </div>
+
+            {/* CFBD auto-fill — pull college stats, capital & recruiting by name */}
+            <div className="mb-4">
+              <CfbdAutofill
+                position={addForm.position}
+                name={addForm.name}
+                projectedDraftYear={addForm.projectedDraftYear}
+                onApply={applyCfbd}
+              />
             </div>
 
             <div className="rounded-xl border border-white/10 bg-slate-900/60 p-5 space-y-4">
@@ -759,8 +847,18 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
           </div>
         )}
 
+        {/* Bulk Import tab */}
+        {state.tab === "import" && (
+          <BulkImport prospects={state.prospects} annotations={state.annotations} onReload={reloadData} />
+        )}
+
+        {/* Model Check tab */}
+        {state.tab === "modelcheck" && (
+          <ModelCheck prospects={state.prospects} annotations={state.annotations} sleeperByName={state.sleeperByName} />
+        )}
+
         {/* Board / Value / Upcoming share the filter bar */}
-        {state.tab !== "add" && state.tab !== "draftplan" && (
+        {state.tab !== "add" && state.tab !== "import" && state.tab !== "modelcheck" && state.tab !== "draftplan" && (
           <div className="flex flex-wrap items-center gap-2 mb-4">
             {["QB","RB","WR","TE"].map((pos) => (
               <button key={pos} onClick={() => update({ filters: { ...state.filters, [pos]: !state.filters[pos] } })}
@@ -824,7 +922,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                 onDeclareYear={(y) => declareWithYear(x.p.id, y)}
                 sleeperDeclared={x.sleeperDeclared}
                 onEdit={() => handleEditProspect(x.p)}
-                compIndex={state.compIndex} />
+                compIndex={state.compIndex} prospectPool={prospectPool} />
             ))}
             <Pagination page={page} total={upcomingPages} onChange={(p) => update({ page: p })} />
           </div>
@@ -910,7 +1008,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                 onDeclareYear={(y) => declareWithYear(x.p.id, y)}
                 sleeperDeclared={x.sleeperDeclared}
                 onEdit={() => handleEditProspect(x.p)}
-                compIndex={state.compIndex} />
+                compIndex={state.compIndex} prospectPool={prospectPool} />
             ))}
             <Pagination page={page} total={totalPages} onChange={(p) => update({ page: p })} />
           </div>
@@ -1066,7 +1164,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                       onDeclareYear={(y) => declareWithYear(x.p.id, y)}
                       sleeperDeclared={x.sleeperDeclared}
                       onEdit={() => handleEditProspect(x.p)}
-                      compIndex={state.compIndex} />
+                      compIndex={state.compIndex} prospectPool={prospectPool} />
                   </div>
                 </div>
               );
@@ -1083,17 +1181,29 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
         {/* Archive — declared prospects from past draft classes */}
         {state.tab === "archive" && (
           <div>
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-xs text-slate-500">{archiveProspects.length} archived prospects</span>
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <button onClick={() => update({ archiveYear: "all" })}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold border ${state.archiveYear === "all" ? "border-emerald-400/60 bg-emerald-500/15 text-emerald-200" : "border-white/10 text-slate-400 bg-slate-900/40 hover:text-slate-200"}`}>
+                All
+              </button>
+              {archiveYears.map((y) => (
+                <button key={y} onClick={() => update({ archiveYear: String(y) })}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold border ${state.archiveYear === String(y) ? "border-emerald-400/60 bg-emerald-500/15 text-emerald-200" : "border-white/10 text-slate-400 bg-slate-900/40 hover:text-slate-200"}`}>
+                  {y}
+                </button>
+              ))}
+              <span className="text-xs text-slate-500 ml-auto">
+                {archiveFiltered.length} {state.archiveYear === "all" ? "archived" : `${state.archiveYear}`} prospect{archiveFiltered.length !== 1 ? "s" : ""}
+              </span>
             </div>
-            {archiveProspects.length === 0 && (
+            {archiveFiltered.length === 0 && (
               <div className="rounded-xl border border-white/10 bg-slate-900/40 p-10 text-center text-slate-500 text-sm">
-                No archived prospects yet. Players declared for a past draft year will appear here.
+                No archived prospects yet. Players declared (or imported as drafted) for a past draft year appear here.
               </div>
             )}
-            {archiveProspects.length > 0 && (() => {
+            {archiveFiltered.length > 0 && (() => {
               const byYear = {};
-              archiveProspects.forEach((x) => {
+              archiveFiltered.forEach((x) => {
                 const y = x.p.projectedDraftYear || "Unknown";
                 (byYear[y] ??= []).push(x);
               });
