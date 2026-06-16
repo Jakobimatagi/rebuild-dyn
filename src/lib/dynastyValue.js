@@ -126,6 +126,38 @@ export function computeDynastyValue(player, opts = {}) {
   };
 }
 
+// Forward-value tilt for the trade tools: how hard the fused value's *forward*
+// signal nudges a player's trade price off the trailing FantasyCalc market. A usage
+// breakout shows up here as model > grade, so we isolate that ratio (model/grade —
+// scale-free, so market premiums don't leak in) and apply a damped, bounded
+// multiplier. STRENGTH<1 keeps the lean conservative; the clamp caps how far a
+// single forward read can move a price in either direction.
+const FORWARD_TILT_STRENGTH = 0.7;
+const FORWARD_TILT_MIN = 0.82;
+const FORWARD_TILT_MAX = 1.28;
+
+/**
+ * Multiplier on a player's FC-based trade value derived from their fused forward
+ * value. FantasyCalc is a trailing market; this leans the price toward where the
+ * fused dynasty value says the player is heading, letting the trade analyzer
+ * auto-adjust for usage breakouts/declines. Returns 1 (no-op) whenever the fused
+ * value or its inputs are unavailable, so coverage gaps degrade to pure FC pricing.
+ *
+ * @param {object} player  enriched player carrying `.dynastyValue` (computeDynastyValue output).
+ * @returns {number} multiplier in [FORWARD_TILT_MIN, FORWARD_TILT_MAX].
+ */
+export function dynastyForwardMultiplier(player) {
+  const bd = player?.dynastyValue?.breakdown;
+  if (!bd) return 1;
+  const grade = Number(bd.grade);
+  const model = Number(bd.modelScore);
+  if (!Number.isFinite(grade) || !Number.isFinite(model) || grade <= 0) return 1;
+  // model/grade > 1 → forward breakout (projection/usage outpacing trailing stats);
+  // < 1 → forward decline. Damp toward 1 and clamp.
+  const tilted = 1 + (model / grade - 1) * FORWARD_TILT_STRENGTH;
+  return clamp(tilted, FORWARD_TILT_MIN, FORWARD_TILT_MAX);
+}
+
 const TIERS = [
   [95, "Cornerstone"],
   [78, "Foundation"],
