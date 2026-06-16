@@ -16,18 +16,29 @@ import pandas as pd
 
 
 def _json_safe(o):
-    """Recursively replace NaN/Inf with None so a record serializes to valid JSON.
+    """Coerce a value into something that serializes to valid JSON for Supabase.
 
-    Supabase's client rejects non-compliant floats (``nan``/``inf``), and a single
-    one anywhere in a batch fails the whole upsert. numpy/pandas NaNs are floats,
-    so the float branch catches them (incl. NaN left in object/string columns).
+    - NaN/Inf → None: the client rejects non-compliant floats, and a single one
+      anywhere in a batch fails the whole upsert (incl. NaN in object/string cols).
+    - Whole-valued floats → int: pandas ``iterrows`` upcasts integer columns to
+      float (0 → 0.0), and Postgres int columns reject "0.0". Numeric columns
+      accept an int just fine, so this is safe across both.
+    - numpy/pandas scalars (int64, bool_, …) → python natives, so json can encode
+      them.
     """
     if isinstance(o, float):
-        return None if (math.isnan(o) or math.isinf(o)) else o
+        if math.isnan(o) or math.isinf(o):
+            return None
+        return int(o) if o.is_integer() else o
     if isinstance(o, dict):
         return {k: _json_safe(v) for k, v in o.items()}
     if isinstance(o, (list, tuple)):
         return [_json_safe(v) for v in o]
+    if hasattr(o, "item"):  # numpy/pandas scalar → python native, then re-check
+        try:
+            return _json_safe(o.item())
+        except Exception:
+            return o
     return o
 
 try:
@@ -107,3 +118,52 @@ def publish_projections(df: pd.DataFrame, run_metrics: dict | None = None) -> in
 
     print(f"Published {len(recs)} projections to Supabase.")
     return len(recs)
+
+
+# ── OC history (scheme / coach / utilization) ─────────────────────────────────
+
+def _upsert_df(table: str, df: pd.DataFrame, on_conflict: str, columns: list[str]) -> int:
+    """Generic chunked upsert of a DataFrame's `columns` into `table`. NaN/Inf are
+    coerced to null so a single bad float can't fail the batch (see _json_safe)."""
+    if df is None or df.empty:
+        print(f"Nothing to publish to {table} (empty).")
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    recs = []
+    for _, r in df.iterrows():
+        rec = {c: (r[c] if c in df.columns else None) for c in columns}
+        rec["updated_at"] = now
+        recs.append(_json_safe(rec))
+    client = _client()
+    for i in range(0, len(recs), 500):
+        client.table(table).upsert(recs[i:i + 500], on_conflict=on_conflict).execute()
+    print(f"Published {len(recs)} rows to {table}.")
+    return len(recs)
+
+
+_SCHEME_COLS = [
+    "season", "team", "plays", "pass_rate", "proe", "adot", "deep_rate",
+    "shotgun_rate", "no_huddle_rate", "epa_play", "pass_epa", "rush_epa",
+    "success_rate", "cpoe", "scramble_rate", "head_coach",
+]
+_COACH_COLS = ["season", "team", "head_coach", "plays", "is_primary"]
+_UTIL_COLS = [
+    "season", "team", "player_id", "sleeper_id", "name", "targets", "receptions",
+    "rec_air_yards", "carries", "rz_targets", "rz_carries", "target_share",
+    "carry_share", "air_yard_share", "rz_target_share", "rz_carry_share",
+]
+
+
+def publish_scheme(df: pd.DataFrame) -> int:
+    return _upsert_df("team_scheme_seasons", df, "season,team", _SCHEME_COLS)
+
+
+def publish_coach_history(df: pd.DataFrame) -> int:
+    # `primary` is a reserved word in Postgres → the column is is_primary.
+    if df is not None and not df.empty and "primary" in df.columns:
+        df = df.rename(columns={"primary": "is_primary"})
+    return _upsert_df("coach_seasons", df, "season,team,head_coach", _COACH_COLS)
+
+
+def publish_player_utilization(df: pd.DataFrame) -> int:
+    return _upsert_df("player_utilization_seasons", df, "season,team,player_id", _UTIL_COLS)

@@ -19,6 +19,7 @@ import {
   estimatePickValue,
 } from "./marketValue";
 import { buildPlayerPrediction } from "./predictionEngine";
+import { computeDynastyValue } from "./dynastyValue.js";
 import { buildPlayerOcOutlook } from "./ocAdjustment";
 
 // ---------------------------------------------------------------------------
@@ -435,6 +436,7 @@ export function buildRosterSnapshot(
   rosterAuditContext = null,
   ocOutlookContext = null,
   completedDraftSeasons = new Set(),
+  projPctileMap = null,
 ) {
   const playerIds = roster.players || [];
   const picks = buildRosterPicks(
@@ -607,6 +609,13 @@ export function buildRosterSnapshot(
       if (predictionContext) {
         enrichedPlayer.prediction = buildPlayerPrediction(enrichedPlayer, predictionContext);
       }
+
+      // Fused forward dynasty value: the age-curve prediction + current grade +
+      // the nflverse-enriched weekly-projection percentile (when supplied),
+      // anchored to market. See dynastyValue.js.
+      enrichedPlayer.dynastyValue = computeDynastyValue(enrichedPlayer, {
+        projPctile: projPctileMap?.get(String(id)) ?? null,
+      });
 
       if (ocOutlookContext) {
         enrichedPlayer.ocOutlook = buildPlayerOcOutlook(enrichedPlayer, ocOutlookContext);

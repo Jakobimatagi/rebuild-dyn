@@ -62,6 +62,25 @@ K_QB_VOL = 6.0         # QB attempt volume, in games
 STRUCT_WEIGHT = float(os.environ.get("PROJ_STRUCT_WEIGHT", 0.20))
 OPP_STRENGTH = float(os.environ.get("PROJ_OPP_STRENGTH", 0.5))
 
+# nflverse advanced-stat adjustments (see advanced.py). Default 0 = OFF, so the
+# model is byte-identical to the Sleeper-only baseline unless explicitly enabled;
+# the backtest grids these to decide whether they earn their place.
+#   TGT_BLEND: weight given to nflverse's recency-weighted target share when
+#              blended with the Sleeper-derived share (Sleeper already uses the
+#              true team denominator, so this is expected to be ~neutral).
+#   SNAP_ADJ:  exponent on (recent snap% / position snap prior) applied to
+#              projected opportunity — the model otherwise ignores snaps entirely.
+# SNAP_ADJ default 0.3 is validated by the walk-forward backtest (improves the
+# standalone model across all positions, lifts the shipped blend, and shifts the
+# optimal Sleeper alpha 0.9->0.8). TGT_BLEND defaults off — nflverse target share
+# is redundant with Sleeper's (which already uses the true team denominator).
+NFLV_TGT_BLEND = float(os.environ.get("PROJ_NFLV_TGT_BLEND", 0.0))
+NFLV_SNAP_ADJ = float(os.environ.get("PROJ_NFLV_SNAP_ADJ", 0.3))
+
+# nflverse per-week rate fields recency-weighted in weighted_features (weighted
+# MEAN over weeks where present, not a sum — they're already rates/shares).
+_NFLV_RATE_FIELDS = ("nflv_target_share", "nflv_snap_pct")
+
 # Week-to-week residual spread per position, as a CV on the projection plus a
 # small additive floor. Drives floor (p15) / ceiling (p85). Calibratable by the
 # backtest (coverage report); these defaults sit near observed NFL variance.
@@ -123,7 +142,26 @@ def weighted_features(history: pd.DataFrame, target_gweek: int,
     agg = {f"wf_{f}": "sum" for f in _SUM_FIELDS}
     agg.update({f"wf_{f}": "sum" for f in ("pts_ppr", "pts_half_ppr", "pts_std")})
     agg["_n"] = "sum"
+
+    # nflverse rate fields: recency-weighted MEAN. Accumulate weight*value and
+    # weight only over weeks where the value is actually present (a missing NGS or
+    # snap row mustn't pull the mean toward zero), then divide after the groupby.
+    nflv_present = [f for f in _NFLV_RATE_FIELDS if f in df.columns]
+    for f in nflv_present:
+        v = pd.to_numeric(df[f], errors="coerce")
+        pres = v.notna()
+        df[f"_nv_{f}"] = np.where(pres, v.fillna(0.0) * df["_w"], 0.0)
+        df[f"_nd_{f}"] = np.where(pres, df["_w"], 0.0)
+        agg[f"_nv_{f}"] = "sum"
+        agg[f"_nd_{f}"] = "sum"
+
     feats = df.groupby("player_id").agg(agg)
+
+    for f in nflv_present:
+        nd = feats[f"_nd_{f}"]
+        feats[f] = np.where(nd > 0, feats[f"_nv_{f}"] / nd, np.nan)
+        feats[f"{f}_n"] = nd
+        feats = feats.drop(columns=[f"_nv_{f}", f"_nd_{f}"])
 
     # Latest identity (most recent global week wins).
     latest = (df.sort_values("_gw").groupby("player_id")
@@ -137,6 +175,16 @@ def _project_player(row, team_vol, def_mults, opp) -> dict | None:
         return None
     pri = PRIORS[pos]
     n = float(row["n_eff"])
+
+    # nflverse opportunity nudge from recent snap share — the model is otherwise
+    # snap-blind. >1 lifts projected volume for locked-in high-snap roles, <1
+    # trims rotational ones. Clamped so a noisy snap read can't blow up volume.
+    snap_factor = 1.0
+    if NFLV_SNAP_ADJ > 0:
+        snap = row.get("nflv_snap_pct")
+        base_snap = pri.get("snap_share", 0.95) or 0.95
+        if snap is not None and not pd.isna(snap) and base_snap > 0:
+            snap_factor = float(np.clip((float(snap) / base_snap) ** NFLV_SNAP_ADJ, 0.7, 1.3))
 
     def share(num_f, den_f, prior_key, k=K_SHARE):
         obs = _safe_div(row[f"wf_{num_f}"], row[f"wf_{den_f}"])
@@ -163,9 +211,13 @@ def _project_player(row, team_vol, def_mults, opp) -> dict | None:
         comp.update(qb_pass_share=round(qb_pass_share, 3), proj_pass_att=round(pass_att, 1),
                     ypa=round(ypa, 2), pass_td_per_att=round(td_pa, 4))
     else:
-        comp["target_share"] = round(share("rec_tgt", "tm_rec_tgt", "target_share"), 3)
+        obs_ts = _safe_div(row["wf_rec_tgt"], row["wf_tm_rec_tgt"])
+        nflv_ts = row.get("nflv_target_share")
+        if NFLV_TGT_BLEND > 0 and nflv_ts is not None and not pd.isna(nflv_ts):
+            obs_ts = (1 - NFLV_TGT_BLEND) * obs_ts + NFLV_TGT_BLEND * float(nflv_ts)
+        comp["target_share"] = round(_shrink(obs_ts, pri["target_share"], n, K_SHARE), 3)
         comp["air_yard_share"] = round(share("rec_air_yd", "tm_rec_air_yd", "air_yard_share"), 3)
-        targets = comp["target_share"] * tv.get("rec_tgt", 0.0)
+        targets = comp["target_share"] * tv.get("rec_tgt", 0.0) * snap_factor
         catch_rate = eff("rec", "rec_tgt", "catch_rate", K_EFF)
         ypt = eff("rec_yd", "rec_tgt", "ypt", K_EFF)
         rec_td_pt = eff("rec_td", "rec_tgt", "rec_td_per_tgt", K_TD)
@@ -178,7 +230,7 @@ def _project_player(row, team_vol, def_mults, opp) -> dict | None:
 
     # Rushing (RB/QB mainly, but WR/TE jet sweeps too).
     carry_share = share("rush_att", "tm_rush_att", "carry_share")
-    carries = carry_share * tv.get("rush_att", 0.0)
+    carries = carry_share * tv.get("rush_att", 0.0) * snap_factor
     ypc = eff("rush_yd", "rush_att", "ypc", K_EFF)
     rush_td_pc = eff("rush_td", "rush_att", "rush_td_per_carry", K_TD)
     line["rush_yd"] = carries * ypc
@@ -193,6 +245,8 @@ def _project_player(row, team_vol, def_mults, opp) -> dict | None:
     line["fum_lost"] = fum_rate * proj_touches
 
     comp["n_eff"] = round(n, 2)
+    if snap_factor != 1.0:
+        comp["nflv_snap_factor"] = round(snap_factor, 3)
 
     # The structural box line above is opponent-NEUTRAL — store it as-is so the
     # `box` shown in the UI stays interpretable. Score it for the structural

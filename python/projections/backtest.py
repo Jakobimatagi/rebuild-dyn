@@ -26,6 +26,7 @@ from scipy.stats import pearsonr, spearmanr
 from . import USAGE_POSITIONS
 from . import sleeper as sl
 from .usage import add_usage_shares
+from .advanced import maybe_attach_nflverse
 from .defense import defense_multipliers
 from .environment import projected_denominators
 from .model import project_week
@@ -66,6 +67,7 @@ def run_backtest(season: int, start_week: int = DEFAULT_START_WEEK,
     if player_df.empty:
         raise SystemExit(f"No stats available for season {season} (offseason?).")
     player_df = add_usage_shares(player_df, team_df)
+    player_df = maybe_attach_nflverse(player_df, [season])
 
     rows = []
     for w in range(start_week, end_week + 1):

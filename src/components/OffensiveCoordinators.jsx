@@ -32,6 +32,9 @@ import {
 import { fetchOcAnalysis } from "../lib/aiOcAnalyzeApi.js";
 import { loadSession, saveSession, clearSession } from "./rookieAdmin/utils.js";
 import OcShareModal from "./OcShareModal.jsx";
+import CoachTreePanel from "./CoachTreePanel.jsx";
+import TeamDeepDive from "./TeamDeepDive.jsx";
+import { fetchSchemeSeasons, fetchPlayerUtilization } from "../lib/ocHistoryApi.js";
 
 const POS_ACCENT = {
   QB: "text-rose-300",
@@ -41,6 +44,41 @@ const POS_ACCENT = {
 };
 
 const TEAM_NAME_BY_ABBR = Object.fromEntries(NFL_TEAMS.map((t) => [t.abbr, t.name]));
+
+// Compact true-scheme fingerprint from nflverse play-by-play (team_scheme_seasons).
+// PROE = pass rate over expected (signed), EPA = expected points added / play,
+// aDOT = intended air yards / attempt, Pass% = dropback share.
+function SchemeCell({ scheme }) {
+  if (!scheme) return <span className="text-slate-700 text-xs">—</span>;
+  const num = (v) => (v == null || Number.isNaN(Number(v)) ? null : Number(v));
+  const proe = num(scheme.proe);
+  const epa = num(scheme.epa_play);
+  const adot = num(scheme.adot);
+  const passPct = num(scheme.pass_rate);
+  const sg = num(scheme.shotgun_rate);
+  const nh = num(scheme.no_huddle_rate);
+  const chip = (label, val, cls = "text-slate-300") =>
+    val == null ? null : (
+      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800/70 border border-white/10">
+        <span className="text-slate-500">{label}</span> <span className={cls}>{val}</span>
+      </span>
+    );
+  const signed = (v, d = 1) => (v > 0 ? "+" : "") + v.toFixed(d);
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap gap-1">
+        {chip("PROE", proe == null ? null : signed(proe), proe >= 0 ? "text-emerald-300" : "text-rose-300")}
+        {chip("EPA", epa == null ? null : signed(epa, 3), epa >= 0 ? "text-emerald-300" : "text-rose-300")}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {chip("aDOT", adot == null ? null : adot.toFixed(1))}
+        {chip("Pass", passPct == null ? null : `${Math.round(passPct * 100)}%`)}
+        {sg != null && chip("SG", `${Math.round(sg * 100)}%`)}
+        {nh != null && nh > 0.05 && chip("NH", `${Math.round(nh * 100)}%`)}
+      </div>
+    </div>
+  );
+}
 
 function SchemeChips({ name, size = "sm" }) {
   const schemes = getOcSchemes(name);
@@ -101,6 +139,11 @@ export default function OffensiveCoordinators() {
   const [dataError, setDataError] = useState("");
   const [dataLoading, setDataLoading] = useState(false);
 
+  // pbp-derived OC history (nflverse, published to Supabase). Loaded once when
+  // unlocked; empty arrays if the tables aren't published yet (graceful).
+  const [schemeSeasons, setSchemeSeasons] = useState([]);
+  const [utilByYear, setUtilByYear] = useState({}); // { 2024: [util rows] }
+
   // ── Session restore ─────────────────────────────────────────────────────────
   useEffect(() => {
     const session = loadSession();
@@ -159,6 +202,32 @@ export default function OffensiveCoordinators() {
       .finally(() => { if (!cancelled) setDataLoading(false); });
     return () => { cancelled = true; };
   }, [unlocked, season, statsByYear, rosterByYear]);
+
+  // ── pbp scheme fingerprints (once) + per-season player utilization ──────────
+  useEffect(() => {
+    if (!unlocked) return;
+    let cancelled = false;
+    fetchSchemeSeasons().then((rows) => { if (!cancelled) setSchemeSeasons(rows); });
+    return () => { cancelled = true; };
+  }, [unlocked]);
+
+  useEffect(() => {
+    if (!unlocked || utilByYear[season]) return;
+    let cancelled = false;
+    fetchPlayerUtilization(season).then((rows) => {
+      if (!cancelled) setUtilByYear((prev) => ({ ...prev, [season]: rows }));
+    });
+    return () => { cancelled = true; };
+  }, [unlocked, season, utilByYear]);
+
+  // Scheme fingerprint by team abbr for the selected season.
+  const schemeByTeam = useMemo(() => {
+    const out = {};
+    for (const r of schemeSeasons) {
+      if (Number(r.season) === Number(season)) out[r.team] = r;
+    }
+    return out;
+  }, [schemeSeasons, season]);
 
   // ── Derived: room totals + rank matrix for the selected season ─────────────
   const matrix = useMemo(() => {
@@ -326,6 +395,14 @@ export default function OffensiveCoordinators() {
             className={`py-3 text-sm font-semibold border-b-2 ${tab === "usage" ? "border-sky-400 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
             Usage Boards
           </button>
+          <button onClick={() => setTab("deepdive")}
+            className={`py-3 text-sm font-semibold border-b-2 ${tab === "deepdive" ? "border-sky-400 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
+            Team Lab
+          </button>
+          <button onClick={() => setTab("trees")}
+            className={`py-3 text-sm font-semibold border-b-2 ${tab === "trees" ? "border-emerald-400 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
+            Coach Trees
+          </button>
           <button onClick={() => setTab("editor")}
             className={`py-3 text-sm font-semibold border-b-2 ${tab === "editor" ? "border-emerald-400 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
             Editor
@@ -336,7 +413,7 @@ export default function OffensiveCoordinators() {
       <main className="max-w-6xl mx-auto px-6 py-6">
         {/* Filter bar — Coordinators tab is a flat list across all years, so
             the season selector is hidden there. Editor has its own year UI. */}
-        {tab !== "coordinators" && tab !== "editor" && tab !== "compare" && (
+        {tab !== "coordinators" && tab !== "editor" && tab !== "compare" && tab !== "trees" && tab !== "deepdive" && (
           <div className="flex flex-wrap items-center gap-2 mb-4">
             <span className="text-[10px] uppercase tracking-widest text-slate-500 mr-1">Season</span>
             {seasons.map((y) => (
@@ -433,6 +510,7 @@ export default function OffensiveCoordinators() {
               ocs={ocsBySeason}
               allOcs={allOcs}
               matrix={matrix}
+              schemeByTeam={schemeByTeam}
               loading={!matrix && !dataError}
               onOcClick={(name) => {
                 const oc = allOcs.find((o) => o.name.toLowerCase() === name.toLowerCase());
@@ -507,8 +585,24 @@ export default function OffensiveCoordinators() {
             ocsBySeason={ocsBySeason}
             season={season}
             loading={dataLoading}
+            util={utilByYear[season]}
           />
         )}
+
+        {/* Team Lab — per-team usage deep dive: multi-season player trends, the
+            upcoming OC's system profile, and predictive breakout/faller projection. */}
+        {tab === "deepdive" && (
+          <TeamDeepDive
+            teams={NFL_TEAMS}
+            ocData={effectiveOcData}
+            schemeSeasons={schemeSeasons}
+            upcomingSeason={seasons[0]}
+          />
+        )}
+
+        {/* Coach Trees tab — pbp-derived head-coach lineage (1999+) joined with the
+            OC map into mentor→disciple trees, each carrying its offenses' scheme DNA. */}
+        {tab === "trees" && <CoachTreePanel ocData={effectiveOcData} />}
 
         {/* Editor tab — edit any year's coordinators inline + add new year */}
         {tab === "editor" && (
@@ -624,7 +718,7 @@ function OcOraclePanel({ result, loading, error, fromCache, generatedAt, onRefre
 }
 
 // ── Team Rankings Table ──────────────────────────────────────────────────────
-function TeamRankingsTable({ teams, ocs, matrix, loading, onOcClick }) {
+function TeamRankingsTable({ teams, ocs, matrix, schemeByTeam = {}, loading, onOcClick }) {
   const [sort, setSort] = useState({ key: "team", dir: "asc" }); // key: team | QB | RB | WR | TE
 
   const rows = useMemo(() => {
@@ -632,8 +726,9 @@ function TeamRankingsTable({ teams, ocs, matrix, loading, onOcClick }) {
       ...t,
       oc: ocs[t.abbr] || null,
       ranks: matrix?.[t.abbr] || null,
+      scheme: schemeByTeam[t.abbr] || null,
     }));
-  }, [teams, ocs, matrix]);
+  }, [teams, ocs, matrix, schemeByTeam]);
 
   const sortedRows = useMemo(() => {
     const r = [...rows];
@@ -664,6 +759,7 @@ function TeamRankingsTable({ teams, ocs, matrix, loading, onOcClick }) {
                 <button onClick={() => toggleSort("team")} className="hover:text-slate-200">Team {sort.key === "team" ? (sort.dir === "asc" ? "↑" : "↓") : ""}</button>
               </th>
               <th className="text-left py-2.5 px-3">Coordinator</th>
+              <th className="text-left py-2.5 px-3" title="True scheme identity from nflverse play-by-play">Scheme (pbp)</th>
               {FANTASY_POSITIONS.map((pos) => (
                 <th key={pos} className="text-center py-2.5 px-3">
                   <button onClick={() => toggleSort(pos)} className={`hover:text-slate-200 ${POS_ACCENT[pos]}`}>
@@ -697,6 +793,7 @@ function TeamRankingsTable({ teams, ocs, matrix, loading, onOcClick }) {
                     <span className="text-slate-600 text-xs">—</span>
                   )}
                 </td>
+                <td className="py-2 px-3"><SchemeCell scheme={row.scheme} /></td>
                 {FANTASY_POSITIONS.map((pos) => {
                   const r = row.ranks?.[pos];
                   return (
@@ -718,7 +815,7 @@ function TeamRankingsTable({ teams, ocs, matrix, loading, onOcClick }) {
             ))}
             {sortedRows.length === 0 && (
               <tr>
-                <td colSpan={6} className="py-10 text-center text-slate-500 text-sm">No teams match.</td>
+                <td colSpan={7} className="py-10 text-center text-slate-500 text-sm">No teams match.</td>
               </tr>
             )}
           </tbody>
@@ -1566,7 +1663,93 @@ function ComparePanel({ oc, agg, accent }) {
 // League-wide boards for one season, mined from the same usage engine: alpha
 // target hogs, bell-cow backs, pass/run extremes, downfield offenses. Built for
 // "top 10" content pulls.
-function UsageLeaderboards({ players, stats, roster, ocsBySeason, season, loading }) {
+function UsageLeaderboards({ players, stats, roster, ocsBySeason, season, loading, util }) {
+  // Source toggle: Sleeper (2009+, completed air yards) vs nflverse play-by-play
+  // (1999+, TRUE intended air yards & exact shares).
+  const [source, setSource] = useState("sleeper");
+  const hasNflverse = Array.isArray(util) && util.length > 0;
+
+  const toggle = (
+    <div className="flex items-center gap-2 mb-3">
+      <span className="text-[10px] uppercase tracking-widest text-slate-500">Source</span>
+      <div className="inline-flex rounded-md border border-white/10 overflow-hidden">
+        <button onClick={() => setSource("sleeper")}
+          className={`px-2.5 py-1 text-xs font-semibold ${source === "sleeper" ? "bg-sky-500/20 text-sky-200" : "text-slate-400 hover:text-slate-200"}`}>
+          Sleeper
+        </button>
+        <button onClick={() => setSource("nflverse")} disabled={!hasNflverse}
+          title={hasNflverse
+            ? "True shares from play-by-play, back to 1999"
+            : `No play-by-play for ${season} yet — nflverse covers completed seasons (1999–2025). Pick an earlier season.`}
+          className={`px-2.5 py-1 text-xs font-semibold border-l border-white/10 ${source === "nflverse" ? "bg-emerald-500/20 text-emerald-200" : "text-slate-400 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed"}`}>
+          nflverse · 1999+
+        </button>
+      </div>
+      {source === "nflverse" && (
+        <span className="text-[10px] text-emerald-400/70">true intended air yards · exact shares</span>
+      )}
+      {!hasNflverse && (
+        <span className="text-[10px] text-slate-500">
+          no play-by-play for {season} yet — pick a completed season (≤ 2025)
+        </span>
+      )}
+    </div>
+  );
+
+  if (source === "nflverse" && hasNflverse) {
+    return <>{toggle}<NflverseUsageBoards util={util} season={season} /></>;
+  }
+
+  return <>{toggle}<SleeperUsageBoards players={players} stats={stats} roster={roster} ocsBySeason={ocsBySeason} season={season} loading={loading} /></>;
+}
+
+// nflverse play-by-play usage boards (player_utilization_seasons). Position-free —
+// target/carry-share boards inherently surface receivers/backs. aDOT here is TRUE
+// intended air yards / target, not Sleeper's completed-only depth.
+function NflverseUsageBoards({ util, season }) {
+  const rows = useMemo(() => (util || []).map((r) => ({
+    ...r,
+    adotTrue: Number(r.targets) > 0 ? Number(r.rec_air_yards) / Number(r.targets) : null,
+  })), [util]);
+
+  const label = (p) => `${p.name} · ${p.team}`;
+  const byTgt   = topBy(rows.filter((p) => Number(p.targets) >= 30), "target_share");
+  const byAir   = topBy(rows.filter((p) => Number(p.targets) >= 30), "air_yard_share");
+  const byAdot  = topBy(rows.filter((p) => Number(p.targets) >= 40), "adotTrue");
+  const byCarry = topBy(rows.filter((p) => Number(p.carries) >= 40), "carry_share");
+  const byRzTgt = topBy(rows.filter((p) => Number(p.targets) >= 20), "rz_target_share");
+  const byRzCar = topBy(rows.filter((p) => Number(p.carries) >= 20), "rz_carry_share");
+
+  return (
+    <div className="space-y-4">
+      <div className="text-[11px] text-slate-500">
+        {season} season · nflverse play-by-play · exact team-denominator shares · min volume applied
+      </div>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <LeaderBoard title="Target Share" accent="text-sky-300"
+          rows={byTgt} label={label} value={(p) => pct(p.target_share, 1)}
+          sub={(p) => `${p.targets} tgt`} />
+        <LeaderBoard title="Air-Yard Share" accent="text-sky-300"
+          rows={byAir} label={label} value={(p) => pct(p.air_yard_share, 1)}
+          sub={(p) => `${Math.round(p.rec_air_yards)} air yds`} />
+        <LeaderBoard title="True aDOT (40+ tgt)" accent="text-amber-300"
+          rows={byAdot} label={label} value={(p) => dec(p.adotTrue)}
+          sub={(p) => `${p.targets} tgt`} />
+        <LeaderBoard title="RB Carry Share" accent="text-emerald-300"
+          rows={byCarry} label={label} value={(p) => pct(p.carry_share, 1)}
+          sub={(p) => `${p.carries} car`} />
+        <LeaderBoard title="RZ Target Share" accent="text-rose-300"
+          rows={byRzTgt} label={label} value={(p) => pct(p.rz_target_share, 0)}
+          sub={(p) => `${p.targets} tgt`} />
+        <LeaderBoard title="RZ Carry Share" accent="text-rose-300"
+          rows={byRzCar} label={label} value={(p) => pct(p.rz_carry_share, 0)}
+          sub={(p) => `${p.carries} car`} />
+      </div>
+    </div>
+  );
+}
+
+function SleeperUsageBoards({ players, stats, roster, ocsBySeason, season, loading }) {
   const data = useMemo(() => {
     if (!players || !stats || !roster) return null;
     return buildSeasonUsage(players, stats, roster, ocsBySeason, { minGp: 4 });
