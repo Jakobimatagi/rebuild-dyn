@@ -536,14 +536,217 @@ function Stat({ label, value, color, hint }) {
   );
 }
 
-function PredictionSection({ prediction }) {
+// Assemble the player's score/percentile path: past production percentiles →
+// current grade → the 3-yr projection, with a ceiling/floor band on the future
+// derived from how comparable players actually panned out (falling back to a
+// breakout/bust-scaled spread when comps lack forward data).
+function buildTrajectoryChart(prediction, h) {
+  const past = [
+    { label: h.lastSeasonYear ? String(h.lastSeasonYear - 2) : "−2", value: h.pctileOlder, kind: "past" },
+    { label: h.lastSeasonYear ? String(h.lastSeasonYear - 1) : "−1", value: h.pctilePrev, kind: "past" },
+    { label: h.lastSeasonYear ? String(h.lastSeasonYear) : "Last", value: h.pctileLast, kind: "past" },
+  ].filter((p) => p.value != null && p.value > 0);
+  const now = { label: "Now", value: Math.max(1, Math.min(99, h.score || 0)), kind: "now" };
+  const fut = (prediction.projections || []).map((p) => ({
+    label: `'${String((h.lastSeasonYear || 0) + p.yearsAhead).slice(2)}`,
+    value: p.score, kind: "future", yearsAhead: p.yearsAhead, age: p.age,
+  }));
+  const points = [...past, now, ...fut];
+
+  const comps = prediction.comps || [];
+  const band = fut.map((p) => {
+    const vals = comps.map((c) => c[`future${p.yearsAhead}`]).filter((v) => v != null && Number.isFinite(v));
+    let ceiling, floor;
+    if (vals.length >= 2) {
+      ceiling = Math.max(p.value, ...vals);
+      floor = Math.min(p.value, ...vals);
+    } else {
+      const spread = 8 + 5 * p.yearsAhead;
+      ceiling = p.value + spread * (0.5 + (prediction.breakoutProb || 0) / 200);
+      floor = p.value - spread * (0.5 + (prediction.bustRisk || 0) / 200);
+    }
+    return {
+      yearsAhead: p.yearsAhead,
+      value: p.value,
+      ceiling: Math.round(Math.min(99, ceiling)),
+      floor: Math.round(Math.max(1, floor)),
+    };
+  });
+  return { points, band, nowIndex: past.length };
+}
+
+function PlayerTrajectoryChart({ chart }) {
+  const { points, band, nowIndex } = chart;
+  if (points.length < 2) return null;
+
+  const W = 360, H = 180, padL = 26, padR = 12, padT = 12, padB = 24;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const n = points.length;
+  const x = (i) => padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const y = (v) => padT + (1 - Math.max(0, Math.min(99, v)) / 99) * plotH;
+
+  // Band polygon: from the "now" point, out along future ceilings, back along floors.
+  const futStart = nowIndex; // index of first future point = nowIndex + 1; anchor band at "now"
+  const nowVal = points[nowIndex]?.value ?? 50;
+  const ceilPath = [`${x(nowIndex)},${y(nowVal)}`];
+  const floorPath = [];
+  band.forEach((b, k) => {
+    const xi = x(nowIndex + 1 + k);
+    ceilPath.push(`${xi},${y(b.ceiling)}`);
+    floorPath.push(`${xi},${y(b.floor)}`);
+  });
+  floorPath.reverse();
+  floorPath.push(`${x(nowIndex)},${y(nowVal)}`);
+  const bandPoly = [...ceilPath, ...floorPath].join(" ");
+
+  const linePts = points.map((p, i) => `${x(i)},${y(p.value)}`).join(" ");
+  const dotColor = (p) => (p.kind === "past" ? "#64748b" : getColor(getVerdict(p.value)));
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      {[25, 50, 75].map((g) => (
+        <g key={g}>
+          <line x1={padL} y1={y(g)} x2={W - padR} y2={y(g)} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+          <text x={padL - 4} y={y(g) + 3} textAnchor="end" fontSize="8" fill="#4a5264">{g}</text>
+        </g>
+      ))}
+      {/* ceiling/floor envelope */}
+      {band.length > 0 && <polygon points={bandPoly} fill="rgba(0,245,160,0.10)" stroke="none" />}
+      {/* now divider */}
+      <line x1={x(nowIndex)} y1={padT} x2={x(nowIndex)} y2={padT + plotH}
+        stroke="rgba(255,255,255,0.18)" strokeWidth="1" strokeDasharray="3 3" />
+      {/* trajectory line */}
+      <polyline points={linePts} fill="none" stroke="#9aa4bf" strokeWidth="1.5" />
+      {/* dots + x labels */}
+      {points.map((p, i) => (
+        <g key={i}>
+          <circle cx={x(i)} cy={y(p.value)} r={p.kind === "now" ? 3.5 : 2.6}
+            fill={dotColor(p)} stroke="#0b0e16" strokeWidth="1" />
+          <text x={x(i)} y={H - 8} textAnchor="middle" fontSize="8"
+            fill={p.kind === "now" ? "#c0c8e0" : "#5a6478"}>{p.label}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+function DynastyValueHeadline({ dynastyValue }) {
+  const { value, tier, confidence, breakdown } = dynastyValue;
+  const c = getColor(getVerdict(breakdown?.modelScore ?? value));
+  const confColor =
+    confidence === "high" ? "#00f5a0" : confidence === "medium" ? "#ffd166" : "#808898";
+  const usesProj = breakdown?.projPctile != null;
+
+  const Cell = ({ label, val }) => (
+    <div style={{ textAlign: "center", flex: 1 }}>
+      <div style={{ fontSize: 9, color: "#808898", marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: "#d1d7ea" }}>{val ?? "—"}</div>
+    </div>
+  );
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        marginBottom: 16,
+        padding: "12px 14px",
+        borderRadius: 6,
+        background: `${c}10`,
+        border: `1px solid ${c}33`,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ fontSize: 32, fontWeight: 800, color: c, lineHeight: 1 }}>{value}</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#d1d7ea" }}>
+            Fused Dynasty Value
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                color: c,
+                background: `${c}1e`,
+                border: `1px solid ${c}44`,
+                borderRadius: 3,
+                padding: "2px 7px",
+              }}
+            >
+              {tier}
+            </span>
+            <span style={{ fontSize: 10, color: confColor }}>
+              {confidence} confidence
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Component breakdown: present + the 3 projected years on the 0-99 grade
+          scale, plus the nflverse weekly-projection percentile when it fed in. */}
+      <div style={{ display: "flex", gap: 4 }}>
+        <Cell label="NOW" val={breakdown?.present} />
+        <Cell label="YR 1" val={breakdown?.y1} />
+        <Cell label="YR 2" val={breakdown?.y2} />
+        <Cell label="YR 3" val={breakdown?.y3} />
+        <Cell label="MKT" val={breakdown?.market != null ? Math.round(breakdown.market) : null} />
+      </div>
+
+      <div style={{ fontSize: 9, color: "#6a7282", lineHeight: 1.4 }}>
+        {usesProj
+          ? `Fuses the age-curve trajectory, current grade, and the nflverse-enriched weekly projection (forward production ${breakdown.projPctile}th pctile), anchored to market.`
+          : "Fuses the age-curve trajectory and current grade, anchored to market (weekly projection unavailable for this player)."}
+      </div>
+    </div>
+  );
+}
+
+function PredictionSection({ prediction, dynastyValue, history }) {
   if (!prediction) return null;
   const { projections, trajectory, dynastyOutlook, breakoutProb, bustRisk, comps, keyInsights } = prediction;
+  const chart = history ? buildTrajectoryChart(prediction, history) : null;
+
+  // Compact "why it trends this way" drivers shown beside the chart; the detailed
+  // Model Insights list renders further down.
+  const drivers = [];
+  if (trajectory) drivers.push({ label: `${trajectory.icon} ${trajectory.label}`, color: trajectory.color });
+  if (breakoutProb > 0) drivers.push({ label: `Breakout ${breakoutProb}%`, color: "#00f5a0" });
+  if (bustRisk > 0) drivers.push({ label: `Bust ${bustRisk}%`, color: "#ff6b35" });
+  if (dynastyValue?.tier) drivers.push({ label: dynastyValue.tier, color: getColor(getVerdict(dynastyValue.value)) });
+  if (history?.age != null) drivers.push({ label: `Age ${history.age}`, color: "#9aa4bf" });
 
   return (
     <>
       {DIVIDER}
       <SectionLabel>Dynasty Prediction Model</SectionLabel>
+
+      {dynastyValue && <DynastyValueHeadline dynastyValue={dynastyValue} />}
+
+      {/* Trajectory chart: past production → now → projection w/ ceiling-floor band */}
+      {chart && chart.points.length >= 2 && (
+        <div style={{ marginBottom: 16, padding: "12px 14px 8px", borderRadius: 6, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+            <div style={{ fontSize: 10, color: "#808898", textTransform: "uppercase", letterSpacing: 0.5 }}>
+              Career Trajectory
+            </div>
+            <div style={{ fontSize: 9, color: "#5a6478" }}>
+              production %ile → grade → projection · shaded = ceiling/floor
+            </div>
+          </div>
+          <PlayerTrajectoryChart chart={chart} />
+          {drivers.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+              {drivers.map((d, i) => (
+                <span key={i} style={{ fontSize: 10, fontWeight: 600, color: d.color, background: `${d.color}14`, border: `1px solid ${d.color}33`, borderRadius: 3, padding: "2px 8px" }}>
+                  {d.label}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Outlook + trajectory row */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
@@ -797,6 +1000,7 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, ageCurves,
     peakPctile, currentPctile, pctileLast, pctilePrev, pctileOlder,
     marketValue, fantasyCalcValue, fantasyCalcRank, fantasyCalcTrend,
     prediction,
+    dynastyValue,
     ocOutlook,
   } = player;
 
@@ -1084,7 +1288,13 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, ageCurves,
         </div>
 
         {/* ── Prediction ── */}
-        {prediction && <PredictionSection prediction={prediction} />}
+        {prediction && (
+          <PredictionSection
+            prediction={prediction}
+            dynastyValue={dynastyValue}
+            history={{ pctileOlder, pctilePrev, pctileLast, score, lastSeasonYear, age }}
+          />
+        )}
 
         {/* ── Market value ── */}
         {(marketValue != null || fantasyCalcValue != null) && (

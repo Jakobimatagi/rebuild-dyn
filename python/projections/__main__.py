@@ -25,6 +25,7 @@ import pandas as pd
 
 from . import sleeper as sl
 from .usage import add_usage_shares
+from .advanced import maybe_attach_nflverse
 from .defense import defense_multipliers
 from .environment import projected_denominators
 from .model import project_week, EWMA_HALFLIFE
@@ -71,6 +72,7 @@ def build_projection(season: int, week: int, blend_alpha: float = 0.8):
         pd.concat([f[0] for f in frames], ignore_index=True),
         pd.concat([f[1] for f in frames], ignore_index=True),
     )
+    player_df = maybe_attach_nflverse(player_df)
     # Team volume + defense come from the single most-recent season with data.
     recent_p, recent_t = frames[0]
     recent_p = add_usage_shares(recent_p, recent_t)
@@ -110,6 +112,123 @@ def _resolve_season(args) -> int:
     if getattr(args, "season", None):
         return int(args.season)
     return int(sl.get_state().get("season") or 0)
+
+
+def cmd_nflverse_check(args):
+    """Self-test the nflverse connection end to end: pull a season, build the ID
+    crosswalk, join, and report coverage. No model wiring — just proves the data
+    layer fetches, caches, and maps to Sleeper IDs."""
+    from . import nflverse as nv
+    from .advanced import advanced_features
+
+    seasons = list(range(args.season - 2, args.season + 1))
+    print(f"nflverse connection check — seasons {seasons[0]}-{seasons[-1]}\n")
+
+    xwalk = nv.id_crosswalk(seasons)
+    gsis = xwalk["gsis_id"].notna().sum() if "gsis_id" in xwalk.columns else 0
+    pfr = xwalk["pfr_id"].notna().sum() if "pfr_id" in xwalk.columns else 0
+    print(f"crosswalk: {len(xwalk)} sleeper ids  |  gsis linked {gsis}  |  pfr linked {pfr}")
+
+    feats = advanced_features(seasons)
+    if feats.empty:
+        print("\nNo features produced — check upstream availability.")
+        return
+    cols = [c for c in feats.columns if c.startswith("nflv_")]
+    print(f"\nfeatures: {len(feats):,} player-week rows  |  {len(cols)} nflv_* columns")
+    print(f"unique players mapped to a sleeper id: {feats['sleeper_id'].nunique()}")
+    print("\nper-column non-null coverage:")
+    for c in cols:
+        nn = feats[c].notna().sum()
+        print(f"  {c:32s} {nn:6,d}  ({100*nn/len(feats):4.0f}%)")
+
+    # Spot-check: most-targeted receivers in the target season by nflverse share.
+    tgt = feats[feats["season"] == args.season]
+    if "nflv_target_share" in tgt.columns and not tgt.empty:
+        top = (tgt.groupby("sleeper_id")["nflv_target_share"].mean()
+               .sort_values(ascending=False).head(8))
+        names = _sleeper_names()
+        print(f"\ntop avg target share — {args.season} (sleeper_id -> name):")
+        for sid, v in top.items():
+            print(f"  {sid:>8s}  {names.get(sid, '?'):24s} {v:.3f}")
+
+
+def _sleeper_names() -> dict:
+    try:
+        players = sl.get_players()
+        return {pid: (p.get("full_name") or "") for pid, p in players.items()}
+    except Exception:
+        return {}
+
+
+def cmd_scheme_check(args):
+    """Self-test the pbp scheme + coach aggregation: build fingerprints for a
+    couple seasons and print spot-checks that should match the eye test."""
+    from .scheme import team_scheme_seasons, coach_history, player_utilization_seasons
+
+    seasons = [args.season - 1, args.season]
+    print(f"scheme fingerprints — seasons {seasons[0]}-{seasons[-1]}\n")
+    sf = team_scheme_seasons(seasons)
+    if sf.empty:
+        print("No scheme rows produced — check upstream availability.")
+        return
+    cur = sf[sf["season"] == args.season].copy()
+    print(f"{len(sf)} team-season rows  |  {len(cur)} teams in {args.season}\n")
+
+    def top(col, label, n=5, asc=False):
+        s = cur.sort_values(col, ascending=asc).head(n)
+        print(f"-- {label} ({args.season}) --")
+        for _, r in s.iterrows():
+            print(f"   {r['team']:>3}  {col}={r[col]}  coach={r['head_coach']}")
+        print()
+
+    top("proe", "Most pass-over-expected (PROE)")
+    top("adot", "Deepest avg air yards (aDOT)")
+    top("epa_play", "Best offensive EPA/play")
+    top("no_huddle_rate", "Most no-huddle")
+
+    ch = coach_history(seasons)
+    primary = ch[ch["primary"]]
+    print(f"coach history: {len(ch)} stints, {primary['head_coach'].nunique()} primary HCs")
+    # Spot-check a few stable franchises against known coaches.
+    for team in ("KC", "BAL", "SF", "PHI"):
+        row = primary[(primary["season"] == args.season) & (primary["team"] == team)]
+        if not row.empty:
+            print(f"   {team} {args.season}: {row.iloc[0]['head_coach']}")
+
+    # Historical utilization — true pbp shares. Test a recent + a deep-history
+    # season (pre-Sleeper) to prove 1999+ reach and the sleeper_id linkage.
+    print()
+    for yr in (args.season, 2005):
+        util = player_utilization_seasons([yr])
+        if util.empty:
+            print(f"utilization {yr}: no rows")
+            continue
+        linked = util["sleeper_id"].notna().sum() if "sleeper_id" in util.columns else 0
+        top = util.sort_values("target_share", ascending=False).head(3)
+        print(f"utilization {yr}: {len(util)} player-team rows, {linked} sleeper-linked. Top target shares:")
+        for _, r in top.iterrows():
+            sid = r.get("sleeper_id")
+            print(f"   {r['team']:>3} {r['name']:<22} tgt%={r['target_share']:.3f} air%={r['air_yard_share']:.3f}"
+                  f"{'  sleeper=' + str(sid) if pd.notna(sid) else ''}")
+
+
+def cmd_publish_oc(args):
+    """Build scheme fingerprints, coach history, and player utilization from pbp
+    for [start, end] and upsert all three to Supabase (service-role key)."""
+    from .scheme import team_scheme_seasons, coach_history, player_utilization_seasons
+    from .store import publish_scheme, publish_coach_history, publish_player_utilization
+
+    end = args.end or int(sl.get_state().get("season") or 0) or args.start
+    args = argparse.Namespace(**{**vars(args), "end": end})
+    seasons = list(range(args.start, args.end + 1))
+    print(f"Building OC history for {args.start}-{args.end} ({len(seasons)} seasons)…")
+    print("\n[1/3] scheme fingerprints (downloads play-by-play; cached after first run)…")
+    publish_scheme(team_scheme_seasons(seasons))
+    print("\n[2/3] coach history…")
+    publish_coach_history(coach_history(seasons))
+    print("\n[3/3] player utilization…")
+    publish_player_utilization(player_utilization_seasons(seasons))
+    print("\nDone.")
 
 
 def cmd_backtest(args):
@@ -209,6 +328,19 @@ def main(argv=None):
     pb.add_argument("--blend", type=float, default=0.8,
                     help="model<->Sleeper ensemble weight; 0.8 is the backtested optimum")
     pb.set_defaults(func=cmd_publish)
+
+    nv = sub.add_parser("nflverse-check", help="self-test the nflverse data connection + crosswalk coverage")
+    nv.add_argument("--season", type=int, default=2024, help="target season (also pulls the prior 2 for the crosswalk)")
+    nv.set_defaults(func=cmd_nflverse_check)
+
+    sc = sub.add_parser("scheme-check", help="self-test the pbp scheme + coach aggregation")
+    sc.add_argument("--season", type=int, default=2024, help="target season (also pulls the prior for context)")
+    sc.set_defaults(func=cmd_scheme_check)
+
+    oc = sub.add_parser("publish-oc", help="build + publish scheme/coach/utilization history to Supabase")
+    oc.add_argument("--start", type=int, default=2016, help="first season (pbp goes back to 1999)")
+    oc.add_argument("--end", type=int, default=None, help="last season (defaults to the current NFL season)")
+    oc.set_defaults(func=cmd_publish_oc)
 
     args = p.parse_args(argv)
     args.func(args)

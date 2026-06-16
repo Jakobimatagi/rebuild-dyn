@@ -135,6 +135,7 @@ export function buildRosterAnalysis(
   allDraftPicksMap = {},
   liveDraft = null,
   liveDraftPicks = [],
+  projPctileMap = null, // player_id → forward production percentile (weekly engine)
 ) {
   const currentYear = new Date().getFullYear();
   // Sleeper's `season` field on a draft can be the upcoming NFL season (2026)
@@ -252,6 +253,7 @@ export function buildRosterAnalysis(
       rosterAuditContext,
       ocOutlookContext,
       completedDraftSeasons,
+      projPctileMap,
     ),
   );
 

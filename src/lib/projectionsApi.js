@@ -5,6 +5,7 @@
 
 import { supabase } from "./supabase.js";
 import { fetchSleeper, safeLocalStorageWrite } from "./sleeperApi.js";
+import { projectionPercentiles } from "./dynastyValue.js";
 
 // Pure lineup/matchup math lives in its own dependency-free module so it can be
 // unit-tested in isolation (lineupMath.test.mjs). Re-exported for callers.
@@ -63,5 +64,57 @@ export async function fetchProjections(season, week) {
   } catch {
     // Table not migrated yet, network error, etc. — treat as "no projections".
     return { byPlayerId: new Map(), count: 0, season, week, unavailable: true };
+  }
+}
+
+/**
+ * Forward production percentile (0-99, within position) per Sleeper player_id,
+ * derived from the nflverse-enriched weekly projections — the bridge that feeds
+ * dynastyValue.computeDynastyValue's `projPctile`.
+ *
+ * "Season pace" = the mean projected PPR across all published weeks for the
+ * season, so a single noisy matchup doesn't define a player's forward signal.
+ * Returns an empty Map (never throws) when the table isn't migrated / no rows,
+ * so the fused dynasty value degrades gracefully to grade + age-curve + market.
+ */
+export async function fetchSeasonPaceProjPercentiles(season) {
+  if (!season) return new Map();
+  const cacheKey = `dyn_proj_pace_${season}`;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const { timestamp, rows } = JSON.parse(cached);
+      if (Date.now() - timestamp < ONE_HOUR_MS) return projectionPercentiles(rows);
+    }
+  } catch {
+    // ignore cache read issues
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("player_projections")
+      .select("player_id, position, proj_ppr")
+      .eq("season", season);
+    if (error) throw error;
+
+    // Average proj_ppr across the season's published weeks → one pace row/player.
+    const acc = new Map(); // player_id → { position, sum, n }
+    for (const r of data || []) {
+      if (r.proj_ppr == null) continue;
+      const id = String(r.player_id);
+      const cur = acc.get(id) || { position: r.position, sum: 0, n: 0 };
+      cur.sum += Number(r.proj_ppr);
+      cur.n += 1;
+      acc.set(id, cur);
+    }
+    const rows = [...acc.entries()].map(([player_id, v]) => ({
+      player_id,
+      position: v.position,
+      proj_ppr: v.n > 0 ? v.sum / v.n : null,
+    }));
+    safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), rows }));
+    return projectionPercentiles(rows);
+  } catch {
+    return new Map();
   }
 }
