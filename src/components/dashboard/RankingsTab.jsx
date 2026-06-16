@@ -1,8 +1,47 @@
 import { useState, useMemo } from "react";
 import { buildMarketPulse } from "../../lib/marketPulse";
 import { styles } from "../../styles";
+import PlayerDeepDiveModal from "./PlayerDeepDiveModal";
 
 const POSITIONS = ["ALL", "QB", "RB", "WR", "TE"];
+
+// Tier → color for the fused dynasty value chip (mirrors dynastyValue.valueTier order).
+const FUSED_TIER_COLORS = {
+  Cornerstone: "#00f5a0",
+  Foundation: "#38e8c6",
+  "Core Starter": "#ffd84d",
+  Contributor: "#ff9f43",
+  Depth: "#ff6b35",
+  Flier: "#8a91a8",
+};
+
+// Forward tilt = how far the fused model sits above/below the trailing grade.
+// Positive = usage/projection breakout, negative = fade. Mirrors the trade
+// analyzer's dynastyForwardMultiplier signal, expressed as a percentage.
+function forwardTilt(dv) {
+  const g = Number(dv?.breakdown?.grade);
+  const m = Number(dv?.breakdown?.modelScore);
+  if (!Number.isFinite(g) || !Number.isFinite(m) || g <= 0) return 0;
+  return Math.round((m / g - 1) * 100);
+}
+
+function FusedCell({ dv }) {
+  if (!dv) return <span style={{ color: "#5a6280" }}>—</span>;
+  const tilt = forwardTilt(dv);
+  const color = FUSED_TIER_COLORS[dv.tier] || "#c8cfe3";
+  const tiltColor = tilt > 0 ? "#00f5a0" : tilt < 0 ? "#ff6b35" : "#8a91a8";
+  const arrow = tilt > 0 ? "▲" : tilt < 0 ? "▼" : "•";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span style={{ color, fontWeight: 700 }}>{dv.value}</span>
+      {tilt !== 0 && (
+        <span style={{ color: tiltColor, fontSize: 10, fontWeight: 700 }}>
+          {arrow} {tilt > 0 ? `+${tilt}` : tilt}%
+        </span>
+      )}
+    </span>
+  );
+}
 
 const TIER_COLORS = {
   "1": "#00f5a0",
@@ -46,17 +85,52 @@ function FlagBadge({ label, color }) {
   );
 }
 
-export default function RankingsTab({ rosterAuditSource }) {
+export default function RankingsTab({
+  rosterAuditSource,
+  leagueTeams,
+  scoringWeights,
+  ageCurves,
+}) {
   const [posFilter, setPosFilter] = useState("ALL");
+  const [moversOnly, setMoversOnly] = useState(false);
+  const [deepDivePlayer, setDeepDivePlayer] = useState(null);
   const rankings = rosterAuditSource?.rankings || [];
 
+  // The fully enriched player (grade, prediction, fused dynasty value, etc.) lives
+  // only for players rostered in this league. Join by Sleeper id so a ranking row
+  // can open the same deep dive used elsewhere — and so the Fused column has data.
+  // Non-rostered players (most of the global RA board) have no enriched record, so
+  // they show "—" and aren't clickable.
+  const enrichedById = useMemo(() => {
+    const map = new Map();
+    (leagueTeams || []).forEach((team) => {
+      (team.enriched || []).forEach((p) => {
+        map.set(String(p.id), p);
+      });
+    });
+    return map;
+  }, [leagueTeams]);
+
+  const fusedFor = (sleeperId) => enrichedById.get(String(sleeperId))?.dynastyValue || null;
+  const hasFused = enrichedById.size > 0;
+
   const filtered = useMemo(() => {
-    const list =
+    let list =
       posFilter === "ALL"
         ? rankings
         : rankings.filter((p) => p.position === posFilter);
+    if (moversOnly && hasFused) {
+      // Surface this league's fused movers: players whose forward model diverges
+      // from their trailing grade, biggest breakouts first.
+      list = list
+        .filter((p) => enrichedById.has(String(p.sleeper_id)))
+        .sort(
+          (a, b) =>
+            forwardTilt(fusedFor(b.sleeper_id)) - forwardTilt(fusedFor(a.sleeper_id)),
+        );
+    }
     return list.slice(0, 200);
-  }, [rankings, posFilter]);
+  }, [rankings, posFilter, moversOnly, hasFused, enrichedById]);
 
   const pulse = useMemo(() => buildMarketPulse(rankings), [rankings]);
 
@@ -70,6 +144,15 @@ export default function RankingsTab({ rosterAuditSource }) {
 
   return (
     <div>
+      {deepDivePlayer && (
+        <PlayerDeepDiveModal
+          player={deepDivePlayer}
+          scoringWeights={scoringWeights}
+          ageCurves={ageCurves}
+          onClose={() => setDeepDivePlayer(null)}
+        />
+      )}
+
       <div style={styles.sectionLabel}>Dynasty Rankings</div>
       <div
         style={{
@@ -91,10 +174,37 @@ export default function RankingsTab({ rosterAuditSource }) {
         {" "}· {rosterAuditSource.totalPlayers} players
       </div>
 
+      {hasFused && (
+        <div
+          style={{
+            fontSize: 11,
+            color: "#8a91a8",
+            marginBottom: 12,
+            marginTop: -4,
+          }}
+        >
+          <span style={{ color: "#00f5a0", fontWeight: 700 }}>Fused</span> column
+          shows the usage-breakout-aware dynasty value for players rostered in your
+          league — the same forward signal now wired into the Trade analyzer.
+          ▲/▼ marks how far the projection leans off the current grade.{" "}
+          <span style={{ color: "#c8cfe3" }}>
+            Click any highlighted row to open its deep dive.
+          </span>
+        </div>
+      )}
+
       {pulse && <MarketPulsePanel pulse={pulse} />}
 
-      {/* Position filter */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+      {/* Position filter + fused-movers toggle */}
+      <div
+        style={{
+          display: "flex",
+          gap: 6,
+          marginBottom: 16,
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
         {POSITIONS.map((pos) => (
           <button
             key={pos}
@@ -118,6 +228,28 @@ export default function RankingsTab({ rosterAuditSource }) {
             {pos}
           </button>
         ))}
+        {hasFused && (
+          <button
+            onClick={() => setMoversOnly((v) => !v)}
+            title="Show only this league's players, sorted by the fused value's forward signal (usage breakouts first)"
+            style={{
+              marginLeft: "auto",
+              padding: "5px 14px",
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 1,
+              border: "1px solid",
+              borderColor: moversOnly ? "#00f5a0" : "rgba(255,255,255,0.1)",
+              borderRadius: 6,
+              background: moversOnly ? "rgba(0,245,160,0.12)" : "transparent",
+              color: moversOnly ? "#00f5a0" : "#c8cfe3",
+              cursor: "pointer",
+              textTransform: "uppercase",
+            }}
+          >
+            🔥 Fused Movers
+          </button>
+        )}
       </div>
 
       {/* Table */}
@@ -144,6 +276,14 @@ export default function RankingsTab({ rosterAuditSource }) {
               <th style={thStyle}>Age</th>
               <th style={thStyle}>Tier</th>
               <th style={{ ...thStyle, textAlign: "right" }}>Value</th>
+              {hasFused && (
+                <th
+                  style={{ ...thStyle, textAlign: "right" }}
+                  title="Fused dynasty value — age-curve trajectory + nflverse weekly projection, anchored to market. ▲/▼ = forward signal vs current grade."
+                >
+                  Fused
+                </th>
+              )}
               <th style={{ ...thStyle, textAlign: "right" }}>Pos Rank</th>
               <th style={{ ...thStyle, textAlign: "right" }}>7d Trend</th>
               <th style={{ ...thStyle, textAlign: "right" }}>30d Trend</th>
@@ -153,16 +293,24 @@ export default function RankingsTab({ rosterAuditSource }) {
           <tbody>
             {filtered.map((p, i) => {
               const tierColor = TIER_COLORS[p.tier] || "#8a91a8";
+              const enrichedPlayer = enrichedById.get(String(p.sleeper_id));
+              const clickable = !!enrichedPlayer;
               return (
                 <tr
                   key={p.sleeper_id || i}
+                  onClick={
+                    clickable ? () => setDeepDivePlayer(enrichedPlayer) : undefined
+                  }
+                  title={clickable ? `Open ${p.name}'s deep dive` : undefined}
                   style={{
                     borderBottom: "1px solid rgba(255,255,255,0.04)",
                     transition: "background 0.15s",
+                    cursor: clickable ? "pointer" : "default",
                   }}
                   onMouseEnter={(e) =>
-                    (e.currentTarget.style.background =
-                      "rgba(255,255,255,0.03)")
+                    (e.currentTarget.style.background = clickable
+                      ? "rgba(6,182,212,0.08)"
+                      : "rgba(255,255,255,0.03)")
                   }
                   onMouseLeave={(e) =>
                     (e.currentTarget.style.background = "transparent")
@@ -173,6 +321,13 @@ export default function RankingsTab({ rosterAuditSource }) {
                   </td>
                   <td style={{ ...tdStyle, fontWeight: 700, color: "#fff" }}>
                     {p.name}
+                    {clickable && (
+                      <span
+                        style={{ color: "#06b6d4", marginLeft: 6, fontSize: 10 }}
+                      >
+                        →
+                      </span>
+                    )}
                   </td>
                   <td style={tdStyle}>{p.position}</td>
                   <td style={tdStyle}>{p.team || "FA"}</td>
@@ -191,6 +346,11 @@ export default function RankingsTab({ rosterAuditSource }) {
                   <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700 }}>
                     {Number(p.value || 0).toLocaleString()}
                   </td>
+                  {hasFused && (
+                    <td style={{ ...tdStyle, textAlign: "right" }}>
+                      <FusedCell dv={enrichedPlayer?.dynastyValue || null} />
+                    </td>
+                  )}
                   <td
                     style={{
                       ...tdStyle,

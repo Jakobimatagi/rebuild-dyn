@@ -10,6 +10,7 @@ import {
   getRosterSurplusPositions,
 } from "./rosterBuilder";
 import { assignPositionRanks } from "./playerGrading";
+import { dynastyForwardMultiplier } from "./dynastyValue";
 
 // ---------------------------------------------------------------------------
 // Asset helpers
@@ -206,12 +207,17 @@ export function getAssetTradeValue(
   playerMarketMap,
   leagueContext,
   tradeMarket,
+  opts = {},
 ) {
-  // Trade value tracks FantasyCalc directly: a player/pick is worth exactly its
-  // FC market price (÷100), with no league position multiplier and no
-  // RosterAudit blend layered on top. FC already prices the league format
-  // (superflex, PPR, team count) via its query params, so any extra multiplier
-  // double-counts. RA still drives the Value Gap's "production" line elsewhere.
+  const { forwardAdjust = true } = opts;
+  // Trade value anchors to FantasyCalc: a player/pick starts at its FC market price
+  // (÷100), with no league position multiplier and no RosterAudit blend layered on
+  // top — FC already prices the league format (superflex, PPR, team count) via its
+  // query params, so those would double-count. The one deliberate departure is the
+  // fused forward tilt for players (dynastyForwardMultiplier): FC is a trailing
+  // market, so we lean each player's price toward the forward-looking fused dynasty
+  // value, letting the analyzer auto-adjust for usage breakouts. RA still drives the
+  // Value Gap's "production" line elsewhere.
   if (asset.type === "pick") {
     // pickFcValue resolves to FC's own pick value when present (FC dollar scale).
     const fcVal = pickFcValue(asset, asset.ownerPhase ?? null, leagueContext, null);
@@ -220,9 +226,13 @@ export function getAssetTradeValue(
 
   const player = playerMarketMap.get(String(asset.id)) || asset;
 
+  // Lean the trailing FC market price toward where the fused forward value says the
+  // player is heading (usage breakouts/declines). 1 when unavailable or disabled.
+  const fwd = forwardAdjust ? dynastyForwardMultiplier(player) : 1;
+
   const fc = Number(player.fantasyCalcValue || 0);
   if (fc > 0) {
-    return Math.max(1, Math.round(fc / FC_SCALE));
+    return Math.max(1, Math.round((fc / FC_SCALE) * fwd));
   }
 
   // Fallbacks when FC has no coverage for this player. dynastyMarketValue (the
@@ -231,10 +241,10 @@ export function getAssetTradeValue(
   // onto the trade scale with a low ceiling so it can't over-value filler.
   const dmv = Number(player.dynastyMarketValue || 0);
   if (dmv > 0) {
-    return Math.max(1, Math.round(dmv / FC_SCALE));
+    return Math.max(1, Math.round((dmv / FC_SCALE) * fwd));
   }
   const score = Number(player.score || player.marketValue || 0);
-  return Math.max(1, Math.round((score / 100) * 15));
+  return Math.max(1, Math.round((score / 100) * 15 * fwd));
 }
 
 function pushRosterAsset(map, rosterId, asset) {

@@ -342,7 +342,12 @@ export default function Dashboard({
       )}
 
       {activeTab === "rankings" && (
-        <RankingsTab rosterAuditSource={analysis.rosterAuditSource} />
+        <RankingsTab
+          rosterAuditSource={analysis.rosterAuditSource}
+          leagueTeams={analysis.leagueTeams}
+          scoringWeights={analysis.scoringWeights}
+          ageCurves={analysis.ageCurves}
+        />
       )}
 
       {activeTab === "rookies" && <RookieRankingsTab />}

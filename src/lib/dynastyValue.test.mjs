@@ -9,6 +9,7 @@ import {
   computeDynastyValue,
   projectionPercentiles,
   valueTier,
+  dynastyForwardMultiplier,
 } from "./dynastyValue.js";
 
 // A young ascending WR: same current grade as an aging RB, but a rising
@@ -121,5 +122,41 @@ describe("projectionPercentiles", () => {
       { player_id: "b", position: "WR", proj_ppr: null },
     ]);
     assert.equal(pct.size, 0);
+  });
+});
+
+describe("dynastyForwardMultiplier", () => {
+  const withBreakdown = (grade, model) => ({
+    dynastyValue: { value: model, breakdown: { grade, modelScore: model } },
+  });
+
+  it("is a no-op (1) when there is no fused value", () => {
+    assert.equal(dynastyForwardMultiplier({}), 1);
+    assert.equal(dynastyForwardMultiplier({ dynastyValue: null }), 1);
+  });
+
+  it("is ~1 when the forward model matches the trailing grade", () => {
+    assert.equal(dynastyForwardMultiplier(withBreakdown(70, 70)), 1);
+  });
+
+  it("lifts above 1 for a forward breakout (model > grade)", () => {
+    const m = dynastyForwardMultiplier(withBreakdown(60, 80));
+    // 1 + (80/60 - 1) * 0.7 = 1.233, within clamp
+    assert.ok(Math.abs(m - 1.2333) < 0.01, `got ${m}`);
+  });
+
+  it("trims below 1 for a forward decline (model < grade)", () => {
+    assert.ok(dynastyForwardMultiplier(withBreakdown(80, 64)) < 1);
+  });
+
+  it("clamps extreme breakouts and declines to the tilt bounds", () => {
+    assert.equal(dynastyForwardMultiplier(withBreakdown(20, 99)), 1.28);
+    assert.equal(dynastyForwardMultiplier(withBreakdown(99, 10)), 0.82);
+  });
+
+  it("a fused breakout player end-to-end lifts the trade multiplier", () => {
+    const dv = computeDynastyValue(youngAscending, { projPctile: 85 });
+    const m = dynastyForwardMultiplier({ dynastyValue: dv });
+    assert.ok(m > 1, `expected breakout lift, got ${m}`);
   });
 });
