@@ -244,8 +244,9 @@ export default function BulkImport({ prospects, annotations = {}, onReload }) {
         )}
 
         <p className="text-[10px] text-slate-500 leading-snug">
-          FBS only. Pulls two seasons ({"{year-1, year}"}) per player. Targets, catch rate, and age
-          aren't in CFBD — fill those by hand. Re-running a season safely updates the same records.
+          FBS only. Pulls two seasons ({"{year-1, year}"}) per player. Age is estimated from college
+          class standing (Fr ≈ 19 … Sr ≈ 22) — refine by hand. Targets and catch rate aren't in CFBD.
+          Re-running a season safely updates the same records.
         </p>
       </div>
     </div>

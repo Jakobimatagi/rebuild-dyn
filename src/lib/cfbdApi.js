@@ -23,6 +23,37 @@ async function getJson(params) {
 const str = (v) => (v === null || v === undefined ? "" : String(v));
 const pct = (v) => (v === null || v === undefined ? "" : String(Math.round(v * 1000) / 10));
 
+// Estimate a college-season age from CFBD roster class standing. CFBD's `year`
+// is the eligibility class (1=Fr, 2=So, 3=Jr, 4=Sr, 5=5th year). Freshmen are
+// ~18–19, so age ≈ 18 + class (Fr 19 · So 20 · Jr 21 · Sr 22). Redshirts and
+// COVID years make this an estimate — it's a workaround until ages are edited
+// by hand — so we leave it clamped to a sane college range.
+function classToAge(cls) {
+  const c = Number(cls);
+  if (!c || c < 1) return null;
+  return Math.min(25, 18 + c);
+}
+
+// Fill any blank per-season `age` from class standing. Whatever class data we
+// have (a single season is enough) anchors the rest by year offset; with none,
+// we fall back to treating the earliest season as a freshman. Seasons must be
+// sorted ascending by year. Never overwrites an age that's already set.
+function backfillAges(seasons) {
+  const clamp = (a) => String(Math.max(17, Math.min(25, Math.round(a))));
+  const anchor = seasons.find((s) => s.age && s.season_year);
+  if (anchor) {
+    const ay = Number(anchor.season_year), aa = Number(anchor.age);
+    for (const s of seasons)
+      if (!s.age && s.season_year) s.age = clamp(aa + (Number(s.season_year) - ay));
+  } else {
+    const y0 = seasons.find((s) => s.season_year)?.season_year;
+    if (y0 != null)
+      for (const s of seasons)
+        if (!s.age && s.season_year) s.age = clamp(19 + (Number(s.season_year) - Number(y0)));
+  }
+  return seasons;
+}
+
 // CFBD search can return one row per (player, team); collapse to unique players
 // keeping the most recent / first-listed team.
 export async function searchPlayers(term) {
@@ -43,6 +74,8 @@ function mapSeason(position, s) {
   out.season_year = str(s.year);
   out.school = str(s.team);
   out.games = str(s.games);
+  const age = classToAge(s.classYear);
+  if (age != null) out.age = String(age);
 
   const rec = s.receiving || {};
   const rush = s.rushing || {};
@@ -100,7 +133,7 @@ export async function fetchCareerSeasons(playerId, position, { from, to } = {}) 
     ...(from ? { from: String(from) } : {}),
     ...(to ? { to: String(to) } : {}),
   });
-  const seasons = (data.seasons || []).map((s) => mapSeason(position, s));
+  const seasons = backfillAges((data.seasons || []).map((s) => mapSeason(position, s)));
   return {
     player: data.player, seasons,
     dominatorByYear: byYear(data.seasons, "dominator"),
@@ -171,7 +204,7 @@ export async function fetchClassImport(year, position, limit = 50) {
     playerId: r.playerId,
     name: r.name,
     position,
-    seasons: (r.seasons || []).map((s) => mapSeason(position, s)),
+    seasons: backfillAges((r.seasons || []).map((s) => mapSeason(position, s))),
     draftCapital: r.draft ? draftToCapitalKey(r.draft) : "",
     dominatorByYear: byYear(r.seasons, "dominator"),
     qbHelpByYear: byYear(r.seasons, "qbHelp"),

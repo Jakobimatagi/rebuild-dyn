@@ -59,7 +59,10 @@ export default function CfbdAutofill({ position, name, projectedDraftYear, onApp
     try {
       const from = Math.max(2010, draftYear - 5);
       const to = Math.min(currentYear, draftYear - 1);
-      const { seasons, player, dominatorByYear, qbHelpByYear } = await fetchCareerSeasons(row.id, position, { from, to });
+      const {
+        seasons, player, dominatorByYear, qbHelpByYear,
+        ppaByYear, teamCtxByYear, programByYear, usageByYear,
+      } = await fetchCareerSeasons(row.id, position, { from, to });
       if (!seasons.length) {
         setError(`No ${position} season stats found for ${row.name} (${from}–${to}). Try a different position or year range.`);
         setBusy(false);
@@ -186,7 +189,8 @@ export default function CfbdAutofill({ position, name, projectedDraftYear, onApp
       <p className="text-[10px] text-slate-500 leading-snug">
         Fills counting + efficiency stats, games, target-share estimate, NFL capital & recruiting pedigree,
         plus advanced context (per-play PPA, usage profile, team offense pace/efficiency, SP+ & roster talent).
-        Targets, catch rate, and age aren't in CFBD — enter those by hand.
+        Age is estimated from college class standing (Fr ≈ 19 … Sr ≈ 22); refine it by hand.
+        Targets and catch rate aren't in CFBD — enter those by hand.
       </p>
     </div>
   );
