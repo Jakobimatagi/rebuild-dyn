@@ -59,6 +59,61 @@ function rowsToStatMap(rows, playerId, category) {
 
 const num = (v) => (v === undefined || v === null || v === "" ? null : Number(v));
 
+// ── Enrichment extractors ────────────────────────────────────────────────────
+// Compact, prospect-relevant slices of CFBD's richer endpoints. Each returns a
+// small object (or null) that rides along on the season and gets collapsed to a
+// by-year map client-side, then stashed in the prospect's `athletic` bag.
+
+// Player PPA (CFBD's EPA): per-play value + situational + cumulative.
+// From /ppa/players/season.
+function pickPlayerPPA(row) {
+  if (!row) return null;
+  const a = row.averagePPA || {}, t = row.totalPPA || {};
+  const out = {
+    all: num(a.all), pass: num(a.pass), rush: num(a.rush),
+    third: num(a.thirdDown), total: num(t.all),
+  };
+  return Object.values(out).some((v) => v != null) ? out : null;
+}
+
+// Team offense environment: pace, pass-lean, and efficiency — the context that
+// inflates or deflates a player's raw counting stats. From /stats/season/advanced.
+function pickTeamCtx(row) {
+  if (!row) return null;
+  const o = row.offense || {};
+  const out = {
+    pace: num(o.plays), passRate: num(o.passingPlays?.rate),
+    success: num(o.successRate), expl: num(o.explosiveness),
+    ppa: num(o.ppa), ppo: num(o.pointsPerOpportunity),
+  };
+  return Object.values(out).some((v) => v != null) ? out : null;
+}
+
+// Program strength: SP+ overall/offense (rating + national rank) and roster
+// talent composite. From /ratings/sp + /talent.
+function pickProgram(spRow, talent) {
+  const o = spRow?.offense || {};
+  const out = {
+    sp: num(spRow?.rating), spRank: num(spRow?.ranking),
+    spOff: num(o.rating), spOffRank: num(o.ranking),
+    talent: num(talent),
+  };
+  return Object.values(out).some((v) => v != null) ? out : null;
+}
+
+// Full player usage profile (we used to keep only the pass share). Overall +
+// rush + situational shares describe how feature vs situational the role was.
+// From /player/usage.
+function pickUsage(u) {
+  const x = u?.usage;
+  if (!x) return null;
+  const out = {
+    overall: num(x.overall), pass: num(x.pass), rush: num(x.rush),
+    third: num(x.thirdDown), passingDowns: num(x.passingDowns),
+  };
+  return Object.values(out).some((v) => v != null) ? out : null;
+}
+
 // RB total-offense dominator: the back's share of the team's scrimmage yards and
 // TDs (rush + receiving), averaged, as a percentage. `teamTotal` = { yds, td }
 // summed across every player on that team-season. ~35%+ is a true workhorse.
@@ -180,12 +235,27 @@ async function buildCareer({ playerId, position, from, to, key }) {
     seasonYears.map(async (y) => {
       const { team } = byYear.get(y);
       if (!team) return { y, games: null, passUsage: null };
-      const [games, usageRows] = await Promise.all([
+      const T = encodeURIComponent(team);
+      const [games, usageRows, ppaRows, advRows, spRows, talentRows] = await Promise.all([
         gamesPlayed(y, team, primaryCat, playerId, key).catch(() => null),
-        cfbd(`/player/usage?year=${y}&team=${encodeURIComponent(team)}`, key).catch(() => []),
+        cfbd(`/player/usage?year=${y}&team=${T}`, key).catch(() => []),
+        cfbd(`/ppa/players/season?year=${y}&team=${T}`, key).catch(() => []),
+        cfbd(`/stats/season/advanced?year=${y}&team=${T}`, key).catch(() => []),
+        cfbd(`/ratings/sp?year=${y}&team=${T}`, key).catch(() => []),
+        cfbd(`/talent?year=${y}`, key).catch(() => []),
       ]);
       const u = (usageRows || []).find((r) => String(r.id) === String(playerId));
-      return { y, games, passUsage: u?.usage?.pass ?? null, name: u?.name };
+      const pp = (ppaRows || []).find((r) => String(r.id) === String(playerId));
+      const sp = (spRows || []).find((r) => r.team === team) || (spRows || [])[0];
+      const tal = (talentRows || []).find((r) => r.team === team)?.talent ?? null;
+      return {
+        y, games, name: u?.name,
+        passUsage: u?.usage?.pass ?? null,
+        usage: pickUsage(u),
+        ppa: pickPlayerPPA(pp),
+        teamCtx: pickTeamCtx((advRows || [])[0]),
+        program: pickProgram(sp, tal),
+      };
     }),
   );
   const enrichByYear = new Map(enrich.map((e) => [e.y, e]));
@@ -227,6 +297,10 @@ async function buildCareer({ playerId, position, from, to, key }) {
     const s = assembleSeason({ year: y, team, conference, cats, games: e.games, passUsage: e.passUsage });
     if (pos === "RB") s.dominator = rbDominator(cats, teamTotals[y]);
     if (pos === "WR" || pos === "TE") s.qbHelp = qbQualByYear[y]?.[team] || null;
+    s.ppa = e.ppa || null;
+    s.teamCtx = e.teamCtx || null;
+    s.program = e.program || null;
+    s.usage = e.usage || null;
     return s;
   });
 
@@ -365,16 +439,41 @@ async function buildClassImport({ year, position, limit, fbsOnly, key }) {
     .sort((a, b) => b.v - a.v)
     .slice(0, limit);
 
-  // Shared enrichment: games (per year), usage (per year), draft (one lookup).
-  const gamesMaps = {};
-  const usageMaps = {};
+  // Shared enrichment, all one-call-per-year and shared across the whole class:
+  // games, usage, player PPA, team advanced (by team), SP+ (by team), talent
+  // (by team), draft (one lookup).
+  const gamesMaps = {}, usageMaps = {}, ppaMaps = {}, advMaps = {}, spMaps = {}, talentMaps = {};
   await Promise.all([
     ...years.map(async (y) => { gamesMaps[y] = await weekGamesMap(y, primaryCat, key); }),
     ...years.map(async (y) => {
       const rows = await cfbd(`/player/usage?year=${y}`, key).catch(() => []);
       const m = new Map();
-      for (const r of rows || []) m.set(String(r.id), r.usage?.pass ?? null);
+      for (const r of rows || []) m.set(String(r.id), pickUsage(r));
       usageMaps[y] = m;
+    }),
+    ...years.map(async (y) => {
+      const rows = await cfbd(`/ppa/players/season?year=${y}`, key).catch(() => []);
+      const m = new Map();
+      for (const r of rows || []) m.set(String(r.id), pickPlayerPPA(r));
+      ppaMaps[y] = m;
+    }),
+    ...years.map(async (y) => {
+      const rows = await cfbd(`/stats/season/advanced?year=${y}`, key).catch(() => []);
+      const m = new Map();
+      for (const r of rows || []) m.set(r.team, pickTeamCtx(r));
+      advMaps[y] = m;
+    }),
+    ...years.map(async (y) => {
+      const rows = await cfbd(`/ratings/sp?year=${y}`, key).catch(() => []);
+      const m = new Map();
+      for (const r of rows || []) m.set(r.team, r);
+      spMaps[y] = m;
+    }),
+    ...years.map(async (y) => {
+      const rows = await cfbd(`/talent?year=${y}`, key).catch(() => []);
+      const m = new Map();
+      for (const r of rows || []) m.set(r.team, num(r.talent));
+      talentMaps[y] = m;
     }),
   ]);
   const draftMap = new Map();
@@ -416,13 +515,18 @@ async function buildClassImport({ year, position, limit, fbsOnly, key }) {
     const seasonYears = [...P.years.keys()].sort((a, b) => a - b);
     const seasons = seasonYears.map((y) => {
       const Y = P.years.get(y);
+      const usage = usageMaps[y]?.get(P.id) ?? null;
       const s = assembleSeason({
         year: y, team: Y.team, conference: Y.conference, cats: Y.cats,
         games: gamesMaps[y]?.get(P.id) ?? null,
-        passUsage: usageMaps[y]?.get(P.id) ?? null,
+        passUsage: usage?.pass ?? null,
       });
       if (pos === "RB") s.dominator = rbDominator(Y.cats, teamTotals[y]?.[Y.team]);
       if (pos === "WR" || pos === "TE") s.qbHelp = qbQualByYear[y]?.[Y.team] || null;
+      s.ppa = ppaMaps[y]?.get(P.id) ?? null;
+      s.teamCtx = advMaps[y]?.get(Y.team) ?? null;
+      s.program = pickProgram(spMaps[y]?.get(Y.team), talentMaps[y]?.get(Y.team));
+      s.usage = usage;
       return s;
     });
     return { playerId: P.id, name: P.name, position: pos, seasons, draft: draftMap.get(P.id) || null };

@@ -128,10 +128,14 @@ describe("draftCapitalScore", () => {
     assert.equal(draftCapitalScore(1, 28), 78);
   });
 
-  it("assigns fixed scores to later rounds", () => {
-    assert.equal(draftCapitalScore(2, 40), 62);
-    assert.equal(draftCapitalScore(3, 75), 45);
-    assert.equal(draftCapitalScore(4, 110), 32);
+  it("assigns slot-aware scores to later rounds", () => {
+    // round 2 is slot-aware: early 2nds rank higher, late 2nds lower
+    assert.equal(draftCapitalScore(2, 3), 72);
+    assert.equal(draftCapitalScore(2, 40), 55);
+    // rounds 3–4 drop to the mid-round value once past the early bucket
+    assert.equal(draftCapitalScore(3, 75), 42);
+    assert.equal(draftCapitalScore(4, 110), 28);
+    // round 5+ collapses to a single floor
     assert.equal(draftCapitalScore(7, 220), 18);
   });
 

@@ -55,7 +55,10 @@ export default function CfbdAutofill({ position, name, projectedDraftYear, onApp
     try {
       const from = Math.max(2010, draftYear - 5);
       const to = Math.min(currentYear, draftYear - 1);
-      const { seasons, player, dominatorByYear, qbHelpByYear } = await fetchCareerSeasons(row.id, position, { from, to });
+      const {
+        seasons, player, dominatorByYear, qbHelpByYear,
+        ppaByYear, teamCtxByYear, programByYear, usageByYear,
+      } = await fetchCareerSeasons(row.id, position, { from, to });
       if (!seasons.length) {
         setError(`No ${position} season stats found for ${row.name} (${from}–${to}). Try a different position or year range.`);
         setBusy(false);
@@ -81,9 +84,17 @@ export default function CfbdAutofill({ position, name, projectedDraftYear, onApp
           committedTo: recruiting.committedTo ?? null,
         };
       }
-      // RB dominator + WR/TE QB-help by season (stored in the athletic bag, read by the grade).
-      if (dominatorByYear) patch.athletic = { ...(patch.athletic || {}), dom: dominatorByYear };
-      if (qbHelpByYear) patch.athletic = { ...(patch.athletic || {}), qb: qbHelpByYear };
+      // Per-season context stashed in the athletic bag (read by the card/deep-dive):
+      // RB dominator, WR/TE QB-help, player PPA efficiency, team offense context,
+      // program strength, and full usage profile.
+      const ctx = {};
+      if (dominatorByYear) ctx.dom = dominatorByYear;
+      if (qbHelpByYear) ctx.qb = qbHelpByYear;
+      if (ppaByYear) ctx.ppa = ppaByYear;
+      if (teamCtxByYear) ctx.team = teamCtxByYear;
+      if (programByYear) ctx.prog = programByYear;
+      if (usageByYear) ctx.use = usageByYear;
+      if (Object.keys(ctx).length) patch.athletic = { ...(patch.athletic || {}), ...ctx };
       onApply(patch);
 
       const bits = [`${seasons.length} season${seasons.length > 1 ? "s" : ""} loaded`];
@@ -172,7 +183,8 @@ export default function CfbdAutofill({ position, name, projectedDraftYear, onApp
       )}
 
       <p className="text-[10px] text-slate-500 leading-snug">
-        Fills counting + efficiency stats, games, target-share estimate, NFL capital & recruiting pedigree.
+        Fills counting + efficiency stats, games, target-share estimate, NFL capital & recruiting pedigree,
+        plus advanced context (per-play PPA, usage profile, team offense pace/efficiency, SP+ & roster talent).
         Targets, catch rate, and age aren't in CFBD — enter those by hand.
       </p>
     </div>

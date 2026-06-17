@@ -27,6 +27,14 @@ export const CAPITAL_PROD_SCORES = {
   early_3: 45, late_3: 40, day3: 28, udfa: 15,
 };
 
+// CFBD PPA (per-play value) calibration, by position. [p50, p90] of the FBS PPA
+// distribution at each position (draft classes 2021–24): a PPA at the 50th pct
+// scores 50, the 90th pct scores 85 (linear, clamped 0–100). PPA_WEIGHT is the
+// share of the production component PPA can move — heaviest at QB, where it most
+// strongly predicts draft capital (ρ≈0.51 vs ~0.13 for skill positions).
+export const PPA_ANCHORS = { WR: [0.67, 1.41], RB: [0.11, 0.42], TE: [0.70, 1.60], QB: [0.24, 0.57] };
+export const PPA_WEIGHT  = { WR: 0.10, RB: 0.10, TE: 0.10, QB: 0.18 };
+
 export const CONFERENCE_SCORES = {
   Alabama: 95, Georgia: 95, LSU: 90, Tennessee: 88, Florida: 85, Auburn: 83,
   "Texas A&M": 85, "Ole Miss": 82, Arkansas: 78, Missouri: 75, Kentucky: 75,
@@ -98,6 +106,119 @@ export function deriveSchool(p) {
 // `ignoreCapital` strips out post-NFL-draft signals (capital blend, market blend) and the
 // underclass cap, so prospects across draft years can be compared on stats + context alone.
 // Used for the VS class-vs-class view.
+// Per-season production score (0–100) for one college season, by position.
+// Single source of truth shared by computeGrade (peak 40% / final 60% blend)
+// and the deep-dive trajectory chart. Tighter scales push mid-tier lines into
+// the 40s/50s so "good" vs "elite" stays visible in the final grade.
+export function seasonProdScore(position, s) {
+  const num = (v) => parseFloat(v) || 0;
+  const g = Math.max(1, num(s.games));
+  if (position === "WR") {
+    const tsRaw = num(s.target_share_pct);
+    const ts   = Math.min(100, tsRaw * 2.5 + Math.max(0, tsRaw - 20) * 1.875); // 20%=50, 28%=85, 32%+=100
+    const ypr  = Math.min(100, num(s.yards_per_reception) * 4);
+    const cr   = Math.min(100, num(s.catch_rate_pct) * 1.1);
+    const ypg  = Math.min(100, (num(s.receiving_yards) / g) * 0.7);
+    const tdpg = Math.min(100, (num(s.receiving_tds) / g) * 60);
+    const lng  = num(s.longest_reception);
+    const lngComp = lng > 0 ? Math.min(100, lng * 1.1) : 0;
+    const expBonus = lng > 0 ? lngComp * 0.05 : 0;
+    return ts * 0.30 + ypg * 0.17 + ypr * 0.15 + cr * 0.15 + tdpg * 0.18 + lngComp * 0.05 + expBonus;
+  }
+  if (position === "TE") {
+    const tsRaw = num(s.target_share_pct);
+    const ts   = Math.min(100, Math.max(0, (tsRaw - 8) * 5.5 + 30)); // structurally lower TS at TE
+    const ypr  = Math.min(100, num(s.yards_per_reception) * 4);
+    const cr   = Math.min(100, num(s.catch_rate_pct) * 1.1);
+    const ypg  = Math.min(100, (num(s.receiving_yards) / g) * 1.4);
+    const tdpg = Math.min(100, (num(s.receiving_tds) / g) * 60);
+    const lng  = num(s.longest_reception);
+    const lngComp = lng > 0 ? Math.min(100, lng * 1.1) : 0;
+    return ts * 0.25 + ypg * 0.17 + ypr * 0.15 + cr * 0.18 + tdpg * 0.20 + lngComp * 0.05;
+  }
+  if (position === "QB") {
+    const att  = Math.max(1, num(s.pass_attempts));
+    const cp   = Math.min(100, num(s.completion_pct) * 1.2);
+    const ypa  = Math.min(100, num(s.yards_per_attempt) * 8);
+    const tdPct  = Math.min(100, (num(s.passing_tds) / att) * 1200);
+    const intPct = Math.max(0, 100 - (num(s.interceptions) / att) * 2000);
+    const tdpg = Math.min(100, (num(s.passing_tds) / g) * 22);
+    const rtg  = num(s.passer_rating);
+    const rtgComp = rtg > 0 ? Math.min(100, Math.max(0, (rtg - 130) * 1.1 + 30)) : null; // 130≈30, 175≈80
+    const efficiency = rtgComp != null ? rtgComp : (cp * 0.4 + ypa * 0.6);
+    const ctchRaw = num(s.catchable_rate_pct);
+    const ctchComp = ctchRaw > 0 ? Math.min(100, Math.max(0, (ctchRaw - 65) * 5)) : null;
+    if (ctchComp == null) return efficiency * 0.40 + tdPct * 0.18 + tdpg * 0.12 + ypa * 0.15 + intPct * 0.15;
+    return efficiency * 0.30 + ctchComp * 0.10 + tdPct * 0.18 + tdpg * 0.12 + ypa * 0.15 + intPct * 0.15;
+  }
+  if (position === "RB") {
+    const ypc  = Math.min(100, num(s.yards_per_carry) * 12);
+    const ypg  = Math.min(100, (num(s.rushing_yards) / g) * 0.55);
+    const ts   = Math.min(100, num(s.target_share_pct) * 5);
+    const recPg= Math.min(100, (num(s.receptions) / g) * 22);
+    const ruTd = num(s.rushing_tds), reTd = num(s.receiving_tds);
+    const totalTds = (ruTd + reTd) > 0 ? (ruTd + reTd) : num(s.total_tds);
+    const tdpg = Math.min(100, (totalTds / g) * 65);
+    const lng  = num(s.longest_rush);
+    const lngComp = lng > 0 ? Math.min(100, lng * 1.0) : 0;
+    return ypc * 0.30 + ypg * 0.20 + tdpg * 0.25 + ts * 0.10 + recPg * 0.10 + lngComp * 0.05;
+  }
+  return 50;
+}
+
+// Prospect archetype from the final-season stat/usage/PPA profile. Pure
+// classification for the deep-dive (no grade impact) — a quick read on *how* a
+// player produced, not how much. Returns { name, blurb, color }.
+const ARCHETYPE_COLORS = { elite: "#00f5a0", good: "#7b8cff", neutral: "#9aa4bf", dev: "#808898" };
+export function deriveArchetype(prospect) {
+  const num = (v) => parseFloat(v) || 0;
+  const pos = prospect.position;
+  const seasons = [...(prospect.seasons || [])].sort((a, b) => Number(a.season_year) - Number(b.season_year));
+  if (!seasons.length) return null;
+  const s = seasons[seasons.length - 1];
+  const ath = prospect.athletic || {};
+  const ppa = ath.ppa?.[s.season_year] || {};
+  const use = ath.use?.[s.season_year] || {};
+  const g = Math.max(1, num(s.games));
+  const A = (name, blurb, tone = "good") => ({ name, blurb, color: ARCHETYPE_COLORS[tone] });
+
+  if (pos === "WR") {
+    const ts = num(s.target_share_pct), ypr = num(s.yards_per_reception);
+    const rushU = num(use.rush);
+    if (rushU >= 0.05 || num(s.rush_attempts) / g >= 1.5) return A("Gadget / Slot", "Manufactured touches via motion and the run game on top of receiving work.", "neutral");
+    if (ts >= 25) return ypr >= 15 ? A("Alpha X", "True No. 1 — commands a huge target share and wins downfield.", "elite")
+                                   : A("Volume Possession", "High-volume chain-mover; earns targets more than he stretches the field.");
+    if (ts >= 20) return A("Volume Possession", "Featured, high-volume role; earns targets more than he stretches the field.");
+    if (ypr >= 16) return A("Field Stretcher", "Lower volume but explosive — a vertical, big-play profile.");
+    return A("Rotational / Developmental", "Complementary college usage; projection leans on traits and landing spot.", "dev");
+  }
+  if (pos === "RB") {
+    const domRaw = parseFloat(ath.dom?.[s.season_year]);
+    const dom = Number.isFinite(domRaw) ? domRaw : null;
+    const recPg = num(s.receptions) / g, ts = num(s.target_share_pct), ypc = num(s.yards_per_carry);
+    if (recPg >= 3 || ts >= 12) return A("Receiving Back", "Real passing-down value — a true three-down / PPR asset.", "elite");
+    if ((dom != null && dom >= 32) || num(use.rush) >= 0.55) return A("Workhorse", "Carries the offense — bell-cow scrimmage share.", "elite");
+    if (ypc >= 6 || num(ppa.all) >= 0.35) return A("Explosive / Boom", "Big-play efficiency; home-run hitter who may not be a true workhorse.");
+    return A("Committee / Rotational", "Shared a backfield in college; volume projection is the question.", "neutral");
+  }
+  if (pos === "TE") {
+    const ts = num(s.target_share_pct), ypr = num(s.yards_per_reception), tdpg = num(s.receiving_tds) / g;
+    if (ts >= 18) return A("Move / Receiving TE", "Offense-warping receiving role at the position — a true mismatch.", "elite");
+    if (tdpg >= 0.5) return A("Red-Zone Weapon", "Touchdown-dependent scoring profile; volume is thinner.");
+    if (ts >= 12 || ypr >= 14) return A("Flex Seam", "Developing receiving role with field-stretching flashes.");
+    return A("Inline / Developmental", "Light receiving usage in college; receiving projection is speculative.", "dev");
+  }
+  if (pos === "QB") {
+    const rushYpg = num(s.rushing_yards) / g, ypa = num(s.yards_per_attempt), cp = num(s.completion_pct);
+    const rushTd = num(s.rushing_tds);
+    if (rushYpg >= 40 || rushTd >= 8 || num(ppa.rush) >= 0.3) return A("Dual-Threat", "Rushing equity adds a fantasy floor on top of his arm.", "elite");
+    if (ypa >= 9.2) return A("Gunslinger", "Aggressive, high-aDOT passer — big plays with some volatility.");
+    if (cp >= 68 && ypa < 8.5) return A("Game Manager", "Accurate and efficient but lower-ceiling as a passer.", "neutral");
+    return A("Pocket Passer", "Wins from the pocket with timing and accuracy.");
+  }
+  return null;
+}
+
 export function computeGrade(prospect, sleeperRank, capitalOverride, declared = false, annTier = "", ignoreCapital = false) {
   const school     = deriveSchool(prospect);
   const { position, athletic, draftCapital } = prospect;
@@ -118,88 +239,14 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
     100 - Math.max(0, 21 - ageAtDraft) * 8 - Math.max(0, ageAtDraft - 22) * 14
   ));
 
-  // Position-specific production. Tighter scales force mid-tier stat lines to score
-  // in the 40s/50s rather than crowding the 70s — that's what makes "good" vs "elite"
-  // visible in the final grade.
+  // Position-specific production: peak season 40% / final season 60%, via the
+  // shared per-season scorer (single source of truth with the deep-dive chart).
   let prodComp = 50;
-  if (position === "WR") {
-    const score = (s) => {
-      const g    = Math.max(1, num(s.games));
-      // TS curve: 20%=50 (anchor), 25%≈72, 28%=85, 32%+=100. Realistic college
-      // ceiling is 32–35%, so old `ts*2.5` (40%=100) bunched elite with very-good.
-      const tsRaw = num(s.target_share_pct);
-      const ts   = Math.min(100, tsRaw * 2.5 + Math.max(0, tsRaw - 20) * 1.875);
-      const ypr  = Math.min(100, num(s.yards_per_reception) * 4);           // 25 YPR = 100, 15 = 60
-      const cr   = Math.min(100, num(s.catch_rate_pct) * 1.1);              // 91% CR = 100, 65% = 71
-      const ypg  = Math.min(100, (num(s.receiving_yards) / g) * 0.7);       // 143 yds/g = 100, 80 = 56
-      const tdpg = Math.min(100, (num(s.receiving_tds) / g) * 60);          // 1.67 TD/g = 100, 0.6 = 36
-      const lng  = num(s.longest_reception);
-      const lngComp = lng > 0 ? Math.min(100, lng * 1.1) : 0;               // 91+ yard play = 100
-      const expBonus = lng > 0 ? lngComp * 0.05 : 0;                        // small extra for explosive ability
-      return ts * 0.30 + ypg * 0.17 + ypr * 0.15 + cr * 0.15 + tdpg * 0.18 + lngComp * 0.05 + expBonus;
-    };
-    prodComp = Math.round(Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60);
-  } else if (position === "TE") {
-    const score = (s) => {
-      const g    = Math.max(1, num(s.games));
-      // TE scales: target shares are structurally lower (offense flows through WRs)
-      // and YPG ceilings are ~half of WR. 8%=30, 12%≈52, 18%=85, 22%+=100.
-      const tsRaw = num(s.target_share_pct);
-      const ts   = Math.min(100, Math.max(0, (tsRaw - 8) * 5.5 + 30));
-      const ypr  = Math.min(100, num(s.yards_per_reception) * 4);           // 25 YPR = 100, 15 = 60
-      const cr   = Math.min(100, num(s.catch_rate_pct) * 1.1);              // 91% CR = 100, 65% = 71
-      const ypg  = Math.min(100, (num(s.receiving_yards) / g) * 1.4);       // 71 yds/g = 100, 50 = 70
-      const tdpg = Math.min(100, (num(s.receiving_tds) / g) * 60);          // 1.67 TD/g = 100, 0.6 = 36
-      const lng  = num(s.longest_reception);
-      const lngComp = lng > 0 ? Math.min(100, lng * 1.1) : 0;
-      // TE-tuned weights: trim TS (lower ceiling = less signal), bump CR (drops are
-      // death at TE) and tdpg (red-zone usage is the key separator at the position).
-      return ts * 0.25 + ypg * 0.17 + ypr * 0.15 + cr * 0.18 + tdpg * 0.20 + lngComp * 0.05;
-    };
-    prodComp = Math.round(Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60);
-  } else if (position === "QB") {
-    const score = (s) => {
-      const g    = Math.max(1, num(s.games));
-      const att  = Math.max(1, num(s.pass_attempts));
-      const cp   = Math.min(100, num(s.completion_pct) * 1.2);              // 83% CP = 100, 65% = 78
-      const ypa  = Math.min(100, num(s.yards_per_attempt) * 8);             // 12.5 YPA = 100, 8.5 = 68
-      const tdPct  = Math.min(100, (num(s.passing_tds) / att) * 1200);      // 8.3% TD = 100, 5% = 60
-      const intPct = Math.max(0, 100 - (num(s.interceptions) / att) * 2000);// 5% INT = 0, 2% = 60
-      const tdpg = Math.min(100, (num(s.passing_tds) / g) * 22);            // 4.5 TD/g = 100
-      const rtg  = num(s.passer_rating);
-      // Passer rating curve stretched so elite ratings separate from very-good:
-      // 130≈30, 155≈57, 175≈80, 195+ caps at 100. Prior curve saturated at 155
-      // and bunched everyone from solid → elite at the ceiling.
-      const rtgComp = rtg > 0 ? Math.min(100, Math.max(0, (rtg - 130) * 1.1 + 30)) : null;
-      const efficiency = rtgComp != null ? rtgComp : (cp * 0.4 + ypa * 0.6);
-      // Catchable-rate (% of throws on-target) is pure QB accuracy independent
-      // of drops or hero catches. When entered, it displaces 0.10 from the
-      // efficiency bucket so QBs aren't credited/penalized for receiver play.
-      // 65%=0, 75%=50, 82%=85, 85%+=100 — separates elite from very-good.
-      const ctchRaw = num(s.catchable_rate_pct);
-      const ctchComp = ctchRaw > 0 ? Math.min(100, Math.max(0, (ctchRaw - 65) * 5)) : null;
-      if (ctchComp == null) {
-        return efficiency * 0.40 + tdPct * 0.18 + tdpg * 0.12 + ypa * 0.15 + intPct * 0.15;
-      }
-      return efficiency * 0.30 + ctchComp * 0.10 + tdPct * 0.18 + tdpg * 0.12 + ypa * 0.15 + intPct * 0.15;
-    };
-    prodComp = Math.round(Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60);
-  } else if (position === "RB") {
-    const score = (s) => {
-      const g    = Math.max(1, num(s.games));
-      const ypc  = Math.min(100, num(s.yards_per_carry) * 12);              // 8.3 YPC = 100, 5.5 = 66
-      const ypg  = Math.min(100, (num(s.rushing_yards) / g) * 0.55);        // 182 yds/g = 100, 100 = 55
-      const ts   = Math.min(100, num(s.target_share_pct) * 5);              // 20% TS for an RB is elite
-      const recPg= Math.min(100, (num(s.receptions) / g) * 22);             // 4.5 rec/g = 100
-      const ruTd = num(s.rushing_tds);
-      const reTd = num(s.receiving_tds);
-      const totalTds = (ruTd + reTd) > 0 ? (ruTd + reTd) : num(s.total_tds);
-      const tdpg = Math.min(100, (totalTds / g) * 65);                      // 1.54 TD/g = 100
-      const lng  = num(s.longest_rush);
-      const lngComp = lng > 0 ? Math.min(100, lng * 1.0) : 0;               // 100-yd run = 100
-      return ypc * 0.30 + ypg * 0.20 + tdpg * 0.25 + ts * 0.10 + recPg * 0.10 + lngComp * 0.05;
-    };
-    prodComp = Math.round(Math.min(100, Math.max(...sorted.map(score)) * 0.40 + score(recent) * 0.60));
+  if (["WR", "TE", "QB", "RB"].includes(position)) {
+    const peak = Math.max(...sorted.map((s) => seasonProdScore(position, s)));
+    const rec  = seasonProdScore(position, recent);
+    const blended = peak * 0.40 + rec * 0.60;
+    prodComp = Math.round(position === "RB" ? Math.min(100, blended) : blended);
   }
 
   // RB total-offense dominator (CFBD): the back's share of team scrimmage
@@ -222,6 +269,28 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
     if (Number.isFinite(qbPct)) {
       const nudge = Math.max(-4, Math.min(4, (50 - qbPct) / 12.5));
       prodComp = Math.max(0, Math.min(100, prodComp + nudge));
+    }
+  }
+
+  // Per-play efficiency (CFBD PPA — its EPA equivalent). `ppa[year] = { all, ... }`
+  // from the importer. Backtest (2026-06-17, draft classes 2021–24 vs draft
+  // capital): PPA strongly orders QB capital (Spearman ρ≈0.51) and cleanly
+  // separates NFL-caliber skill players from the pool (drafted mean ≫ pool), with
+  // a lighter ordering signal among drafted skill players. So it's a position-aware
+  // production nudge — anchored to each position's PPA distribution (p50→50, p90→85)
+  // and weighted heaviest for QB, where the signal is strongest. Uses the final
+  // college season (falls back to peak), mirroring the dominator blend.
+  if (athletic?.ppa && PPA_ANCHORS[position]) {
+    let ppaVal = parseFloat(athletic.ppa[recent.season_year]?.all);
+    if (!Number.isFinite(ppaVal)) {
+      const vals = sorted.map((s) => parseFloat(athletic.ppa[s.season_year]?.all)).filter(Number.isFinite);
+      ppaVal = vals.length ? Math.max(...vals) : null;
+    }
+    if (ppaVal != null) {
+      const [p50, p90] = PPA_ANCHORS[position];
+      const ppaScore = Math.max(0, Math.min(100, 50 + ((ppaVal - p50) / (p90 - p50)) * 35));
+      const w = PPA_WEIGHT[position];
+      prodComp = Math.round(prodComp * (1 - w) + ppaScore * w);
     }
   }
 
@@ -320,6 +389,59 @@ export function computeGrade(prospect, sleeperRank, capitalOverride, declared = 
       athletic: Math.round(athleticBonus), mkt, confidence: Math.round(confidence * 100),
     },
   };
+}
+
+// Most recent completed NFL draft year. The draft is held late April, so before
+// May the latest completed draft is the prior calendar year's.
+export function currentDraftYear(now = new Date()) {
+  const y = now.getFullYear();
+  return now.getMonth() >= 4 ? y : y - 1;
+}
+
+// Three-state prospect status, derived from existing data (no migration):
+//  - "drafted":  their draft-class year's NFL draft has already happened AND they
+//                have draft capital → they're in the NFL; we judge how the college
+//                profile translates and where they landed.
+//  - "declared": flagged declared for an upcoming (not-yet-held) draft → we project
+//                draft capital and a landing spot.
+//  - "prospect": not declared → a forward-looking, future-class watch.
+// `cap`/`declared`/year are read from the annotation first, then the prospect
+// record (camelCase admin shape or snake_case public shape).
+export function prospectStatus(prospect, annotation = {}, now = new Date()) {
+  const cap = annotation.draftCapital || prospect.draftCapital || prospect.draft_capital || "";
+  const declared = annotation.declared ?? prospect.declared ?? false;
+  const year = parseInt(prospect.projectedDraftYear || prospect.projected_draft_year, 10) || null;
+  if (cap && year && year <= currentDraftYear(now)) return "drafted";
+  if (declared) return "declared";
+  return "prospect";
+}
+
+export const PROSPECT_STATUS_META = {
+  drafted:  { label: "Drafted",      color: "#00f5a0", blurb: "On an NFL roster — evaluating how the college profile translates to the pros." },
+  declared: { label: "Declared",     color: "#7b8cff", blurb: "Declared for the upcoming draft — projecting draft capital and a landing spot." },
+  prospect: { label: "Not Declared", color: "#ffd84d", blurb: "Underclassman / future prospect — a forward-looking watch." },
+};
+
+// Draft-class year a prospect should be bucketed into. The stored
+// `projected_draft_year` is unreliable for undeclared players (often defaulted to
+// the current year), so we derive it from NCAA eligibility instead:
+//  - drafted / declared → the actual or declared year is authoritative.
+//  - undeclared → draft-eligible 3 years after HS graduation, i.e. 3 years after
+//    the first college season (HS-grad year ≈ first college season). Clamped so a
+//    player never lands earlier than the next upcoming draft (a completed draft
+//    can't be a future prospect's "expected" year) and a deliberately-later manual
+//    `projected_draft_year` (e.g. a redshirt) is still respected.
+// Caveat: first *statistical* season slightly overshoots true HS-grad year for
+// redshirts; recruiting class year isn't stored, so this is the best proxy.
+export function effectiveDraftYear(prospect, annotation = {}, now = new Date()) {
+  const status = prospectStatus(prospect, annotation, now);
+  const projected = parseInt(prospect.projectedDraftYear || prospect.projected_draft_year, 10) || null;
+  if ((status === "drafted" || status === "declared") && projected) return projected;
+  const years = (prospect.seasons || []).map((s) => parseInt(s.season_year, 10)).filter(Boolean);
+  const firstSeason = years.length ? Math.min(...years) : null;
+  const eligible = firstSeason ? firstSeason + 3 : null;
+  const upcoming = currentDraftYear(now) + 1;
+  return Math.max(eligible || 0, projected || 0, upcoming);
 }
 
 export function deriveTier(grade, capitalKey) {

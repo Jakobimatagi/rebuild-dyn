@@ -105,6 +105,10 @@ export async function fetchCareerSeasons(playerId, position, { from, to } = {}) 
     player: data.player, seasons,
     dominatorByYear: byYear(data.seasons, "dominator"),
     qbHelpByYear: byYear(data.seasons, "qbHelp"),
+    ppaByYear: byYear(data.seasons, "ppa"),
+    teamCtxByYear: byYear(data.seasons, "teamCtx"),
+    programByYear: byYear(data.seasons, "program"),
+    usageByYear: byYear(data.seasons, "usage"),
   };
 }
 
@@ -171,5 +175,9 @@ export async function fetchClassImport(year, position, limit = 50) {
     draftCapital: r.draft ? draftToCapitalKey(r.draft) : "",
     dominatorByYear: byYear(r.seasons, "dominator"),
     qbHelpByYear: byYear(r.seasons, "qbHelp"),
+    ppaByYear: byYear(r.seasons, "ppa"),
+    teamCtxByYear: byYear(r.seasons, "teamCtx"),
+    programByYear: byYear(r.seasons, "program"),
+    usageByYear: byYear(r.seasons, "usage"),
   }));
 }
