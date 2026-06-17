@@ -79,6 +79,22 @@ export default function ProspectCard({
                 </span>
               );
             })()}
+            {p.athletic?.ppa && (() => {
+              // Peak per-play PPA (CFBD's EPA) across college seasons — efficiency,
+              // not just volume.
+              const vals = Object.values(p.athletic.ppa).map((o) => o?.all).filter((v) => typeof v === "number");
+              if (!vals.length) return null;
+              const peak = Math.max(...vals);
+              const tone = peak >= 0.35 ? "text-emerald-300 bg-emerald-500/10 border-emerald-400/30"
+                : peak >= 0.15 ? "text-sky-300 bg-sky-500/10 border-sky-400/30"
+                : "text-slate-300 bg-slate-500/10 border-slate-400/30";
+              return (
+                <span className={`text-[10px] border px-1.5 py-0.5 rounded font-semibold ${tone}`}
+                  title="Peak per-play PPA — CFBD's EPA-equivalent (value added per play)">
+                  {peak.toFixed(2)} PPA
+                </span>
+              );
+            })()}
           </div>
           <div className="text-xs text-slate-400 flex gap-3 flex-wrap">
             <span>{deriveSchool(p) || "—"}</span>
@@ -176,6 +192,32 @@ export default function ProspectCard({
                 {p.athletic.weightLbs     > 0 && <span>Weight: <span className="text-slate-200">{p.athletic.weightLbs} lbs</span></span>}
               </div>
             )}
+            {(() => {
+              // Deeper CFBD context for the most recent college season: per-play
+              // efficiency (PPA), role (usage), offense environment, and program
+              // strength — the "why" behind the raw counting stats.
+              const ath = p.athletic || {};
+              const yr = seasons[seasons.length - 1]?.season_year;
+              const ppa = ath.ppa?.[yr], use = ath.use?.[yr], team = ath.team?.[yr], prog = ath.prog?.[yr];
+              if (!ppa && !use && !team && !prog) return null;
+              const pc = (v) => (v == null ? "—" : `${(v * 100).toFixed(0)}%`);
+              const n2 = (v) => (v == null ? "—" : v.toFixed(2));
+              return (
+                <div className="mt-3">
+                  <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">CFBD Context · {yr}</div>
+                  <div className="text-xs text-slate-400 grid grid-cols-2 gap-x-4 gap-y-1">
+                    {ppa?.all   != null && <span title="Per-play value added (CFBD EPA-equivalent)">PPA/play: <span className="text-slate-200">{n2(ppa.all)}</span></span>}
+                    {ppa?.third != null && <span title="Third-down PPA — chain-moving value">3rd-dn PPA: <span className="text-slate-200">{n2(ppa.third)}</span></span>}
+                    {use?.overall != null && <span title="Share of the team's offensive plays">Usage: <span className="text-slate-200">{pc(use.overall)}</span></span>}
+                    {team?.passRate != null && <span title="Team pass-play rate (offense lean)">Team pass: <span className="text-slate-200">{pc(team.passRate)}</span></span>}
+                    {team?.pace    != null && <span title="Team offensive plays on the season (pace)">Team pace: <span className="text-slate-200">{team.pace}</span></span>}
+                    {team?.success != null && <span title="Team offensive success rate">Off success: <span className="text-slate-200">{pc(team.success)}</span></span>}
+                    {prog?.sp     != null && <span title="Team SP+ rating + national rank">SP+: <span className="text-slate-200">{prog.sp}{prog.spRank ? ` (#${prog.spRank})` : ""}</span></span>}
+                    {prog?.talent != null && <span title="247 roster talent composite">Talent: <span className="text-slate-200">{Math.round(prog.talent)}</span></span>}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-2">Season Log</div>

@@ -7,6 +7,12 @@ import {
   dynastyScore,
   deriveTier,
   deriveSchool,
+  seasonProdScore,
+  deriveArchetype,
+  PPA_ANCHORS,
+  prospectStatus,
+  PROSPECT_STATUS_META,
+  effectiveDraftYear,
 } from "../../lib/prospectScoring.js";
 import {
   findCompsByName,
@@ -189,6 +195,63 @@ function situExp(school, conferenceScore) {
 // ---------------------------------------------------------------------------
 // Projection arc (age curve sparkline, seeded from grade + position)
 // ---------------------------------------------------------------------------
+
+// College production trajectory: per-season production score (the same scorer the
+// grade uses) with a position-adjusted PPA-efficiency overlay. Past-only — the
+// NFL future is covered by ProjectionArc below.
+function CollegeTrajectory({ position, seasons, athletic }) {
+  const sorted = [...(seasons || [])].sort((a, b) => Number(a.season_year) - Number(b.season_year));
+  if (sorted.length < 2 || !PPA_ANCHORS[position]) return null;
+
+  const [p50, p90] = PPA_ANCHORS[position];
+  const ppaScoreOf = (yr) => {
+    const v = parseFloat(athletic?.ppa?.[yr]?.all);
+    return Number.isFinite(v) ? Math.max(0, Math.min(100, 50 + ((v - p50) / (p90 - p50)) * 35)) : null;
+  };
+  const pts = sorted.map((s) => ({
+    year: s.season_year,
+    prod: Math.round(seasonProdScore(position, s)),
+    ppa: ppaScoreOf(s.season_year),
+  }));
+  const hasPPA = pts.some((p) => p.ppa != null);
+
+  const W = 480, H = 140, PAD = { l: 28, r: 12, t: 12, b: 24 };
+  const innerW = W - PAD.l - PAD.r, innerH = H - PAD.t - PAD.b;
+  const n = pts.length;
+  const xOf = (i) => PAD.l + (n === 1 ? innerW / 2 : (i / (n - 1)) * innerW);
+  const yOf = (v) => PAD.t + (1 - Math.max(0, Math.min(100, v)) / 100) * innerH;
+  const prodLine = pts.map((p, i) => `${xOf(i).toFixed(1)},${yOf(p.prod).toFixed(1)}`).join(" ");
+  const ppaLine = hasPPA
+    ? pts.map((p, i) => (p.ppa != null ? `${xOf(i).toFixed(1)},${yOf(p.ppa).toFixed(1)}` : null)).filter(Boolean).join(" ")
+    : "";
+
+  return (
+    <div style={{ margin: "4px 0 0" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block", overflow: "visible" }}
+        aria-label={`College production trajectory for ${position}`}>
+        {[25, 50, 75].map((gv) => (
+          <g key={gv}>
+            <line x1={PAD.l} y1={yOf(gv)} x2={W - PAD.r} y2={yOf(gv)} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+            <text x={PAD.l - 4} y={yOf(gv) + 3} fontSize={7} fill="#4a5264" textAnchor="end">{gv}</text>
+          </g>
+        ))}
+        {hasPPA && <polyline points={ppaLine} fill="none" stroke="#c084fc" strokeWidth={1.5} strokeDasharray="3 3" />}
+        <polyline points={prodLine} fill="none" stroke="#7b8cff" strokeWidth={2} strokeLinejoin="round" />
+        {pts.map((p, i) => (
+          <g key={i}>
+            <circle cx={xOf(i)} cy={yOf(p.prod)} r={3.2} fill={TIER_VERDICT_COLOR(p.prod)} stroke="#0b0e16" strokeWidth={1} />
+            {p.ppa != null && <circle cx={xOf(i)} cy={yOf(p.ppa)} r={2.4} fill="#c084fc" stroke="#0b0e16" strokeWidth={1} />}
+            <text x={xOf(i)} y={H - 8} fontSize={8} fill="#5a6478" textAnchor="middle">{p.year}</text>
+          </g>
+        ))}
+      </svg>
+      <div style={{ display: "flex", gap: 16, justifyContent: "center", marginTop: 2, fontSize: 9, color: "#808898" }}>
+        <span><span style={{ color: "#7b8cff" }}>●</span> Production score</span>
+        {hasPPA && <span><span style={{ color: "#c084fc" }}>┄</span> PPA efficiency (position-adj.)</span>}
+      </div>
+    </div>
+  );
+}
 
 function ProjectionArc({ position, ageAtDraft, grade }) {
   const peak = PEAK_AGE[position] ?? 26;
@@ -491,6 +554,46 @@ function AthleticProfile({ athletic }) {
 }
 
 // ---------------------------------------------------------------------------
+// CFBD advanced context — per-play efficiency (PPA), role (usage), offense
+// environment, and program strength for the player's most recent college season.
+// All pulled by the Rookie Prospector's CFBD auto-fill and stashed in `athletic`.
+// ---------------------------------------------------------------------------
+
+function CfbdContext({ athletic, recentYear }) {
+  const yr = recentYear;
+  const ppa = athletic.ppa?.[yr], use = athletic.use?.[yr];
+  const team = athletic.team?.[yr], prog = athletic.prog?.[yr];
+  if (!ppa && !use && !team && !prog) return null;
+
+  const pc = (v) => (v == null ? null : `${(v * 100).toFixed(0)}%`);
+  const n2 = (v) => (v == null ? null : v.toFixed(2));
+  const cells = [
+    ["PPA / play", n2(ppa?.all), "Value added per play — CFBD's EPA equivalent"],
+    ["3rd-down PPA", n2(ppa?.third), "Chain-moving value on third down"],
+    ["Usage", pc(use?.overall), "Share of the team's offensive plays"],
+    ["Team pass rate", pc(team?.passRate), "How pass-leaning the offense was"],
+    ["Team pace", team?.pace != null ? String(team.pace) : null, "Total offensive plays on the season"],
+    ["Off. success", pc(team?.success), "Team offensive success rate"],
+    ["SP+", prog?.sp != null ? `${prog.sp}${prog.spRank ? ` (#${prog.spRank})` : ""}` : null, "Team SP+ rating + national rank"],
+    ["Talent", prog?.talent != null ? String(Math.round(prog.talent)) : null, "247 roster talent composite"],
+  ].filter(([, v]) => v != null);
+
+  if (!cells.length) return null;
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
+      {cells.map(([label, value, title]) => (
+        <div key={label} title={title}
+          style={{ padding: "10px 12px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4 }}>
+          <div style={{ fontSize: 9, color: "#606878", marginBottom: 4 }}>{label}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#7b8cff" }}>{value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main modal
 // ---------------------------------------------------------------------------
 
@@ -514,6 +617,10 @@ export default function RookieDeepDiveModal({
   const recent = sortedSeasons[sortedSeasons.length - 1] || {};
   const ageAtDraft = num(recent.age) || 22;
   const school = deriveSchool(prospect);
+  const archetype = deriveArchetype({ position: prospect.position, seasons, athletic });
+  const status = prospectStatus(prospect, ann);
+  const statusMeta = PROSPECT_STATUS_META[status];
+  const draftYear = effectiveDraftYear(prospect, ann);
 
   const { total: grade, components } = computeGrade(
     { ...prospect, draftCapital: capitalKey, athletic },
@@ -626,7 +733,7 @@ export default function RookieDeepDiveModal({
               {prospect.position}
               {school ? ` · ${school}` : ""}
               {ageAtDraft ? ` · ${ageAtDraft}yo` : ""}
-              {prospect.projected_draft_year ? ` · ${prospect.projected_draft_year} class` : ""}
+              {draftYear ? ` · ${draftYear} class` : ""}
             </div>
             {(capitalKey || ann.landingSpot) && (
               <div style={{ fontSize: 10, color: "#ffd84d", marginTop: 2 }}>
@@ -670,21 +777,22 @@ export default function RookieDeepDiveModal({
                   )}
                 </span>
               )}
-              {ann.declared && (
-                <span
-                  style={{
-                    fontSize: 9,
-                    color: "#00f5a0",
-                    background: "rgba(0,245,160,0.12)",
-                    border: "1px solid rgba(0,245,160,0.3)",
-                    borderRadius: 3,
-                    padding: "3px 8px",
-                    fontWeight: 700,
-                  }}
-                >
-                  ✓ Declared
-                </span>
-              )}
+              <span
+                title={statusMeta.blurb}
+                style={{
+                  fontSize: 9,
+                  color: statusMeta.color,
+                  background: `${statusMeta.color}1f`,
+                  border: `1px solid ${statusMeta.color}55`,
+                  borderRadius: 3,
+                  padding: "3px 8px",
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.5,
+                }}
+              >
+                {statusMeta.label}
+              </span>
               {BLUE_BLOOD_TEAMS.has(school) && (
                 <span
                   style={{
@@ -705,6 +813,16 @@ export default function RookieDeepDiveModal({
             <div style={{ fontSize: 9, color: "#606878", marginBottom: 2 }}>DYNASTY</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: "#c084fc" }}>{dsValue}</div>
           </div>
+        </div>
+
+        {/* Status framing — what this view is telling you about the prospect */}
+        <div style={{
+          fontSize: 11, color: "#c0c8e0", lineHeight: 1.5,
+          padding: "8px 12px", borderRadius: 4,
+          background: `${statusMeta.color}0d`, border: `1px solid ${statusMeta.color}26`,
+        }}>
+          <span style={{ color: statusMeta.color, fontWeight: 700 }}>{statusMeta.label}:</span>{" "}
+          {statusMeta.blurb}
         </div>
 
         {DIVIDER}
@@ -748,7 +866,30 @@ export default function RookieDeepDiveModal({
           </div>
         ))}
 
-        {/* College production history */}
+        {/* Archetype */}
+        {archetype && (
+          <>
+            {DIVIDER}
+            <SectionLabel>Archetype</SectionLabel>
+            <div style={{
+              padding: "12px 16px", background: `${archetype.color}0d`,
+              border: `1px solid ${archetype.color}30`, borderRadius: 4,
+            }}>
+              <span style={{
+                fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase",
+                color: archetype.color, background: `${archetype.color}1f`,
+                border: `1px solid ${archetype.color}44`, borderRadius: 3, padding: "3px 8px",
+              }}>
+                {archetype.name}
+              </span>
+              <div style={{ fontSize: 11, color: "#c0c8e0", lineHeight: 1.6, marginTop: 8 }}>
+                {archetype.blurb}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* College production history + trajectory */}
         {sortedSeasons.length > 0 && (
           <>
             {DIVIDER}
@@ -758,6 +899,16 @@ export default function RookieDeepDiveModal({
                 <SeasonCard key={i} season={s} position={prospect.position} />
               ))}
             </div>
+            <CollegeTrajectory position={prospect.position} seasons={sortedSeasons} athletic={athletic} />
+          </>
+        )}
+
+        {/* CFBD advanced context (most recent college season) */}
+        {(athletic.ppa || athletic.use || athletic.team || athletic.prog) && (
+          <>
+            {DIVIDER}
+            <SectionLabel>CFBD Advanced Context · {recent.season_year}</SectionLabel>
+            <CfbdContext athletic={athletic} recentYear={recent.season_year} />
           </>
         )}
 

@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchPublicRankingsData } from "../../lib/supabase.js";
-import { TIER_RANK, computeGrade, dynastyScore, deriveTier } from "../../lib/prospectScoring.js";
+import {
+  TIER_RANK, computeGrade, dynastyScore, deriveTier,
+  prospectStatus, PROSPECT_STATUS_META, effectiveDraftYear,
+} from "../../lib/prospectScoring.js";
 import { buildCompIndex, findCompsByName, summarizeOutcome } from "../../lib/historicalComps.js";
 import RookieDeepDiveModal from "./RookieDeepDiveModal.jsx";
 
@@ -64,6 +67,7 @@ export default function RookieRankingsTab() {
   const [view, setView]           = useState("consensus");
   const [posFilter, setPosFilter] = useState({ QB: true, RB: true, WR: true, TE: true });
   const [yearFilter, setYearFilter] = useState(String(new Date().getFullYear()));
+  const [statusFilter, setStatusFilter] = useState("all");
   const [selectedProspect, setSelectedProspect] = useState(null);
 
   const currentYear = new Date().getFullYear();
@@ -87,8 +91,20 @@ export default function RookieRankingsTab() {
 
   const filtered = prospects.filter((p) => {
     if (!posFilter[p.position]) return false;
-    return String(p.projected_draft_year || currentYear) === yearFilter;
+    if (String(effectiveDraftYear(p, annotations[p.id] || {})) !== yearFilter) return false;
+    if (statusFilter !== "all" && prospectStatus(p, annotations[p.id] || {}) !== statusFilter) return false;
+    return true;
   });
+
+  // Status counts within the active position+year scope (for the filter chips).
+  const statusCounts = prospects.reduce((acc, p) => {
+    if (!posFilter[p.position]) return acc;
+    if (String(effectiveDraftYear(p, annotations[p.id] || {})) !== yearFilter) return acc;
+    const st = prospectStatus(p, annotations[p.id] || {});
+    acc[st] = (acc[st] || 0) + 1;
+    acc.all = (acc.all || 0) + 1;
+    return acc;
+  }, {});
 
   let rows = [];
 
@@ -192,6 +208,34 @@ export default function RookieRankingsTab() {
           ))}
         </div>
 
+        <div className="w-px h-5 bg-white/10" />
+
+        {/* Status filter */}
+        <div className="flex items-center gap-1">
+          {[
+            { key: "all", label: "All" },
+            { key: "drafted", label: PROSPECT_STATUS_META.drafted.label },
+            { key: "declared", label: PROSPECT_STATUS_META.declared.label },
+            { key: "prospect", label: PROSPECT_STATUS_META.prospect.label },
+          ].map(({ key, label }) => {
+            const active = statusFilter === key;
+            const color = key === "all" ? "#94a3b8" : PROSPECT_STATUS_META[key].color;
+            return (
+              <button
+                key={key}
+                onClick={() => setStatusFilter(key)}
+                className="px-3 py-1.5 rounded-md text-xs font-semibold border transition-colors"
+                style={active
+                  ? { color, background: `${color}22`, borderColor: `${color}99` }
+                  : { color: "#64748b", background: "rgba(15,23,42,0.4)", borderColor: "rgba(255,255,255,0.1)" }}
+              >
+                {label}
+                <span className="ml-1.5 opacity-60">{statusCounts[key] || 0}</span>
+              </button>
+            );
+          })}
+        </div>
+
         <span className="text-xs text-slate-500 ml-auto">
           {view === "consensus"
             ? `${rows.filter((r) => r.avgRank != null).length} ranked · ${experts.length} analyst${experts.length !== 1 ? "s" : ""}`
@@ -211,6 +255,8 @@ export default function RookieRankingsTab() {
             const displayTier = (view !== "consensus" ? row.tier : null) || ann.tier || row.tierLabel;
             const cap  = ann.draftCapital || p.draft_capital || "";
             const comp = p.comparable_player || "";
+            const status = prospectStatus(p, ann);
+            const stMeta = PROSPECT_STATUS_META[status];
 
             return (
               <button
@@ -239,16 +285,27 @@ export default function RookieRankingsTab() {
                         </span>
                       );
                     })()}
-                    {ann.declared && (
-                      <span className="text-[10px] text-emerald-300 bg-emerald-500/15 border border-emerald-400/40 px-1.5 py-0.5 rounded font-bold uppercase tracking-wide">
-                        ✓ Declared
-                      </span>
-                    )}
+                    <span
+                      className="text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wide border"
+                      style={{ color: stMeta.color, background: `${stMeta.color}1f`, borderColor: `${stMeta.color}66` }}
+                      title={stMeta.blurb}
+                    >
+                      {stMeta.label}
+                    </span>
                   </div>
                   <div className="text-xs text-slate-500 flex gap-3 flex-wrap items-center">
-                    {cap && <span className="capitalize"><span className="text-slate-600">NFL:</span> {cap.replace(/_/g, " ")}</span>}
+                    {cap && (
+                      <span className="capitalize">
+                        <span className="text-slate-600">{status === "drafted" ? "NFL:" : "Proj:"}</span>{" "}
+                        {cap.replace(/_/g, " ")}
+                      </span>
+                    )}
                     {ann.landingSpot && (
-                      <><span className="text-slate-700">·</span><span>{ann.landingSpot}</span></>
+                      <><span className="text-slate-700">·</span>
+                        <span>{ann.landingSpot}{status === "declared" ? " (proj)" : ""}</span></>
+                    )}
+                    {status === "prospect" && (
+                      <span className="text-slate-600">{effectiveDraftYear(p, ann)} class</span>
                     )}
                     {ann.rookieDraftAdp && (
                       <span className="text-[10px] text-sky-300 bg-sky-500/15 border border-sky-400/30 px-1.5 py-0.5 rounded font-semibold">
