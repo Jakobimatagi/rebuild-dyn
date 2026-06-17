@@ -236,18 +236,20 @@ async function buildCareer({ playerId, position, from, to, key }) {
       const { team } = byYear.get(y);
       if (!team) return { y, games: null, passUsage: null };
       const T = encodeURIComponent(team);
-      const [games, usageRows, ppaRows, advRows, spRows, talentRows] = await Promise.all([
+      const [games, usageRows, ppaRows, advRows, spRows, talentRows, rosterRows] = await Promise.all([
         gamesPlayed(y, team, primaryCat, playerId, key).catch(() => null),
         cfbd(`/player/usage?year=${y}&team=${T}`, key).catch(() => []),
         cfbd(`/ppa/players/season?year=${y}&team=${T}`, key).catch(() => []),
         cfbd(`/stats/season/advanced?year=${y}&team=${T}`, key).catch(() => []),
         cfbd(`/ratings/sp?year=${y}&team=${T}`, key).catch(() => []),
         cfbd(`/talent?year=${y}`, key).catch(() => []),
+        cfbd(`/roster?year=${y}&team=${T}`, key).catch(() => []),
       ]);
       const u = (usageRows || []).find((r) => String(r.id) === String(playerId));
       const pp = (ppaRows || []).find((r) => String(r.id) === String(playerId));
       const sp = (spRows || []).find((r) => r.team === team) || (spRows || [])[0];
       const tal = (talentRows || []).find((r) => r.team === team)?.talent ?? null;
+      const rr = (rosterRows || []).find((r) => String(r.id) === String(playerId));
       return {
         y, games, name: u?.name,
         passUsage: u?.usage?.pass ?? null,
@@ -255,6 +257,7 @@ async function buildCareer({ playerId, position, from, to, key }) {
         ppa: pickPlayerPPA(pp),
         teamCtx: pickTeamCtx((advRows || [])[0]),
         program: pickProgram(sp, tal),
+        classYear: num(rr?.year),
       };
     }),
   );
@@ -301,6 +304,7 @@ async function buildCareer({ playerId, position, from, to, key }) {
     s.teamCtx = e.teamCtx || null;
     s.program = e.program || null;
     s.usage = e.usage || null;
+    s.classYear = e.classYear ?? null;
     return s;
   });
 
@@ -442,9 +446,15 @@ async function buildClassImport({ year, position, limit, fbsOnly, key }) {
   // Shared enrichment, all one-call-per-year and shared across the whole class:
   // games, usage, player PPA, team advanced (by team), SP+ (by team), talent
   // (by team), draft (one lookup).
-  const gamesMaps = {}, usageMaps = {}, ppaMaps = {}, advMaps = {}, spMaps = {}, talentMaps = {};
+  const gamesMaps = {}, usageMaps = {}, ppaMaps = {}, advMaps = {}, spMaps = {}, talentMaps = {}, rosterMaps = {};
   await Promise.all([
     ...years.map(async (y) => { gamesMaps[y] = await weekGamesMap(y, primaryCat, key); }),
+    ...years.map(async (y) => {
+      const rows = await cfbd(`/roster?year=${y}`, key).catch(() => []);
+      const m = new Map();
+      for (const r of rows || []) if (r.id != null) m.set(String(r.id), num(r.year));
+      rosterMaps[y] = m;
+    }),
     ...years.map(async (y) => {
       const rows = await cfbd(`/player/usage?year=${y}`, key).catch(() => []);
       const m = new Map();
@@ -527,6 +537,7 @@ async function buildClassImport({ year, position, limit, fbsOnly, key }) {
       s.teamCtx = advMaps[y]?.get(Y.team) ?? null;
       s.program = pickProgram(spMaps[y]?.get(Y.team), talentMaps[y]?.get(Y.team));
       s.usage = usage;
+      s.classYear = rosterMaps[y]?.get(P.id) ?? null;
       return s;
     });
     return { playerId: P.id, name: P.name, position: pos, seasons, draft: draftMap.get(P.id) || null };
