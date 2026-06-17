@@ -23,8 +23,12 @@ export default function CfbdAutofill({ position, name, projectedDraftYear, onApp
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
-  const draftYear = parseInt(projectedDraftYear) || new Date().getFullYear();
-  const currentYear = new Date().getFullYear();
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const draftYear = parseInt(projectedDraftYear) || currentYear;
+  // College seasons finish in January; the latest season that can have data is
+  // the current calendar year once it's underway (Aug+), otherwise last year.
+  const lastCompletedSeason = now.getMonth() >= 7 ? currentYear : currentYear - 1;
 
   async function runSearch() {
     const term = (query || name || "").trim();
@@ -55,10 +59,7 @@ export default function CfbdAutofill({ position, name, projectedDraftYear, onApp
     try {
       const from = Math.max(2010, draftYear - 5);
       const to = Math.min(currentYear, draftYear - 1);
-      const {
-        seasons, player, dominatorByYear, qbHelpByYear,
-        ppaByYear, teamCtxByYear, programByYear, usageByYear,
-      } = await fetchCareerSeasons(row.id, position, { from, to });
+      const { seasons, player, dominatorByYear, qbHelpByYear } = await fetchCareerSeasons(row.id, position, { from, to });
       if (!seasons.length) {
         setError(`No ${position} season stats found for ${row.name} (${from}–${to}). Try a different position or year range.`);
         setBusy(false);
