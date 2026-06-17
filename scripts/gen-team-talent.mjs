@@ -19,10 +19,12 @@ function loadKey() {
 }
 
 // Talent → situ (0–100), calibrated to the old CONFERENCE_SCORES scale:
-// ~1018 (Alabama) → 95, ~640 (mid-P5) → 68, ~330 (low-FBS) → 46. Clamp 48–96.
-// Talent 0 (service academies / no recruiting composite) is omitted → the grade
-// falls back to CONFERENCE_SCORES, then 40.
-const situ = (t) => (t > 0 ? Math.round(Math.min(96, Math.max(48, 22 + t * 0.072))) : null);
+// ~1018 (Alabama) → 95, ~640 (mid-P5) → 68, ~330 (low-FBS) → 46. Clamp 40–95 to
+// match that scale's range — the old floor for unlisted (G5/FCS) schools was the
+// 40 default, so flooring here at 40 (not 48) keeps those prospects' situ steady
+// instead of inflating it +8. Talent 0 (service academies / no recruiting
+// composite) is omitted → the grade falls back to CONFERENCE_SCORES, then 40.
+const situ = (t) => (t > 0 ? Math.round(Math.min(95, Math.max(40, 22 + t * 0.072))) : null);
 
 const FROM = 2015, TO = 2025;
 const base = "https://api.collegefootballdata.com";
@@ -42,7 +44,7 @@ async function main() {
   const banner = `// AUTO-GENERATED from CFBD /talent (recruiting talent composite), years ${FROM}–${TO}.
 // Per-year, per-team "situation" score (0–100) for the prospect grade's situ
 // component — a data-driven, year-specific replacement for the hardcoded
-// CONFERENCE_SCORES lookup. Talent normalized: ~1018→95, ~640→68, clamp 48–96.
+// CONFERENCE_SCORES lookup. Talent normalized: ~1018→95, ~640→68, clamp 40–95.
 // Regenerate with scripts/gen-team-talent.mjs when CFBD updates a season.
 `;
   const out = new URL("../src/lib/teamTalent.js", import.meta.url);

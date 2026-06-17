@@ -75,14 +75,48 @@ export const TIER_GRADE_NUDGE = {
   "Replaceable":              -22,
 };
 
+// Common alternate spellings → CFBD's canonical school name (the keys used in
+// TEAM_SITU). CFBD-autofilled prospects already carry CFBD names, but manually
+// entered ones may not — without this they silently miss TEAM_SITU and fall back
+// to the old table, leaving the board on a mix of old- and new-scale situ.
+export const SCHOOL_ALIASES = {
+  "Cal": "California",
+  "Hawaii": "Hawai'i",
+  "Hawai`i": "Hawai'i",
+  "San Jose State": "San José State",
+  "Appalachian State": "App State",
+  "Miami (FL)": "Miami",
+  "Miami FL": "Miami",
+  "Miami-FL": "Miami",
+  "Mississippi": "Ole Miss",
+  "Pitt": "Pittsburgh",
+  "USF": "South Florida",
+  "UNC": "North Carolina",
+  "UMass": "Massachusetts",
+  "Southern Cal": "USC",
+  "Louisiana-Lafayette": "Louisiana",
+  "Louisiana Lafayette": "Louisiana",
+  "UL Lafayette": "Louisiana",
+  "Louisiana-Monroe": "UL Monroe",
+  "Bowling Green State": "Bowling Green",
+  "Texas-San Antonio": "UTSA",
+  "Texas-El Paso": "UTEP",
+};
+
+export function canonicalSchool(school) {
+  if (!school) return school;
+  return SCHOOL_ALIASES[school] ?? SCHOOL_ALIASES[school.trim()] ?? school;
+}
+
 // Situation score for a school in a given season. Prefers CFBD's year-specific
 // recruiting talent composite (TEAM_SITU); falls back to the hand-maintained
 // CONFERENCE_SCORES, then a neutral 40. Year-aware so a program's rise/fall is
 // reflected (e.g. 2020 Oregon ≠ 2024 Oregon).
 export function situForSchool(school, year) {
-  const t = year != null ? TEAM_SITU[year]?.[school] : undefined;
+  const name = canonicalSchool(school);
+  const t = year != null ? TEAM_SITU[year]?.[name] : undefined;
   if (t != null) return t;
-  return CONFERENCE_SCORES[school] ?? 40;
+  return CONFERENCE_SCORES[name] ?? 40;
 }
 
 export function deriveSchool(p) {
