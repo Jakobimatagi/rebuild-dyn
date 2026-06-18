@@ -107,6 +107,377 @@ function ComponentCard({ component }) {
   );
 }
 
+// League-wide trade matrix: every team on both axes, each cell = number of
+// trades between that pair. Rows are ordered by total trade volume so the
+// league's biggest market movers sit at the top.
+function LeagueTradeMatrix({ teams, myTeamLabel }) {
+  if (!teams || teams.length === 0) return null;
+
+  // Order teams by total trade involvement (most active first).
+  const ordered = [...teams].sort((a, b) => b.tradeCount - a.tradeCount);
+
+  // Pairwise trade counts, pulled from each team's partner breakdown.
+  const countMap = {};
+  let max = 1;
+  for (const t of teams) {
+    for (const p of t.tradePartners || []) {
+      countMap[`${t.rosterId}-${p.rosterId}`] = p.count;
+      if (p.count > max) max = p.count;
+    }
+  }
+  const get = (a, b) => countMap[`${a}-${b}`] || 0;
+
+  const CELL = 42;
+  const LABEL = 184;
+  const TOTAL = 56;
+  // Header holds full team names rotated vertically — size it to the longest name.
+  const maxLabelLen = ordered.reduce(
+    (m, t) => Math.max(m, String(t.label || "").length),
+    0
+  );
+  const HEADER_H = Math.min(220, Math.max(96, maxLabelLen * 7 + 28));
+
+  const cellBase = {
+    width: CELL,
+    minWidth: CELL,
+    height: CELL,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 13,
+    flexShrink: 0,
+    borderRight: "1px solid rgba(255,255,255,0.05)",
+    borderBottom: "1px solid rgba(255,255,255,0.05)",
+  };
+
+  return (
+    <div style={{ marginBottom: 32 }}>
+      {/* Color legend */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 12,
+          fontSize: 10,
+          color: "#7a819c",
+        }}
+      >
+        <span style={{ letterSpacing: 1, textTransform: "uppercase" }}>Fewer trades</span>
+        {[0.18, 0.4, 0.62, 0.84, 1].map((t) => (
+          <span
+            key={t}
+            style={{
+              width: 22,
+              height: 14,
+              borderRadius: 2,
+              background: hexA("#c084fc", t),
+              border: "1px solid rgba(255,255,255,0.08)",
+            }}
+          />
+        ))}
+        <span style={{ letterSpacing: 1, textTransform: "uppercase" }}>More</span>
+        <span style={{ marginLeft: 14, color: "#00f5a0", letterSpacing: 1, textTransform: "uppercase" }}>
+          \u25a0 Your team
+        </span>
+      </div>
+
+      <div style={{ overflowX: "auto", paddingBottom: 4 }}>
+        <div
+          style={{
+            display: "inline-block",
+            minWidth: "100%",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 6,
+            overflow: "hidden",
+          }}
+        >
+          {/* Header row: corner + team abbreviation for each column */}
+          <div style={{ display: "flex", background: "rgba(255,255,255,0.03)" }}>
+            <div
+              style={{
+                width: LABEL,
+                minWidth: LABEL,
+                height: HEADER_H,
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "flex-end",
+                padding: "0 8px 6px 10px",
+                fontSize: 9,
+                letterSpacing: 1.5,
+                color: "#4a5068",
+                textTransform: "uppercase",
+                borderBottom: "1px solid rgba(255,255,255,0.12)",
+              }}
+            >
+              Team
+            </div>
+            {ordered.map((t) => {
+              const isMe = t.label === myTeamLabel;
+              return (
+                <div
+                  key={t.rosterId}
+                  title={t.label}
+                  style={{
+                    ...cellBase,
+                    height: HEADER_H,
+                    alignItems: "flex-end",
+                    padding: "8px 0 6px",
+                    background: isMe ? "rgba(0,245,160,0.08)" : "transparent",
+                    borderBottom: "1px solid rgba(255,255,255,0.12)",
+                  }}
+                >
+                  <span
+                    style={{
+                      writingMode: "vertical-rl",
+                      transform: "rotate(180deg)",
+                      whiteSpace: "nowrap",
+                      maxHeight: HEADER_H - 18,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      fontSize: 11,
+                      fontWeight: isMe ? 800 : 600,
+                      color: isMe ? "#00f5a0" : "#c3c9dd",
+                      lineHeight: 1,
+                    }}
+                  >
+                    {t.label}
+                  </span>
+                </div>
+              );
+            })}
+            <div
+              style={{
+                width: TOTAL,
+                minWidth: TOTAL,
+                height: HEADER_H,
+                display: "flex",
+                alignItems: "flex-end",
+                justifyContent: "center",
+                paddingBottom: 6,
+                fontSize: 9,
+                letterSpacing: 1,
+                color: "#4a5068",
+                textTransform: "uppercase",
+                flexShrink: 0,
+                borderBottom: "1px solid rgba(255,255,255,0.12)",
+              }}
+            >
+              Total
+            </div>
+          </div>
+
+          {/* One row per team */}
+          {ordered.map((rowTeam, i) => {
+            const rowIsMe = rowTeam.label === myTeamLabel;
+            // Zebra striping for easier horizontal tracking; my team gets a green tint.
+            const rowBg = rowIsMe
+              ? "rgba(0,245,160,0.07)"
+              : i % 2 === 1
+              ? "rgba(255,255,255,0.018)"
+              : "transparent";
+            return (
+              <div key={rowTeam.rosterId} style={{ display: "flex", background: rowBg }}>
+                {/* Row label: "n. Team Name" + abbreviation tag */}
+                <div
+                  style={{
+                    width: LABEL,
+                    minWidth: LABEL,
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "0 8px 0 10px",
+                    fontSize: 12,
+                    fontWeight: rowIsMe ? 600 : 400,
+                    color: rowIsMe ? "#00f5a0" : "#e8e8f0",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    borderRight: "1px solid rgba(255,255,255,0.1)",
+                    borderBottom: "1px solid rgba(255,255,255,0.05)",
+                  }}
+                  title={rowTeam.label}
+                >
+                  <span
+                    style={{
+                      color: rowIsMe ? "#00f5a0" : "#4a5068",
+                      fontWeight: 700,
+                      minWidth: 16,
+                      fontSize: 11,
+                    }}
+                  >
+                    {i + 1}.
+                  </span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {rowTeam.label}
+                  </span>
+                </div>
+
+                {/* Cells */}
+                {ordered.map((colTeam) => {
+                  const self = colTeam.rosterId === rowTeam.rosterId;
+                  const count = self ? 0 : get(rowTeam.rosterId, colTeam.rosterId);
+                  const isMeCell = rowIsMe || colTeam.label === myTeamLabel;
+                  const accent = isMeCell ? "#00f5a0" : "#c084fc";
+                  // Floor non-zero cells higher so even single trades read clearly.
+                  const intensity = count > 0 ? 0.22 + 0.78 * (count / max) : 0;
+                  return (
+                    <div
+                      key={colTeam.rosterId}
+                      title={
+                        self
+                          ? rowTeam.label
+                          : `${rowTeam.label} \u2194 ${colTeam.label}: ${count} trade${count !== 1 ? "s" : ""}`
+                      }
+                      style={{
+                        ...cellBase,
+                        background: self
+                          ? "repeating-linear-gradient(45deg, rgba(255,255,255,0.04) 0 4px, transparent 4px 8px)"
+                          : count > 0
+                          ? hexA(accent, intensity)
+                          : "transparent",
+                        color: count > 0 ? "#ffffff" : "#3a4055",
+                        fontWeight: count > 0 ? 700 : 400,
+                      }}
+                    >
+                      {self ? "" : count > 0 ? count : ""}
+                    </div>
+                  );
+                })}
+
+                {/* Total */}
+                <div
+                  style={{
+                    width: TOTAL,
+                    minWidth: TOTAL,
+                    height: CELL,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 14,
+                    fontWeight: 800,
+                    color: rowIsMe ? "#00f5a0" : "#e8e8f0",
+                    flexShrink: 0,
+                    borderBottom: "1px solid rgba(255,255,255,0.05)",
+                  }}
+                >
+                  {rowTeam.tradeCount}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: "#7a819c", marginTop: 10, lineHeight: 1.5 }}>
+        Read across a row to see who that team trades with. Column headers match the row
+        team names; hover any cell for the exact pairing. Rows are ranked by total trades \u2014
+        the teams up top are your league's biggest market movers.
+      </div>
+    </div>
+  );
+}
+
+// Append an alpha byte to a #rrggbb color. Clamps alpha to [0,1].
+function hexA(hex, alpha) {
+  const a = Math.round(Math.max(0, Math.min(1, alpha)) * 255)
+    .toString(16)
+    .padStart(2, "0");
+  return `${hex}${a}`;
+}
+
+// Horizontal bar chart of who a team trades with most \u2014 surfaces the
+// league's main market movers from each team's perspective.
+function TradePartnerChart({ partners, myTeamLabel }) {
+  if (!partners || partners.length === 0) {
+    return (
+      <div style={{ padding: "12px 14px", fontSize: 12, color: "#4a5068" }}>
+        No trade partners yet.
+      </div>
+    );
+  }
+
+  const max = Math.max(...partners.map((p) => p.count));
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div
+        style={{
+          fontSize: 9,
+          letterSpacing: 1.5,
+          color: "#4a5068",
+          textTransform: "uppercase",
+          marginBottom: 8,
+        }}
+      >
+        Top Trade Partners
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {partners.map((p) => {
+          const isMe = p.label === myTeamLabel;
+          const accent = isMe ? "#00f5a0" : "#c084fc";
+          const pct = max > 0 ? (p.count / max) * 100 : 0;
+          return (
+            <div
+              key={p.rosterId}
+              style={{ display: "flex", alignItems: "center", gap: 10 }}
+            >
+              <div
+                style={{
+                  width: 130,
+                  flexShrink: 0,
+                  fontSize: 11,
+                  color: isMe ? "#00f5a0" : "#c3c9dd",
+                  fontWeight: isMe ? 600 : 400,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+                title={p.label}
+              >
+                {p.label}
+              </div>
+              <div
+                style={{
+                  flex: 1,
+                  height: 16,
+                  background: "rgba(255,255,255,0.05)",
+                  borderRadius: 3,
+                  overflow: "hidden",
+                  position: "relative",
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${pct}%`,
+                    minWidth: 2,
+                    background: `${accent}bb`,
+                    borderRadius: 3,
+                    transition: "width 0.4s ease",
+                  }}
+                />
+              </div>
+              <div
+                style={{
+                  width: 56,
+                  flexShrink: 0,
+                  textAlign: "right",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: accent,
+                }}
+              >
+                {p.count} trade{p.count !== 1 ? "s" : ""}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const TYPE_ICON = { trade: "\u2194", waiver: "\u23F3", free_agent: "+" };
 
 const TYPE_FILTERS = [
@@ -466,6 +837,10 @@ export default function LeagueActivityTab({ leagueActivity, myTeamLabel }) {
         ))}
       </div>
 
+      {/* League-wide trade matrix */}
+      <div style={styles.sectionLabel}>League Trade Network</div>
+      <LeagueTradeMatrix teams={teams} myTeamLabel={myTeamLabel} />
+
       {/* Per-Team Table */}
       <div style={styles.sectionLabel}>Team Activity — {teams.length} Teams</div>
       {teams.map((team, i) => {
@@ -590,12 +965,18 @@ export default function LeagueActivityTab({ leagueActivity, myTeamLabel }) {
               <ScoreBar score={team.teamActivityScore} color={team.grade.color} />
             </button>
 
-            {/* Expanded transaction feed */}
+            {/* Expanded: trade-partner chart + transaction feed */}
             {isExpanded && (
-              <TransactionFeed
-                transactions={team.transactions}
-                feedYears={team.feedYears}
-              />
+              <>
+                <TradePartnerChart
+                  partners={team.tradePartners}
+                  myTeamLabel={myTeamLabel}
+                />
+                <TransactionFeed
+                  transactions={team.transactions}
+                  feedYears={team.feedYears}
+                />
+              </>
             )}
           </div>
         );
