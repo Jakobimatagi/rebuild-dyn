@@ -319,6 +319,7 @@ function buildTeamActivityData(transactions, moves, rosters, users, effectiveSea
       futurePickTrades: 0,
       faAdds: 0,
       partners: new Set(),
+      partnerTrades: {}, // partnerRosterId → number of trades with that team
     };
   }
 
@@ -346,7 +347,10 @@ function buildTeamActivityData(transactions, moves, rosters, users, effectiveSea
       stats[rid].trades++;
       if (hasFuturePick) stats[rid].futurePickTrades++;
       for (const partner of involved) {
-        if (partner !== rid) stats[rid].partners.add(partner);
+        if (partner !== rid) {
+          stats[rid].partners.add(partner);
+          stats[rid].partnerTrades[partner] = (stats[rid].partnerTrades[partner] || 0) + 1;
+        }
       }
     }
   }
@@ -431,6 +435,18 @@ function buildTeamActivityData(transactions, moves, rosters, users, effectiveSea
     const perfScore = winRateScore(s.rosterId);
     const teamActivityScore = Math.round(activityBase * 0.75 + perfScore * 0.25);
 
+    // Trade-partner breakdown: who this team trades with most, descending.
+    const tradePartners = Object.entries(s.partnerTrades)
+      .map(([partnerId, count]) => ({
+        rosterId: Number(partnerId),
+        label:
+          rosterLabels.get(Number(partnerId)) ||
+          rosterLabels.get(partnerId) ||
+          `Roster ${partnerId}`,
+        count,
+      }))
+      .sort((a, b) => b.count - a.count);
+
     return {
       rosterId: s.rosterId,
       label: s.label,
@@ -441,6 +457,7 @@ function buildTeamActivityData(transactions, moves, rosters, users, effectiveSea
       faAdds: s.faAdds,
       futurePickTrades: s.futurePickTrades,
       uniquePartners: s.partners.size,
+      tradePartners,
       subScores: {
         tradeActivity: tradeActivityScore,
         faActivity: faActivityScore,
