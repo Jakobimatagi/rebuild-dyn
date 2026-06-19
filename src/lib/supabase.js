@@ -294,6 +294,46 @@ export async function fetchPublicRankingsData() {
   };
 }
 
+// ── Value snapshots (trade "value then") ───────────────────────────────────────
+// Dated FantasyCalc value snapshots captured daily by api/snapshot-values.js.
+// We fetch only the players involved in the league's trades and reshape into the
+// lookup buildTradeReview expects:
+//   { dates: string[] asc, byDatePlayer: Map<`${date}|${sleeperId}`, value>,
+//     earliestDate: string | null }
+export async function fetchTradeValueSnapshots(sleeperIds = []) {
+  const ids = [...new Set((sleeperIds || []).map(String).filter(Boolean))];
+  const empty = { dates: [], byDatePlayer: new Map(), earliestDate: null };
+  if (ids.length === 0) return empty;
+
+  // Supabase caps .in() lists; chunk to stay well under URL limits.
+  const CHUNK = 200;
+  const rows = [];
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK);
+    const { data, error } = await supabase
+      .from("value_snapshots")
+      .select("snap_date, sleeper_id, value")
+      .eq("source", "fc")
+      .in("sleeper_id", slice);
+    if (error) throw error;
+    if (data) rows.push(...data);
+  }
+
+  const byDatePlayer = new Map();
+  const dateSet = new Set();
+  for (const r of rows) {
+    const d = String(r.snap_date).slice(0, 10);
+    byDatePlayer.set(`${d}|${String(r.sleeper_id)}`, Number(r.value || 0));
+    dateSet.add(d);
+  }
+  const dates = [...dateSet].sort();
+  return {
+    dates,
+    byDatePlayer,
+    earliestDate: dates.length ? dates[0] : null,
+  };
+}
+
 // ── OC Entries ────────────────────────────────────────────────────────────────
 // Read/write the `oc_entries` table. Shape per row:
 //   { season, team, name, partial?, playcaller?, note? }

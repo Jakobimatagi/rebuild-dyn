@@ -7,6 +7,7 @@ import { getLeagueRulesContext } from './marketValue';
 import { buildTradeMarket, buildTradeSuggestions, evaluateTrade } from './tradeEngine';
 import { buildPredictionContext } from './predictionEngine';
 import { buildLeagueActivity } from './activityEngine';
+import { buildTradeReview } from './tradeReview';
 import { assignPositionRanks as _assignPositionRanks, assignPickRanks as _assignPickRanks } from './playerGrading';
 import { buildDraftRecap } from './draftRecap';
 import { buildOcOutlookContext } from './ocAdjustment';
@@ -136,6 +137,7 @@ export function buildRosterAnalysis(
   liveDraft = null,
   liveDraftPicks = [],
   projPctileMap = null, // player_id → forward production percentile (weekly engine)
+  valueSnapshots = null, // dated value snapshots for trade "value then" (see tradeReview)
 ) {
   const currentYear = new Date().getFullYear();
   // Sleeper's `season` field on a draft can be the upcoming NFL season (2026)
@@ -318,6 +320,32 @@ export function buildRosterAnalysis(
     users,
     players,
   );
+  // Dynasty Oracle's own per-player model value, for the "Oracle" trade lens.
+  // Built from the enriched rosters (every traded player is owned by some league
+  // team). Prefer the pure internal-model value; fall back to the fused dynasty
+  // value, then market value, then the composite score.
+  const internalByPlayerId = new Map();
+  for (const team of leagueTeams) {
+    for (const p of team.enriched || []) {
+      const v = Number(
+        p.internalValue ?? p.dynastyValue?.value ?? p.marketValue ?? p.score ?? 0,
+      );
+      if (p.id != null && v > 0) internalByPlayerId.set(String(p.id), { value: v });
+    }
+  }
+  const tradeReview = buildTradeReview({
+    transactions,
+    rosterLabelById,
+    players,
+    fcByPlayerId: fantasyCalcContext.bySleeperId,
+    raByPlayerId: rosterAuditContext.bySleeperId,
+    internalByPlayerId,
+    leagueContext,
+    sleeperDrafts,
+    allDraftPicksMap,
+    rosters,
+    valueSnapshots,
+  });
 
   const rostersByIdForRecap = new Map(
     leagueTeams.map((t) => [
@@ -390,6 +418,7 @@ export function buildRosterAnalysis(
     tradeBlock: myTeam.tradeablePlayers.slice(0, 8),
     cliffCalendar: buildCliffCalendar(myTeam, leagueContext),
     leagueActivity,
+    tradeReview,
     marketCompsBySleeperId,
     marketCompsSource: {
       enabled: marketCompsBySleeperId.size > 0,

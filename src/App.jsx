@@ -27,6 +27,7 @@ import {
   fetchLeagueTransactions,
   fetchSleeper,
 } from "./lib/sleeperApi";
+import { fetchTradeValueSnapshots } from "./lib/supabase";
 
 const NINE_MONTHS_MS = 9 * 30 * 24 * 60 * 60 * 1000;
 
@@ -145,6 +146,7 @@ export default function App() {
       payload.liveDraft,
       payload.liveDraftPicks,
       payload.projPctileMap ?? null,
+      payload.valueSnapshots ?? null,
     );
   }
 
@@ -354,6 +356,24 @@ export default function App() {
             ? (allDraftPicksMap[recentDraft.draft_id] || [])
             : [];
 
+          // Dated value snapshots for the Trade Report Card's "value then" lens.
+          // Scoped to the players actually involved in trades (traded players +
+          // players drafted with traded picks) so the query stays bounded. Empty
+          // until snapshots accumulate; the card degrades to value-now gracefully.
+          const snapshotIds = new Set();
+          for (const tx of corePayload.transactions || []) {
+            if (tx.type !== "trade") continue;
+            for (const pid of Object.keys(tx.adds || {})) snapshotIds.add(String(pid));
+          }
+          for (const picks of Object.values(allDraftPicksMap)) {
+            for (const p of picks || []) {
+              if (p.player_id) snapshotIds.add(String(p.player_id));
+            }
+          }
+          const valueSnapshots = await fetchTradeValueSnapshots([...snapshotIds]).catch(
+            () => null,
+          );
+
           // A newer load (e.g. league switch) superseded us — drop this result.
           if (loadTokenRef.current !== token) return;
 
@@ -363,6 +383,7 @@ export default function App() {
             recentDraftPicks,
             liveDraftPicks,
             allDraftPicksMap,
+            valueSnapshots,
             projPctileMap,
             historicalStats: [
               { year: 2021, stats: stats21 },

@@ -9,8 +9,12 @@
     { "source": "/api/ai-oc-analyze", "destination": "/api/ai-oc-analyze" },
     { "source": "/api/historical-rosters", "destination": "/api/historical-rosters" },
     { "source": "/api/cfbd", "destination": "/api/cfbd" },
+    { "source": "/api/snapshot-values", "destination": "/api/snapshot-values" },
     { "source": "/ingest/static/:path*", "destination": "https://us-assets.i.posthog.com/static/:path*" },
     { "source": "/ingest/:path*", "destination": "https://us.i.posthog.com/:path*" },
     { "source": "/admin/:path*", "destination": "/index.html" }
+  ],
+  "crons": [
+    { "path": "/api/snapshot-values", "schedule": "0 9 * * *" }
   ]
 }
