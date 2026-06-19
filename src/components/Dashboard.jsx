@@ -382,6 +382,7 @@ export default function Dashboard({
       {activeTab === "activity" && (
         <LeagueActivityTab
           leagueActivity={analysis.leagueActivity}
+          tradeReview={analysis.tradeReview}
           myTeamLabel={analysis.myTeamLabel}
         />
       )}
