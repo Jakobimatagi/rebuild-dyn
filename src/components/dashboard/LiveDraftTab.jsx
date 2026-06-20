@@ -69,7 +69,9 @@ export default function LiveDraftTab({
   const [view, setView] = useState(
     Object.keys(valueBySleeperId).length > 0 ? "power" : "team",
   ); // "power" | "best" | "team" | "trades" | "board"
-  const [posFilter, setPosFilter] = useState("ALL");
+  // Multi-select position filter for Best Available. Empty array = "ALL".
+  // Selecting RB + WR shows the best players across *either* room.
+  const [posFilter, setPosFilter] = useState([]);
   const [tradeTx, setTradeTx] = useState(initialTradeTransactions);
 
   // leagueTeams carries label/avatar/ownerId/rosterId — map to the minimal shape.
@@ -503,13 +505,26 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter }) {
   for (const pos of ["QB", "RB", "WR", "TE", "K", "DEF", "DL", "LB", "DB"]) {
     if (available.some((p) => p.position === pos)) presentPositions.push(pos);
   }
-  const filters = ["ALL", ...presentPositions];
-  const activeFilter = filters.includes(posFilter) ? posFilter : "ALL";
+
+  // Multi-select: posFilter is an array of chosen positions (empty = ALL).
+  // Only keep selections that are still present in the pool, then union-filter.
+  const selected = (Array.isArray(posFilter) ? posFilter : []).filter((p) =>
+    presentPositions.includes(p),
+  );
+  const selectedSet = new Set(selected);
+  const showAll = selectedSet.size === 0;
+
+  const togglePos = (pos) => {
+    setPosFilter((prev) => {
+      const cur = Array.isArray(prev) ? prev : [];
+      return cur.includes(pos) ? cur.filter((p) => p !== pos) : [...cur, pos];
+    });
+  };
 
   const filtered = (
-    activeFilter === "ALL"
+    showAll
       ? available
-      : available.filter((p) => p.position === activeFilter)
+      : available.filter((p) => selectedSet.has(p.position))
   ).slice(0, BEST_AVAIL_LIMIT);
 
   return (
@@ -532,16 +547,18 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter }) {
         </span>
       </div>
 
-      {/* Position filter */}
+      {/* Position filter — multi-select. Tap multiple (e.g. RB + WR) to see the
+          best across either room; "ALL" clears the selection. */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-        {filters.map((f) => {
-          const active = f === activeFilter;
-          const color = f === "ALL" ? "#00f5a0" : posColor(f);
+        {["ALL", ...presentPositions].map((f) => {
+          const isAll = f === "ALL";
+          const active = isAll ? showAll : selectedSet.has(f);
+          const color = isAll ? "#00f5a0" : posColor(f);
           return (
             <button
               key={f}
               type="button"
-              onClick={() => setPosFilter(f)}
+              onClick={() => (isAll ? setPosFilter([]) : togglePos(f))}
               style={{
                 padding: "3px 10px",
                 borderRadius: 3,
@@ -563,7 +580,7 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter }) {
 
       {filtered.length === 0 ? (
         <div style={{ fontSize: 12, color: "#94a3b8" }}>
-          No players available{activeFilter !== "ALL" ? ` at ${activeFilter}` : ""}.
+          No players available{!showAll ? ` at ${selected.join(" / ")}` : ""}.
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column" }}>
