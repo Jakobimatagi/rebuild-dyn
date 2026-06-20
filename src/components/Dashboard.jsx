@@ -18,6 +18,7 @@ import RankingsTab from "./dashboard/RankingsTab";
 import StrategyPlannerTab from "./dashboard/StrategyPlannerTab";
 import RookieRankingsTab from "./dashboard/RookieRankingsTab";
 import ProjectionsTab from "./dashboard/ProjectionsTab";
+import PowerRankingsTab from "./dashboard/PowerRankingsTab";
 
 const ROW1 = [
   { key: "overview",  label: "Overview" },
@@ -31,6 +32,7 @@ const ROW1 = [
 ];
 
 const ROW2 = [
+  { key: "power",     label: "Power" },
   { key: "rankings",  label: "Rankings" },
   { key: "rookies",   label: "Rookies" },
   { key: "tinder",    label: "Trade Jury" },
@@ -339,6 +341,15 @@ export default function Dashboard({
       )}
       {activeTab === "strategy" && (strategyPlannerEnabled || strategyUnlocked) && (
         <StrategyPlannerTab analysis={analysis} selectedLeague={selectedLeague} />
+      )}
+
+      {activeTab === "power" && (
+        <PowerRankingsTab
+          leagueTeams={analysis.leagueTeams}
+          myRosterId={analysis.rosterId}
+          league={selectedLeague}
+          isSuperflex={analysis.isSuperflex}
+        />
       )}
 
       {activeTab === "rankings" && (
