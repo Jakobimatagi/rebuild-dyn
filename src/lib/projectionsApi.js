@@ -68,6 +68,68 @@ export async function fetchProjections(season, week) {
 }
 
 /**
+ * Per-player season-average projection (mean proj_ppr / floor / ceiling across
+ * all published weeks of a season), indexed by Sleeper player_id. This is the
+ * "typical week" projection the Power Rankings tab feeds into each team's
+ * optimal lineup to get its projected max points per week.
+ *
+ * Returns { byPlayerId: Map, count }. Never throws — an unmigrated table or a
+ * network error yields an empty map so the caller degrades to results-based
+ * strength.
+ */
+export async function fetchSeasonProjectionAverages(season) {
+  if (!season) return { byPlayerId: new Map(), count: 0 };
+  const cacheKey = `dyn_proj_avg_${season}`;
+  let rows = null;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Date.now() - parsed.timestamp < ONE_HOUR_MS) rows = parsed.rows;
+    }
+  } catch {
+    // ignore cache read issues
+  }
+
+  if (!rows) {
+    try {
+      const { data, error } = await supabase
+        .from("player_projections")
+        .select("player_id, position, proj_ppr, floor, ceiling")
+        .eq("season", season);
+      if (error) throw error;
+      rows = data || [];
+      safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), rows }));
+    } catch {
+      return { byPlayerId: new Map(), count: 0, unavailable: true };
+    }
+  }
+
+  // Average each metric across the season's published weeks → one row/player.
+  const acc = new Map(); // id → { position, p:[sum,n], f:[sum,n], c:[sum,n] }
+  for (const r of rows) {
+    const id = String(r.player_id);
+    const cur = acc.get(id) || { position: r.position, p: 0, f: 0, c: 0, n: 0 };
+    if (r.proj_ppr != null) cur.p += Number(r.proj_ppr);
+    if (r.floor != null) cur.f += Number(r.floor);
+    if (r.ceiling != null) cur.c += Number(r.ceiling);
+    cur.n += 1;
+    acc.set(id, cur);
+  }
+  const byPlayerId = new Map();
+  for (const [id, v] of acc) {
+    if (v.n === 0) continue;
+    byPlayerId.set(id, {
+      position: v.position,
+      proj_ppr: v.p / v.n,
+      floor: v.f / v.n,
+      ceiling: v.c / v.n,
+    });
+  }
+  return { byPlayerId, count: byPlayerId.size };
+}
+
+/**
  * Forward production percentile (0-99, within position) per Sleeper player_id,
  * derived from the nflverse-enriched weekly projections — the bridge that feeds
  * dynastyValue.computeDynastyValue's `projPctile`.
