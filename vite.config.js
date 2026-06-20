@@ -65,6 +65,14 @@ export default defineConfig(({ mode }) => {
     ],
     server: {
       proxy: {
+        // Per-week projections + box scores live on the newer host (no /v1).
+        // Must precede '/sleeper' — Vite matches the first prefix that fits and
+        // '/sleeper' is itself a prefix of '/sleeper2'.
+        '/sleeper2': {
+          target: 'https://api.sleeper.com',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/sleeper2/, ''),
+        },
         '/sleeper': {
           target: 'https://api.sleeper.app/v1',
           changeOrigin: true,

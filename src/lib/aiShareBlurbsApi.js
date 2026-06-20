@@ -15,9 +15,10 @@ function blurbFingerprint(kind, scope, players) {
   const parts = players.map((p) => {
     if (kind === "top-players") return `${p.id}:${p.finalScore}`;
     if (kind === "oc-usage") return `${p.id}:${p.metric ?? ""}`;
+    if (kind === "hot-cold") return `${p.id}:${p.last4 ?? ""}:${p.streak ?? ""}`;
     return `${p.id}:${p.grade}`;
   });
-  const seed = `${kind}|${scope?.year ?? ""}|${scope?.season ?? ""}|${scope?.board ?? ""}|${scope?.position ?? ""}|${parts.join(",")}`;
+  const seed = `${kind}|${scope?.year ?? ""}|${scope?.season ?? ""}|${scope?.board ?? ""}|${scope?.card ?? ""}|${scope?.position ?? ""}|${parts.join(",")}`;
   let h = 5381;
   for (let i = 0; i < seed.length; i++) h = ((h << 5) + h + seed.charCodeAt(i)) | 0;
   return Math.abs(h).toString(36);
@@ -60,8 +61,9 @@ export async function fetchShareBlurbs(kind, players, scope = {}, { force = fals
     const cached = readCache(key);
     if (cached) {
       return {
-        blurbsById: new Map(cached.result.blurbs.map((b) => [b.id, b.blurb])),
+        blurbsById: new Map((cached.result.blurbs || []).map((b) => [b.id, b.blurb])),
         tweet: cached.result.tweet ?? null,
+        synopsis: cached.result.synopsis ?? null,
         cached: true,
         generatedAt: cached.timestamp,
       };
@@ -99,14 +101,17 @@ export async function fetchShareBlurbs(kind, players, scope = {}, { force = fals
   }
 
   const data = await res.json();
-  if (!data?.result?.blurbs) throw new Error("Empty result from insight model");
+  if (!data?.result || (!data.result.blurbs && !data.result.synopsis)) {
+    throw new Error("Empty result from insight model");
+  }
 
   const stamped = { result: data.result, timestamp: Date.now() };
   safeLocalStorageWrite(key, JSON.stringify(stamped));
 
   return {
-    blurbsById: new Map(data.result.blurbs.map((b) => [b.id, b.blurb])),
+    blurbsById: new Map((data.result.blurbs || []).map((b) => [b.id, b.blurb])),
     tweet: data.result.tweet ?? null,
+    synopsis: data.result.synopsis ?? null,
     cached: false,
     generatedAt: stamped.timestamp,
   };
@@ -202,4 +207,26 @@ export function buildOcBlurbInput(subject) {
     if (subject[f] != null) out[f] = subject[f];
   }
   return out;
+}
+
+// Compact beat-the-projection summary for the Hot & Cold share cards. `player`
+// is a row from hotStreaks' buildPlayerStreaks output. Residuals are points
+// above/below weekly projection; positive = hot (sell-high), negative = cold.
+export function buildHotColdBlurbInput(player) {
+  const round = (v, d = 1) =>
+    v == null || !Number.isFinite(v) ? null : Number(v.toFixed(d));
+  return {
+    id: player.player_id,
+    name: player.name,
+    pos: player.position,
+    team: player.team || null,
+    streak: player.currentStreak ?? 0,
+    last4: round(player.recentAvgResidual),
+    season: round(player.seasonAvgResidual),
+    beatRate: round(player.beatRate, 2),
+    beatCount: player.beatCount,
+    weeks: player.evaluatedWeeks,
+    avgActual: round(player.avgActual),
+    avgProj: round(player.avgProj),
+  };
 }

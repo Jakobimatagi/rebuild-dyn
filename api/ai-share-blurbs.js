@@ -93,10 +93,34 @@ Return ONLY this JSON, no prose, no markdown, no code fences:
 
 Length of "blurbs" must equal length of input. Every input id must appear in the output. Each blurb ≤ 140 characters. The "tweet" must be ≤ 270 characters.`;
 
+const HOT_COLD_SYSTEM = `You are a dynasty fantasy football analyst. You will receive one share card's worth of players graded on how their weekly ACTUAL fantasy points compared to their PROJECTED points (PPR). A positive residual means beating the projection (running HOT → sell-high candidate); negative means under-performing the projection (running COLD → buy-low candidate).
+
+Each row carries:
+  - name, pos, team
+  - streak: current consecutive-week streak (+N = N straight weeks beating projection, -N = N straight weeks missing it, 0 = none)
+  - last4: average points above/below projection over the last 4 graded weeks (the momentum number)
+  - season: average points above/below projection across the whole season
+  - beatRate: fraction of graded weeks that beat projection (0–1)
+  - beatCount / weeks: weeks beaten / total graded weeks
+  - avgActual / avgProj: average actual vs projected points
+
+The card context tells you what this card is: a HOT (sell-high) leaderboard, a COLD (buy-low) leaderboard, a single team's heat map (mixed hot and cold), or a single-player spotlight. Tailor the framing to that.
+
+Write ONE synopsis — at most 2 sentences, ≤ 240 characters total — that tells a dynasty manager the STORY of this card at a glance: who the standout is, the sell-high or buy-low angle, and the single most load-bearing number. For a team heat map, contrast who's hot vs cold. For a single player, make it a sharp one-liner on how hot/cold they are and the move.
+
+Voice: confident, scout-tone, NO emojis, NO filler hype like "BREAKING" / "SMASH". Cite exact numbers when they're load-bearing.
+
+Return ONLY this JSON, no prose, no markdown, no code fences:
+{
+  "synopsis": "≤ 240 character read on this card",
+  "blurbs": []
+}`;
+
 const SYSTEM_BY_KIND = {
   rookies: ROOKIES_SYSTEM,
   "top-players": TOP_PLAYERS_SYSTEM,
   "oc-usage": OC_USAGE_SYSTEM,
+  "hot-cold": HOT_COLD_SYSTEM,
 };
 
 export default async function handler(req, res) {
@@ -115,13 +139,15 @@ export default async function handler(req, res) {
   }
   const systemPrompt = SYSTEM_BY_KIND[kind];
   if (!systemPrompt) {
-    return res.status(400).json({ error: "kind must be 'rookies', 'top-players', or 'oc-usage'" });
+    return res.status(400).json({ error: "kind must be 'rookies', 'top-players', 'oc-usage', or 'hot-cold'" });
   }
 
   const scopeBit = kind === "rookies"
     ? `Rookie class: ${scope?.year ?? "unknown"}. Position scope: ${scope?.position ?? "all"}.`
     : kind === "oc-usage"
     ? `NFL usage data · ${scope?.season ?? "season"}. Card: ${scope?.board ?? "usage"}.`
+    : kind === "hot-cold"
+    ? `Hot & Cold beat-the-projection board · ${scope?.season ?? "season"}. Card: ${scope?.card ?? "leaderboard"}.`
     : `Top Players board · 12-team SF full-PPR. Position scope: ${scope?.position ?? "all"}.`;
 
   const userPrompt = `${scopeBit}
@@ -167,7 +193,11 @@ Write the blurbs as specified.`;
     }
 
     const result = parseJsonLoose(text);
-    if (!result || !Array.isArray(result.blurbs)) {
+    // Card-level kinds (hot-cold) may return only a synopsis; row-level kinds
+    // return a blurbs array. Accept either shape.
+    const hasBlurbs = Array.isArray(result?.blurbs);
+    const hasSynopsis = typeof result?.synopsis === "string";
+    if (!result || (!hasBlurbs && !hasSynopsis)) {
       return res
         .status(502)
         .json({ error: "Could not parse JSON from model", raw: text });
