@@ -50,7 +50,11 @@ function AssetLine({ asset }) {
         ) : isFuture ? (
           <>
             <span style={{ color: "#c084fc" }}>{asset.label}</span>
-            <span style={{ color: "#4a5068", fontSize: 10 }}> (unused pick)</span>
+            {asset.fromTeam ? (
+              <span style={{ color: "#4a5068", fontSize: 10 }}> ({asset.fromTeam}'s pick)</span>
+            ) : (
+              <span style={{ color: "#4a5068", fontSize: 10 }}> (unused pick)</span>
+            )}
           </>
         ) : (
           <span>{asset.label}</span>

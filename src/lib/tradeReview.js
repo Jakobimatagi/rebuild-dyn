@@ -181,6 +181,85 @@ export function resolveTradedPick(pick, sleeperDrafts, allDraftPicksMap, rosters
   return buildDraftResolver(sleeperDrafts, allDraftPicksMap, rosters)(pick);
 }
 
+// Resolve a traded pick against the *in-progress* draft. buildDraftResolver only
+// indexes completed drafts, so picks for a live draft (a startup or rookie draft
+// happening right now) fall through to the bare "2026 1st" fallback — no seat,
+// no owning team. This resolver fills that gap: it maps a pick to its draft slot
+// ("spot", e.g. round 2 / slot 5 → "2.05") via the live draft's slot_to_roster_id,
+// names the team that owns the seat, and — if that slot is already on the board —
+// hands back the drafted player so the pick reads as used. Returns null for picks
+// that belong to a different season's draft (let the completed-draft path handle
+// those) or when the draft order isn't set yet.
+//
+// @param {Object} liveDraft        the in-progress Sleeper draft object
+// @param {Array}  liveDraftPicks   picks made so far in that draft
+// @param {Map}    rosterLabelById  rosterId → team label
+export function buildLiveSlotResolver(
+  liveDraft,
+  liveDraftPicks = [],
+  rosterLabelById = new Map(),
+) {
+  if (!liveDraft) return () => null;
+
+  const slotByRoster = new Map();
+  const s2r = liveDraft.slot_to_roster_id || {};
+  for (const [slot, rid] of Object.entries(s2r)) {
+    if (rid != null) slotByRoster.set(Number(rid), Number(slot));
+  }
+  if (slotByRoster.size === 0) return () => null;
+
+  const season = String(liveDraft.season || "");
+  const startYear = liveDraft.start_time
+    ? new Date(Number(liveDraft.start_time)).getFullYear()
+    : null;
+
+  // Made picks indexed by round-slot, so a traded pick that's already been used
+  // resolves to the player taken at that seat.
+  const byRoundSlot = new Map();
+  for (const p of liveDraftPicks || []) {
+    if (p?.round != null && p?.draft_slot != null) {
+      byRoundSlot.set(`${Number(p.round)}-${Number(p.draft_slot)}`, p);
+    }
+  }
+
+  const ownerLabel = (rid) =>
+    rosterLabelById.get(Number(rid)) ||
+    rosterLabelById.get(String(rid)) ||
+    null;
+
+  return function resolveLive(pick) {
+    if (!pick?.season || !pick?.round) return null;
+    const seasonNum = Number(pick.season);
+    // Only this draft's picks; other seasons fall to the completed-draft path.
+    if (String(pick.season) !== season && startYear !== seasonNum) return null;
+
+    const slot = slotByRoster.get(Number(pick.roster_id));
+    if (slot == null) return null;
+
+    const round = Number(pick.round);
+    const seat = `${round}.${String(slot).padStart(2, "0")}`; // e.g. "2.05"
+    const owner = ownerLabel(pick.roster_id);
+
+    const made = byRoundSlot.get(`${round}-${slot}`);
+    if (made && made.player_id) {
+      const meta = made.metadata || {};
+      const name =
+        `${meta.first_name || ""} ${meta.last_name || ""}`.trim() ||
+        `Player ${made.player_id}`;
+      return {
+        slot, round, seat, ownerLabel: owner, made: true,
+        player: {
+          playerId: String(made.player_id),
+          playerName: name,
+          position: meta.position || "",
+          pickNo: made.pick_no,
+        },
+      };
+    }
+    return { slot, round, seat, ownerLabel: owner, made: false };
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Snapshot ("value then") lookup
 //
@@ -220,7 +299,7 @@ function isoDate(ms) {
   return new Date(Number(ms)).toISOString().slice(0, 10);
 }
 
-function buildAsset({ kind, pick, playerId, players, resolvePick,
+function buildAsset({ kind, pick, playerId, players, resolvePick, resolveLive,
   sources, leagueContext, snapshots, snapDate, prefer = "fc" }) {
   if (kind === "player") {
     const p = players?.[playerId];
@@ -261,6 +340,42 @@ function buildAsset({ kind, pick, playerId, players, resolvePick,
       thenSource: valueThen != null ? "snapshot" : "outside_frame",
     };
   }
+
+  // Live in-progress draft: give the pick its seat ("spot", e.g. 2026 2.05) and
+  // the team that owns it, even before it's on the clock. If the seat has already
+  // been drafted, it reads as a used pick (drafted player's value-now).
+  const live = resolveLive ? resolveLive(pick) : null;
+  if (live) {
+    const seatLabel = `${pick.season} ${live.seat}`;
+    if (live.made) {
+      const now = playerValueNow(live.player.playerId, sources, prefer);
+      const valueThen = snapshotPlayerValueThen(live.player.playerId, snapDate, snapshots);
+      return {
+        kind: "pick_used",
+        label: seatLabel,
+        fromTeam: live.ownerLabel,
+        becamePlayerId: live.player.playerId,
+        becameLabel: live.player.playerName,
+        position: live.player.position,
+        pickNo: live.player.pickNo,
+        valueNow: now.value,
+        nowSource: now.source,
+        valueThen,
+        thenSource: valueThen != null ? "snapshot" : "outside_frame",
+      };
+    }
+    return {
+      kind: "pick_future",
+      label: seatLabel,
+      fromTeam: live.ownerLabel,
+      slot: live.slot,
+      valueNow: pickValueNow(pick, leagueContext),
+      nowSource: "pick_est",
+      valueThen: null,
+      thenSource: "outside_frame",
+    };
+  }
+
   // Future / unused pick — value the pick itself (static estimate, no market feed).
   return {
     kind: "pick_future",
@@ -284,10 +399,13 @@ export function buildTradeReview({
   allDraftPicksMap = {},
   rosters = [],
   valueSnapshots = null,
+  liveDraft = null, // in-progress draft, so its traded picks resolve to a seat
+  liveDraftPicks = [],
 }) {
   const trades = (transactions || []).filter((t) => t.type === "trade");
   const sources = { fc: fcByPlayerId, ra: raByPlayerId, oracle: internalByPlayerId };
   const resolvePick = buildDraftResolver(sleeperDrafts, allDraftPicksMap, rosters);
+  const resolveLive = buildLiveSlotResolver(liveDraft, liveDraftPicks, rosterLabelById);
   const label = (rid) =>
     rosterLabelById.get(Number(rid)) ||
     rosterLabelById.get(String(rid)) ||
@@ -310,7 +428,7 @@ export function buildTradeReview({
       if (toRid == null) continue;
       ensure(toRid).assets.push(
         buildAsset({
-          kind: "player", playerId: pid, players, resolvePick, sources,
+          kind: "player", playerId: pid, players, resolvePick, resolveLive, sources,
           leagueContext, snapshots: valueSnapshots, snapDate, prefer,
         }),
       );
@@ -320,7 +438,7 @@ export function buildTradeReview({
       if (pick.owner_id == null) continue;
       ensure(pick.owner_id).assets.push(
         buildAsset({
-          kind: "pick", pick, players, resolvePick, sources, leagueContext,
+          kind: "pick", pick, players, resolvePick, resolveLive, sources, leagueContext,
           snapshots: valueSnapshots, snapDate, prefer,
         }),
       );

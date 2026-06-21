@@ -85,38 +85,52 @@ export default function LiveDraftTab({
     ownerId: t.ownerId,
   }));
 
-  const refresh = useCallback(async () => {
-    if (!draft?.draft_id) return;
-    setRefreshing(true);
-    try {
-      const [freshDraft, freshPicks] = await Promise.all([
-        fetchSleeper(`/draft/${draft.draft_id}`).catch(() => null),
-        fetchDraftPicks(draft.draft_id).catch(() => null),
-      ]);
-      if (freshDraft) setLiveDraft(freshDraft);
-      if (Array.isArray(freshPicks)) setPicks(freshPicks);
+  // A fetch is allowed to be in flight only once at a time. The guard lives in a
+  // ref (not state) so it never re-renders and the background poll can dedupe
+  // against a manual refresh. `refreshing` is *only* toggled for manual clicks so
+  // the button doesn't gray out / flip to "Refreshing…" on every 12s poll — that
+  // flicker is what made it feel unclickable.
+  const inFlightRef = useRef(false);
+  const refresh = useCallback(
+    async (isManual = false) => {
+      if (!draft?.draft_id) return;
+      // Background polls bail if anything is already fetching; a manual click is
+      // always honored so the button feels responsive even mid-poll.
+      if (inFlightRef.current && !isManual) return;
+      inFlightRef.current = true;
+      if (isManual) setRefreshing(true);
+      try {
+        const [freshDraft, freshPicks] = await Promise.all([
+          fetchSleeper(`/draft/${draft.draft_id}`).catch(() => null),
+          fetchDraftPicks(draft.draft_id).catch(() => null),
+        ]);
+        if (freshDraft) setLiveDraft(freshDraft);
+        if (Array.isArray(freshPicks)) setPicks(freshPicks);
 
-      // Best-effort live trade capture. Offseason/startup-draft trades land in
-      // the early transaction "weeks", so poll a small window and merge into the
-      // seeded history (deduped by id). Wrong-week guesses just no-op.
-      if (leagueId) {
-        const weekResults = await Promise.all(
-          [0, 1, 2].map((wk) =>
-            fetchSleeper(`/league/${leagueId}/transactions/${wk}`).catch(() => []),
-          ),
-        );
-        const fresh = weekResults
-          .flat()
-          .filter((t) => t?.type === "trade" && t?.status !== "failed");
-        if (fresh.length > 0) {
-          setTradeTx((prev) => mergeTransactions(prev, fresh));
+        // Best-effort live trade capture. Offseason/startup-draft trades land in
+        // the early transaction "weeks", so poll a small window and merge into the
+        // seeded history (deduped by id). Wrong-week guesses just no-op.
+        if (leagueId) {
+          const weekResults = await Promise.all(
+            [0, 1, 2].map((wk) =>
+              fetchSleeper(`/league/${leagueId}/transactions/${wk}`).catch(() => []),
+            ),
+          );
+          const fresh = weekResults
+            .flat()
+            .filter((t) => t?.type === "trade" && t?.status !== "failed");
+          if (fresh.length > 0) {
+            setTradeTx((prev) => mergeTransactions(prev, fresh));
+          }
         }
+        setLastUpdated(Date.now());
+      } finally {
+        inFlightRef.current = false;
+        if (isManual) setRefreshing(false);
       }
-      setLastUpdated(Date.now());
-    } finally {
-      setRefreshing(false);
-    }
-  }, [draft?.draft_id, leagueId]);
+    },
+    [draft?.draft_id, leagueId],
+  );
 
   // Poll while auto-refresh is on and the draft isn't finished.
   const isComplete = liveDraft?.status === "complete";
@@ -156,8 +170,16 @@ export default function LiveDraftTab({
   // draft get a card too. Keyed by transaction id to attach to each trade above.
   const tradeReview = useMemo(() => {
     if (!tradeReviewInputs) return null;
-    return buildTradeReview({ ...tradeReviewInputs, transactions: tradeTx });
-  }, [tradeReviewInputs, tradeTx]);
+    return buildTradeReview({
+      ...tradeReviewInputs,
+      transactions: tradeTx,
+      // The in-progress draft + its picks let traded picks resolve to a seat
+      // ("spot", e.g. 2026 2.05) and the team that owns it — the completed-draft
+      // resolver in tradeReviewInputs can't, since this draft isn't finished.
+      liveDraft,
+      liveDraftPicks: picks,
+    });
+  }, [tradeReviewInputs, tradeTx, liveDraft, picks]);
 
   const statusColor = state.complete
     ? "#94a3b8"
@@ -241,9 +263,8 @@ export default function LiveDraftTab({
           <button
             type="button"
             className="dyn-btn-ghost"
-            style={styles.btnGhost}
-            onClick={refresh}
-            disabled={refreshing}
+            style={{ ...styles.btnGhost, minWidth: 104 }}
+            onClick={() => refresh(true)}
           >
             {refreshing ? "Refreshing…" : "Refresh"}
           </button>
@@ -392,7 +413,42 @@ export default function LiveDraftTab({
         />
       )}
 
-      {view === "board" && <LiveBoard state={state} myRosterId={myRosterId} />}
+      {view === "board" && (
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            alignItems: "flex-start",
+            flexWrap: "wrap",
+          }}
+        >
+          {/* Board scrolls horizontally; minWidth:0 lets it shrink inside the flex
+              row instead of pushing the sidebar off-screen. */}
+          <div style={{ flex: "1 1 460px", minWidth: 0 }}>
+            <LiveBoard state={state} myRosterId={myRosterId} />
+          </div>
+          {/* Best Available pinned beside the board so you never lose sight of it.
+              Sticky keeps it in view while scrolling the board's rows. */}
+          {bestAvailablePool.length > 0 && (
+            <div
+              style={{
+                flex: "1 1 280px",
+                maxWidth: "100%",
+                position: "sticky",
+                top: 12,
+              }}
+            >
+              <BestAvailable
+                pool={bestAvailablePool}
+                draftedIds={state.draftedIds}
+                posFilter={posFilter}
+                setPosFilter={setPosFilter}
+                compact
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 12 }}>
         Updated {new Date(lastUpdated).toLocaleTimeString()}
@@ -535,9 +591,10 @@ function TradesView({ trades, tradeReview, myRosterId }) {
 
 const BEST_AVAIL_LIMIT = 75;
 
-function BestAvailable({ pool, draftedIds, posFilter, setPosFilter }) {
+function BestAvailable({ pool, draftedIds, posFilter, setPosFilter, compact = false }) {
   const drafted = draftedIds || new Set();
   const available = pool.filter((p) => !drafted.has(p.playerId));
+  const rowLimit = compact ? 40 : BEST_AVAIL_LIMIT;
 
   // Position filter chips, in a sensible order, only for positions present.
   const presentPositions = [];
@@ -564,7 +621,7 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter }) {
     showAll
       ? available
       : available.filter((p) => selectedSet.has(p.position))
-  ).slice(0, BEST_AVAIL_LIMIT);
+  ).slice(0, rowLimit);
 
   return (
     <div style={{ ...styles.card }}>
@@ -622,7 +679,15 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter }) {
           No players available{!showAll ? ` at ${selected.join(" / ")}` : ""}.
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column" }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            // As a board sidebar, cap the height and scroll internally so the
+            // board stays aligned and the list doesn't run off the page.
+            ...(compact ? { maxHeight: "60vh", overflowY: "auto" } : {}),
+          }}
+        >
           {filtered.map((p, i) => (
             <div
               key={p.playerId}
@@ -670,10 +735,7 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter }) {
       <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 10 }}>
         Undrafted players ranked by dynasty value (RosterAudit, FantasyCalc
         fallback). Updates live as picks come off the board
-        {available.length > BEST_AVAIL_LIMIT
-          ? ` · showing top ${BEST_AVAIL_LIMIT}`
-          : ""}
-        .
+        {available.length > rowLimit ? ` · showing top ${rowLimit}` : ""}.
       </div>
     </div>
   );
