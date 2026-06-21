@@ -17,11 +17,26 @@ export const MIN_PROJ_FLOOR = 4;
 // How many recent evaluated weeks define "recent form".
 export const RECENT_N = 4;
 
+// Minimum last-4 average residual (PPR points) to count as genuinely hot or
+// cold. Inside ±this band a player is essentially *meeting* projection — not a
+// sell-high or buy-low signal — so they drop off both lists. Without it, a guy
+// averaging +0.1 over projection (e.g. A.J. Brown 14.7 vs 14.6) reads as "hot"
+// despite being dead-on his expectation.
+export const HOT_COLD_MARGIN = 2;
+
 // A player who hasn't suited up for this many of the most recent league weeks is
 // treated as out (injury / season cut short) rather than "active". This pulls
 // guys like a mid-season-injured riser off the live sell-high/buy-low lists and
 // onto the dedicated injured list, where their last-played form is pre-injury.
 export const MISSED_TAIL_WEEKS = 3;
+
+// "Mainly the last bit of the season": the recent window over which we measure
+// how much a player actually participated. A guy who only played a 3-game cameo
+// shouldn't read as a real hot/cold signal, so we require them to have suited up
+// for most of this recent stretch (see DEFAULT_ELIGIBILITY.minRecentParticipation).
+// Gating on the *recent* window (rather than the whole season) keeps late-season
+// risers who started every game down the stretch, while cutting small samples.
+export const RECENT_PARTICIPATION_WINDOW = 8;
 
 // Default eligibility for showing up on the board at all.
 //
@@ -35,6 +50,10 @@ export const DEFAULT_ELIGIBILITY = {
   minEvaluatedWeeks: 3, // need enough graded weeks for a streak to mean something
   minAvgProj: 8,        // baseline startable floor (fallback when position unknown)
   minAvgProjByPos: { QB: 14, RB: 9, WR: 9, TE: 7 },
+  // Fraction of the recent window (RECENT_PARTICIPATION_WINDOW weeks) the player
+  // must have actually played to count as an active hot/cold signal — drops
+  // small-sample cameos (e.g. a 3-game callup) off the board.
+  minRecentParticipation: 0.75,
 };
 
 // Looser eligibility for the injured list: a season cut short by injury (or a
@@ -147,6 +166,14 @@ export function buildPlayerStreaks(entries) {
     const seasonEndedEarly =
       lastPlayedWeek != null && weeksMissedRecent >= MISSED_TAIL_WEEKS;
 
+    // Recent-stretch participation: how many of the last RECENT_PARTICIPATION_WINDOW
+    // league weeks did this player actually suit up for? Used to drop small-sample
+    // cameos (a 3-game callup) while keeping late-season risers who started down
+    // the stretch. windowStart clamps to week 1 for short / early seasons.
+    const windowStart = leagueLastWeek > 0 ? Math.max(1, leagueLastWeek - RECENT_PARTICIPATION_WINDOW + 1) : 1;
+    const recentWindowWeeks = leagueLastWeek > 0 ? leagueLastWeek - windowStart + 1 : 0;
+    const recentGamesPlayed = playedWeeks.filter((w) => w.week >= windowStart).length;
+
     out.push({
       player_id: p.player_id,
       position: p.position,
@@ -167,6 +194,8 @@ export function buildPlayerStreaks(entries) {
       lastPlayedWeek,
       weeksMissedRecent,
       seasonEndedEarly,
+      recentGamesPlayed,
+      recentWindowWeeks,
     });
   }
   return out;
@@ -176,9 +205,19 @@ export function buildPlayerStreaks(entries) {
 export function isEligible(player, eligibility = DEFAULT_ELIGIBILITY) {
   const posFloor =
     eligibility.minAvgProjByPos?.[player.position] ?? eligibility.minAvgProj;
+  // Recent-stretch participation: only enforced when configured and when the
+  // season actually has a recent window. Players who suited up for fewer than
+  // minRecentParticipation of the last RECENT_PARTICIPATION_WINDOW weeks (e.g. a
+  // 3-game cameo) are dropped — their hot/cold form isn't a real, current signal.
+  const recentOk =
+    eligibility.minRecentParticipation == null ||
+    player.recentWindowWeeks == null ||
+    player.recentWindowWeeks === 0 ||
+    player.recentGamesPlayed >= Math.ceil(eligibility.minRecentParticipation * player.recentWindowWeeks);
   return (
     player.evaluatedWeeks >= eligibility.minEvaluatedWeeks &&
-    player.avgProj >= posFloor
+    player.avgProj >= posFloor &&
+    recentOk
   );
 }
 
@@ -190,7 +229,7 @@ export function isEligible(player, eligibility = DEFAULT_ELIGIBILITY) {
  */
 export function rankHot(players, eligibility = DEFAULT_ELIGIBILITY) {
   return players
-    .filter((p) => isEligible(p, eligibility) && !p.seasonEndedEarly && p.recentAvgResidual > 0 && p.momentum > 0)
+    .filter((p) => isEligible(p, eligibility) && !p.seasonEndedEarly && p.recentAvgResidual >= HOT_COLD_MARGIN && p.momentum > 0)
     .sort((a, b) => b.recentAvgResidual - a.recentAvgResidual || b.momentum - a.momentum);
 }
 
@@ -201,7 +240,7 @@ export function rankHot(players, eligibility = DEFAULT_ELIGIBILITY) {
  */
 export function rankCold(players, eligibility = DEFAULT_ELIGIBILITY) {
   return players
-    .filter((p) => isEligible(p, eligibility) && !p.seasonEndedEarly && p.recentAvgResidual < 0 && p.momentum < 0)
+    .filter((p) => isEligible(p, eligibility) && !p.seasonEndedEarly && p.recentAvgResidual <= -HOT_COLD_MARGIN && p.momentum < 0)
     .sort((a, b) => a.recentAvgResidual - b.recentAvgResidual || a.momentum - b.momentum);
 }
 
