@@ -122,6 +122,26 @@ test("rankHot returns over-performers hottest-first; rankCold the inverse", () =
   assert.ok(!cold.some((p) => p.player_id === "1")); // riser not in cold list
 });
 
+test("recent-participation gate drops small-sample cameos, keeps late-season risers", () => {
+  // League ran 12 weeks. A 3-game cameo (weeks 10-12) and a late riser who
+  // started the whole back half (weeks 5-12) both beat projection big.
+  const entries = [
+    e(1, 10, 10, 18), e(1, 11, 10, 20), e(1, 12, 10, 22),                 // cameo: 3 of last 8
+    e(2, 5, 10, 16), e(2, 6, 10, 17), e(2, 7, 10, 18), e(2, 8, 10, 19),   // riser: started wk 5
+    e(2, 9, 10, 20), e(2, 10, 10, 21), e(2, 11, 10, 22), e(2, 12, 10, 23),//  → 8 of last 8
+  ];
+  const players = buildPlayerStreaks(entries);
+  const cameo = players.find((p) => p.player_id === "1");
+  const riser = players.find((p) => p.player_id === "2");
+
+  assert.equal(cameo.recentGamesPlayed, 3);   // last 8 weeks (5-12): only 10,11,12
+  assert.equal(riser.recentGamesPlayed, 8);
+  assert.equal(isEligible(cameo), false);      // 3 < ceil(0.75 * 8) = 6 → off the board
+  assert.equal(isEligible(riser), true);       // started the stretch → stays
+  assert.ok(!rankHot(players).some((p) => p.player_id === "1"));
+  assert.ok(rankHot(players).some((p) => p.player_id === "2"));
+});
+
 test("allWeeks retains DNP and below-floor weeks, flagged as not evaluated", () => {
   const players = buildPlayerStreaks([
     e(1, 1, 10, 14),                 // evaluated beat
@@ -142,8 +162,10 @@ test("flags a hot-then-injured player, pulls them off the hot list onto injured"
     // Riser: hot weeks 1-5, then season-ending injury (DNP 6-10)
     e(1, 1, 12, 18), e(1, 2, 12, 20), e(1, 3, 12, 22), e(1, 4, 12, 24), e(1, 5, 12, 26),
     e(1, 6, 12, null), e(1, 7, 12, null), e(1, 8, 12, null), e(1, 9, 12, null), e(1, 10, 12, null),
-    // Healthy riser who keeps playing through the latest week (week 10)
-    e(2, 6, 12, 18), e(2, 7, 12, 19), e(2, 8, 12, 20), e(2, 9, 12, 21), e(2, 10, 12, 22),
+    // Healthy riser who keeps playing through the latest week (week 10) — and
+    // played most of the recent stretch, so he clears the participation gate.
+    e(2, 3, 12, 17), e(2, 4, 12, 17), e(2, 5, 12, 18), e(2, 6, 12, 18),
+    e(2, 7, 12, 19), e(2, 8, 12, 20), e(2, 9, 12, 21), e(2, 10, 12, 22),
   ];
   const players = buildPlayerStreaks(entries);
   const injured = players.find((p) => p.player_id === "1");
