@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { styles } from "../../styles";
 import { fetchSleeper, fetchDraftPicks } from "../../lib/sleeperApi";
 import { buildLiveDraftState } from "../../lib/liveDraft";
 import { parseTrades, mergeTransactions } from "../../lib/draftTrades";
+import { buildTradeReview } from "../../lib/tradeReview";
+import { FeedTradeBody } from "./tradeReportCard";
 
 const POS_COLOR = {
   QB: "#ff6b6b",
@@ -60,6 +62,7 @@ export default function LiveDraftTab({
   leagueId,
   players = {},
   initialTradeTransactions = [],
+  tradeReviewInputs = null,
 }) {
   const [picks, setPicks] = useState(initialPicks);
   const [liveDraft, setLiveDraft] = useState(draft);
@@ -147,6 +150,14 @@ export default function LiveDraftTab({
 
   const teamLabelById = new Map(leagueTeams.map((t) => [t.rosterId, t.label]));
   const trades = parseTrades(tradeTx, { players, teamLabelById, myRosterId });
+
+  // Grade each trade with the exact engine the Activity-tab Trade Report Card
+  // uses, rebuilt over the live transaction feed so trades made *during* the
+  // draft get a card too. Keyed by transaction id to attach to each trade above.
+  const tradeReview = useMemo(() => {
+    if (!tradeReviewInputs) return null;
+    return buildTradeReview({ ...tradeReviewInputs, transactions: tradeTx });
+  }, [tradeReviewInputs, tradeTx]);
 
   const statusColor = state.complete
     ? "#94a3b8"
@@ -373,7 +384,13 @@ export default function LiveDraftTab({
         </>
       )}
 
-      {view === "trades" && <TradesView trades={trades} />}
+      {view === "trades" && (
+        <TradesView
+          trades={trades}
+          tradeReview={tradeReview}
+          myRosterId={myRosterId}
+        />
+      )}
 
       {view === "board" && <LiveBoard state={state} myRosterId={myRosterId} />}
 
@@ -410,7 +427,60 @@ function TradeAsset({ asset }) {
   );
 }
 
-function TradesView({ trades }) {
+// Plain who-got-what layout — the fallback when a trade has no value card
+// (e.g. an all-pick deal with no market coverage). Identical to the original
+// TradesView row.
+function PlainTradeTeams({ teams }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {teams.map((team) => (
+        <div
+          key={team.rosterId}
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(110px, 160px) 1fr",
+            gap: 12,
+            alignItems: "start",
+          }}
+        >
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: team.isMe ? 700 : 600,
+              color: team.isMe ? "#00f5a0" : "#d9deef",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {team.label}
+            {team.isMe && (
+              <span style={{ fontSize: 9, color: "#00f5a0", marginLeft: 6, letterSpacing: 1 }}>
+                YOU
+              </span>
+            )}
+            <span style={{ fontSize: 9, color: "#7a819c", display: "block", letterSpacing: 1 }}>
+              GETS
+            </span>
+          </span>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {team.received.length > 0 ? (
+              team.received.map((asset, i) => (
+                <TradeAsset key={`${team.rosterId}-${i}`} asset={asset} />
+              ))
+            ) : (
+              <span style={{ fontSize: 11, color: "#54607a", fontStyle: "italic" }}>
+                —
+              </span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TradesView({ trades, tradeReview, myRosterId }) {
   if (!trades || trades.length === 0) {
     return (
       <div style={{ ...styles.card, color: "#d1d7ea", fontSize: 13 }}>
@@ -420,76 +490,45 @@ function TradesView({ trades }) {
     );
   }
 
+  const cardsById = tradeReview?.byId || {};
+  const earliestDate = tradeReview?.snapshotCoverage?.earliestDate || null;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {trades.map((trade) => (
-        <div key={trade.id} style={{ ...styles.card, marginBottom: 0 }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-              marginBottom: 12,
-            }}
-          >
-            <span style={styles.tag(trade.isMultiTeam ? "#ffd84d" : "#c084fc")}>
-              {trade.isMultiTeam ? `${trade.teams.length}-Team Trade` : "Trade"}
-            </span>
-            {trade.created > 0 && (
-              <span style={{ fontSize: 10, color: "#94a3b8" }}>
-                {new Date(trade.created).toLocaleDateString()}
+      {trades.map((trade) => {
+        const card = cardsById[trade.id];
+        return (
+          <div key={trade.id} style={{ ...styles.card, marginBottom: 0 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                marginBottom: 12,
+              }}
+            >
+              <span style={styles.tag(trade.isMultiTeam ? "#ffd84d" : "#c084fc")}>
+                {trade.isMultiTeam ? `${trade.teams.length}-Team Trade` : "Trade"}
               </span>
+              {trade.created > 0 && (
+                <span style={{ fontSize: 10, color: "#94a3b8" }}>
+                  {new Date(trade.created).toLocaleDateString()}
+                </span>
+              )}
+            </div>
+
+            {/* Same Trade Report Card the Activity tab shows — winner, per-asset
+                values, picks resolved to the player drafted, value source. Falls
+                back to the plain haul list when no card could be built. */}
+            {card ? (
+              <FeedTradeBody card={card} rosterId={myRosterId} earliestDate={earliestDate} />
+            ) : (
+              <PlainTradeTeams teams={trade.teams} />
             )}
           </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {trade.teams.map((team) => (
-              <div
-                key={team.rosterId}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(110px, 160px) 1fr",
-                  gap: 12,
-                  alignItems: "start",
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: 12,
-                    fontWeight: team.isMe ? 700 : 600,
-                    color: team.isMe ? "#00f5a0" : "#d9deef",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {team.label}
-                  {team.isMe && (
-                    <span style={{ fontSize: 9, color: "#00f5a0", marginLeft: 6, letterSpacing: 1 }}>
-                      YOU
-                    </span>
-                  )}
-                  <span style={{ fontSize: 9, color: "#7a819c", display: "block", letterSpacing: 1 }}>
-                    GETS
-                  </span>
-                </span>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                  {team.received.length > 0 ? (
-                    team.received.map((asset, i) => (
-                      <TradeAsset key={`${team.rosterId}-${i}`} asset={asset} />
-                    ))
-                  ) : (
-                    <span style={{ fontSize: 11, color: "#54607a", fontStyle: "italic" }}>
-                      —
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
