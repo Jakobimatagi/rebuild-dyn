@@ -50,6 +50,68 @@ function pickLabel(round, slot) {
   return `${round}.${String(slot).padStart(2, "0")}`;
 }
 
+// Sleeper player headshot (team logo for DEF), with a position-tinted initials
+// fallback when the image is missing or 404s. Same CDN the Admin boards use.
+function PlayerHeadshot({ playerId, name, position, team, size = 28 }) {
+  const [errored, setErrored] = useState(false);
+  const color = posColor(position);
+  const isDef = position === "DEF";
+  const url = isDef
+    ? team
+      ? `https://sleepercdn.com/images/team_logos/nfl/${team.toLowerCase()}.png`
+      : null
+    : playerId
+      ? `https://sleepercdn.com/content/nfl/players/${playerId}.jpg`
+      : null;
+
+  if (!url || errored) {
+    const initials = (name || "")
+      .split(" ")
+      .filter(Boolean)
+      .map((w) => w[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase();
+    return (
+      <div
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          background: `${color}22`,
+          border: `1px solid ${color}55`,
+          color,
+          fontSize: Math.round(size * 0.34),
+          fontWeight: 700,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+        }}
+      >
+        {initials || position || "—"}
+      </div>
+    );
+  }
+  return (
+    <img
+      src={url}
+      alt={name}
+      loading="lazy"
+      onError={() => setErrored(true)}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        objectFit: "cover",
+        background: "#0d0f17",
+        border: `1px solid ${color}55`,
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
 export default function LiveDraftTab({
   draft,
   initialPicks = [],
@@ -414,28 +476,42 @@ export default function LiveDraftTab({
       )}
 
       {view === "board" && (
+        // Full-bleed the cockpit out of the app's narrow content column — a
+        // draft board wants width. Capped so it stays sane on ultrawide screens.
         <div
           style={{
+            width: "100vw",
+            marginLeft: "calc(50% - 50vw)",
+            marginRight: "calc(50% - 50vw)",
+            padding: "0 24px",
+            boxSizing: "border-box",
+          }}
+        >
+        <div
+          style={{
+            maxWidth: 1440,
+            margin: "0 auto",
             display: "flex",
             gap: 12,
             alignItems: "flex-start",
             flexWrap: "wrap",
           }}
         >
-          {/* Board scrolls horizontally; minWidth:0 lets it shrink inside the flex
-              row instead of pushing the sidebar off-screen. */}
-          <div style={{ flex: "1 1 460px", minWidth: 0 }}>
+          {/* Board takes the main area and scrolls horizontally on its own. */}
+          <div style={{ flex: "1 1 580px", minWidth: 0 }}>
             <LiveBoard state={state} myRosterId={myRosterId} />
           </div>
-          {/* Best Available pinned beside the board so you never lose sight of it.
-              Sticky keeps it in view while scrolling the board's rows. */}
+          {/* Best Available rail — sticky so it stays visible while you scan the
+              board, with its own scroll for the long list. */}
           {bestAvailablePool.length > 0 && (
             <div
               style={{
-                flex: "1 1 280px",
-                maxWidth: "100%",
+                flex: "1 1 300px",
+                maxWidth: 360,
+                minWidth: 280,
                 position: "sticky",
                 top: 12,
+                alignSelf: "flex-start",
               }}
             >
               <BestAvailable
@@ -443,10 +519,11 @@ export default function LiveDraftTab({
                 draftedIds={state.draftedIds}
                 posFilter={posFilter}
                 setPosFilter={setPosFilter}
-                compact
+                rail
               />
             </div>
           )}
+        </div>
         </div>
       )}
 
@@ -591,10 +668,11 @@ function TradesView({ trades, tradeReview, myRosterId }) {
 
 const BEST_AVAIL_LIMIT = 75;
 
-function BestAvailable({ pool, draftedIds, posFilter, setPosFilter, compact = false }) {
+function BestAvailable({ pool, draftedIds, posFilter, setPosFilter, rail = false }) {
   const drafted = draftedIds || new Set();
   const available = pool.filter((p) => !drafted.has(p.playerId));
-  const rowLimit = compact ? 40 : BEST_AVAIL_LIMIT;
+  // As the board sidebar, cap the list so it doesn't run off the page.
+  const rowLimit = rail ? 40 : BEST_AVAIL_LIMIT;
 
   // Position filter chips, in a sensible order, only for positions present.
   const presentPositions = [];
@@ -617,11 +695,25 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter, compact = fa
     });
   };
 
+  // Positional rank within the *available* pool (e.g. "WR3"), computed over the
+  // full pool so it stays true even when the list is sliced or filtered. The
+  // pool arrives pre-sorted by dynasty value, so running counts give the rank.
+  const posRankById = new Map();
+  const posSeen = {};
+  for (const p of available) {
+    posSeen[p.position] = (posSeen[p.position] || 0) + 1;
+    posRankById.set(p.playerId, posSeen[p.position]);
+  }
+
   const filtered = (
     showAll
       ? available
       : available.filter((p) => selectedSet.has(p.position))
   ).slice(0, rowLimit);
+
+  // Scale the value bars to the top player currently shown so tier drop-offs
+  // read at a glance.
+  const maxValue = filtered.reduce((m, p) => Math.max(m, p.value || 0), 0) || 1;
 
   return (
     <div style={{ ...styles.card }}>
@@ -681,53 +773,25 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter, compact = fa
       ) : (
         <div
           style={{
-            display: "flex",
-            flexDirection: "column",
-            // As a board sidebar, cap the height and scroll internally so the
-            // board stays aligned and the list doesn't run off the page.
-            ...(compact ? { maxHeight: "60vh", overflowY: "auto" } : {}),
+            display: "grid",
+            gridTemplateColumns: rail
+              ? "1fr"
+              : "repeat(auto-fill, minmax(264px, 1fr))",
+            gap: 8,
+            // In rail mode the list scrolls on its own so the board stays put.
+            ...(rail
+              ? { maxHeight: "calc(100vh - 240px)", overflowY: "auto", paddingRight: 4 }
+              : {}),
           }}
         >
           {filtered.map((p, i) => (
-            <div
+            <BestAvailableRow
               key={p.playerId}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "24px 1fr auto",
-                gap: 10,
-                alignItems: "center",
-                padding: "6px 0",
-                borderBottom: "1px solid rgba(255,255,255,0.05)",
-              }}
-            >
-              <span style={{ fontSize: 10, color: "#94a3b8", textAlign: "right" }}>
-                {i + 1}
-              </span>
-              <span
-                style={{
-                  fontSize: 12,
-                  color: "#e8e8f0",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <span
-                  style={{ color: posColor(p.position), fontWeight: 700, marginRight: 6 }}
-                >
-                  {p.position}
-                </span>
-                {p.name}
-                {p.team && (
-                  <span style={{ color: "#94a3b8", marginLeft: 6, fontSize: 9 }}>
-                    {p.team}
-                  </span>
-                )}
-              </span>
-              <span style={{ fontSize: 12, fontWeight: 600, color: "#d9deef" }}>
-                {formatValue(p.value)}
-              </span>
-            </div>
+              player={p}
+              rank={i + 1}
+              posRank={posRankById.get(p.playerId)}
+              maxValue={maxValue}
+            />
           ))}
         </div>
       )}
@@ -737,6 +801,89 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter, compact = fa
         fallback). Updates live as picks come off the board
         {available.length > rowLimit ? ` · showing top ${rowLimit}` : ""}.
       </div>
+    </div>
+  );
+}
+
+// A single Best-Available player as a compact card. Position-tinted left
+// accent, a positional-rank chip (e.g. "WR3"), and a value bar scaled to the
+// top player so tier cliffs are obvious at a glance. The top three overall get
+// a subtly brighter card so the premium names stand out.
+function BestAvailableRow({ player: p, rank, posRank, maxValue }) {
+  const color = posColor(p.position);
+  const isTop = rank <= 3;
+  const barPct = Math.max(4, Math.round(((p.value || 0) / maxValue) * 100));
+  return (
+    <div
+      style={{
+        position: "relative",
+        display: "grid",
+        gridTemplateColumns: "18px 30px 1fr auto",
+        alignItems: "center",
+        gap: 9,
+        padding: "6px 11px 8px",
+        background: isTop ? `${color}12` : "rgba(255,255,255,0.025)",
+        border: `1px solid ${isTop ? `${color}40` : "rgba(255,255,255,0.07)"}`,
+        borderLeft: `2px solid ${color}`,
+        borderRadius: 4,
+        overflow: "hidden",
+      }}
+    >
+      <span style={{ fontSize: 10, color: "#6b7390", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+        {rank}
+      </span>
+      <PlayerHeadshot
+        playerId={p.playerId}
+        name={p.name}
+        position={p.position}
+        team={p.team}
+        size={30}
+      />
+      <span
+        style={{ minWidth: 0, overflow: "hidden" }}
+        title={`${p.name}${p.team ? " · " + p.team : ""}`}
+      >
+        <span
+          style={{
+            display: "block",
+            fontSize: 12.5,
+            color: "#e8e8f0",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {p.name}
+        </span>
+        <span style={{ display: "block", fontSize: 9.5, whiteSpace: "nowrap" }}>
+          <span style={{ color, fontWeight: 700, letterSpacing: 0.3 }}>
+            {p.position}
+            {posRank ? posRank : ""}
+          </span>
+          {p.team && <span style={{ color: "#7a819c" }}> · {p.team}</span>}
+        </span>
+      </span>
+      <span
+        style={{
+          fontSize: 12,
+          fontWeight: 700,
+          color: "#d9deef",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {formatValue(p.value)}
+      </span>
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          bottom: 0,
+          height: 2,
+          width: `${barPct}%`,
+          background: color,
+          opacity: 0.55,
+        }}
+      />
     </div>
   );
 }
@@ -1068,116 +1215,213 @@ function SlotRow({ slot, compact }) {
   );
 }
 
+// Shorten a team label for the narrow board column headers.
+function abbrevTeam(label) {
+  if (!label) return "—";
+  const trimmed = label.trim();
+  if (trimmed.length <= 11) return trimmed;
+  return `${trimmed.slice(0, 10)}…`;
+}
+
 function LiveBoard({ state, myRosterId }) {
-  const { board, slotCount, slotToRoster } = state;
+  const { board, slotCount, slotToRoster, teams, onTheClock } = state;
+  const labelByRoster = new Map((teams || []).map((t) => [t.rosterId, t.label]));
+  const onClockRound = onTheClock?.round ?? null;
+  const onClockSlot = onTheClock?.slot ?? null;
+
   return (
     <div style={{ ...styles.card, padding: 12, overflowX: "auto" }}>
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: `28px repeat(${slotCount}, minmax(78px, 1fr))`,
-          gap: 3,
-          minWidth: slotCount * 80,
+          // minmax(0, 1fr) lets the columns shrink to share whatever width the
+          // pane has, so the board fits without horizontal scrolling. A small
+          // floor only forces a scrollbar on very tight (mobile / 14+ team)
+          // layouts where cells would otherwise be unreadable.
+          gridTemplateColumns: `24px repeat(${slotCount}, minmax(0, 1fr))`,
+          gap: 4,
+          minWidth: slotCount * 56,
         }}
       >
+        {/* Column headers — each draft slot's team, not a bare number. */}
         <div />
         {Array.from({ length: slotCount }, (_, i) => {
           const rosterId = slotToRoster.get(i + 1);
           const isMe = rosterId === myRosterId;
+          const label = labelByRoster.get(rosterId);
           return (
             <div
               key={`hdr-${i}`}
+              title={label || `Slot ${i + 1}`}
               style={{
-                fontSize: 8,
-                color: isMe ? "#00f5a0" : "#94a3b8",
+                fontSize: 9,
+                color: isMe ? "#00f5a0" : "#aab1c9",
                 textAlign: "center",
-                letterSpacing: 0.5,
-                padding: "2px 0",
-                fontWeight: isMe ? 700 : 400,
+                letterSpacing: 0.3,
+                padding: "3px 2px 5px",
+                fontWeight: isMe ? 700 : 500,
+                borderBottom: `1px solid ${isMe ? "rgba(0,245,160,0.35)" : "rgba(255,255,255,0.08)"}`,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
               }}
             >
-              {i + 1}
+              <span style={{ color: "#54607a", marginRight: 3 }}>{i + 1}</span>
+              {abbrevTeam(label)}
             </div>
           );
         })}
 
         {board.map((row, rIdx) => (
-          <BoardRow key={`row-${rIdx}`} round={rIdx + 1} row={row} myRosterId={myRosterId} />
+          <BoardRow
+            key={`row-${rIdx}`}
+            round={rIdx + 1}
+            row={row}
+            myRosterId={myRosterId}
+            onClockSlot={onClockRound === rIdx + 1 ? onClockSlot : null}
+          />
+        ))}
+      </div>
+
+      {/* Position legend — the board is color-coded by position. */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
+        {["QB", "RB", "WR", "TE"].map((pos) => (
+          <span key={pos} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: 2,
+                background: posColor(pos),
+                display: "inline-block",
+              }}
+            />
+            <span style={{ fontSize: 9, color: "#94a3b8", letterSpacing: 0.5 }}>{pos}</span>
+          </span>
         ))}
       </div>
     </div>
   );
 }
 
-function BoardRow({ round, row, myRosterId }) {
+function BoardRow({ round, row, myRosterId, onClockSlot }) {
   return (
     <>
       <div
         style={{
           fontSize: 10,
+          fontWeight: 700,
           color: "#00f5a0",
-          letterSpacing: 1,
+          letterSpacing: 0.5,
           alignSelf: "center",
           textAlign: "center",
+          opacity: 0.7,
         }}
       >
         R{round}
       </div>
       {row.map((cell, sIdx) => (
-        <BoardCell key={`c-${round}-${sIdx}`} pick={cell} myRosterId={myRosterId} />
+        <BoardCell
+          key={`c-${round}-${sIdx}`}
+          pick={cell}
+          myRosterId={myRosterId}
+          onClock={onClockSlot === sIdx + 1}
+        />
       ))}
     </>
   );
 }
 
-function BoardCell({ pick, myRosterId }) {
+function BoardCell({ pick, myRosterId, onClock }) {
   if (!pick) {
+    // Empty future slot — highlight the one that's currently on the clock.
     return (
       <div
         style={{
           padding: 4,
-          minHeight: 48,
-          background: "rgba(255,255,255,0.02)",
-          border: "1px solid rgba(255,255,255,0.04)",
+          minHeight: 78,
+          background: onClock ? "rgba(0,245,160,0.07)" : "rgba(255,255,255,0.015)",
+          border: onClock
+            ? "1px dashed rgba(0,245,160,0.5)"
+            : "1px solid rgba(255,255,255,0.04)",
           borderRadius: 2,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
         }}
-      />
+      >
+        {onClock && (
+          <span style={{ fontSize: 7, letterSpacing: 1, color: "#00f5a0", textAlign: "center" }}>
+            ON THE
+            <br />
+            CLOCK
+          </span>
+        )}
+      </div>
     );
   }
   const isMe = pick.rosterId === myRosterId;
+  const color = posColor(pick.position);
   const lastName = pick.name.split(" ").slice(-1)[0] || pick.name;
   return (
     <div
       title={`${pick.name} · ${pick.position}${pick.team ? " " + pick.team : ""} · pick ${pick.pickNo}`}
       style={{
-        padding: 4,
-        minHeight: 48,
-        background: isMe ? "rgba(0,245,160,0.08)" : "rgba(255,255,255,0.03)",
-        border: `1px solid ${isMe ? "rgba(0,245,160,0.3)" : "rgba(255,255,255,0.06)"}`,
+        position: "relative",
+        padding: "7px 6px 6px",
+        minHeight: 78,
+        // Tint each cell by position so positional runs are visible at a glance;
+        // my own picks get the signature green wash instead.
+        background: isMe ? "rgba(0,245,160,0.10)" : `${color}12`,
+        border: `1px solid ${isMe ? "rgba(0,245,160,0.35)" : `${color}33`}`,
+        borderLeft: `2px solid ${isMe ? "#00f5a0" : color}`,
         borderRadius: 2,
         display: "flex",
         flexDirection: "column",
-        gap: 1,
+        alignItems: "center",
+        justifyContent: "flex-start",
+        gap: 3,
         overflow: "hidden",
       }}
     >
-      <div style={{ fontSize: 8, color: "#94a3b8" }}>{pick.pickNo}</div>
+      {/* Pick number tucked into the top-left corner. */}
+      <span
+        style={{
+          position: "absolute",
+          top: 3,
+          left: 4,
+          fontSize: 7.5,
+          color: "#7a819c",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {pick.pickNo}
+      </span>
+      <PlayerHeadshot
+        playerId={pick.playerId}
+        name={pick.name}
+        position={pick.position}
+        team={pick.team}
+        size={30}
+      />
       <div
         style={{
-          fontSize: 10,
+          fontSize: 10.5,
           fontWeight: 600,
           color: "#e8e8f0",
           lineHeight: 1.15,
+          textAlign: "center",
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
+          maxWidth: "100%",
         }}
       >
         {lastName}
       </div>
-      <div style={{ fontSize: 8, color: posColor(pick.position), fontWeight: 600 }}>
-        {pick.position}
-        {pick.team && <span style={{ color: "#94a3b8", marginLeft: 4 }}>{pick.team}</span>}
+      <div style={{ fontSize: 8, letterSpacing: 0.3, textAlign: "center" }}>
+        <span style={{ color, fontWeight: 700 }}>{pick.position}</span>
+        {pick.team && <span style={{ color: "#7a819c" }}> · {pick.team}</span>}
       </div>
     </div>
   );
