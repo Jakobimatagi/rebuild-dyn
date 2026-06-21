@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildTradeReview, resolveTradedPick, pickLabel } from "./tradeReview.js";
+import { buildTradeReview, resolveTradedPick, buildLiveSlotResolver, pickLabel } from "./tradeReview.js";
 
 // FantasyCalc-style value entries keyed by sleeper id (value = dollar scale).
 const fc = new Map([
@@ -247,4 +247,80 @@ test("buildTradeReview uses snapshots for value-then when available", () => {
 test("pickLabel formats season + round ordinal", () => {
   assert.equal(pickLabel({ season: "2026", round: 1 }), "2026 1st");
   assert.equal(pickLabel({ season: "2027", round: 3 }), "2027 3rd");
+});
+
+const liveDraft = {
+  draft_id: "live1",
+  season: "2026",
+  status: "drafting", // in progress — buildDraftResolver would skip it
+  start_time: Date.parse("2026-08-01T00:00:00Z"),
+  slot_to_roster_id: { 1: 11, 2: 20, 3: 12 }, // slot → roster
+};
+const liveLabels = new Map([
+  [11, "Team A"],
+  [20, "Team B"],
+  [12, "Team C"],
+]);
+
+test("buildLiveSlotResolver gives an in-progress pick its seat + owning team", () => {
+  const resolve = buildLiveSlotResolver(liveDraft, [], liveLabels);
+  // Roster 20 owns slot 2; a round-2 pick → seat "2.02", unmade.
+  const r = resolve({ season: "2026", round: 2, roster_id: 20 });
+  assert.equal(r.seat, "2.02");
+  assert.equal(r.slot, 2);
+  assert.equal(r.round, 2);
+  assert.equal(r.made, false);
+  assert.equal(r.ownerLabel, "Team B");
+});
+
+test("buildLiveSlotResolver resolves a seat already on the board to the player", () => {
+  const picks = [
+    { round: 1, draft_slot: 3, pick_no: 3, player_id: "555", metadata: { first_name: "On", last_name: "Board", position: "WR" } },
+  ];
+  const resolve = buildLiveSlotResolver(liveDraft, picks, liveLabels);
+  const r = resolve({ season: "2026", round: 1, roster_id: 12 }); // slot 3
+  assert.equal(r.made, true);
+  assert.equal(r.player.playerId, "555");
+  assert.equal(r.player.playerName, "On Board");
+  assert.equal(r.seat, "1.03");
+});
+
+test("buildLiveSlotResolver ignores picks for other seasons and an unset draft order", () => {
+  const resolve = buildLiveSlotResolver(liveDraft, [], liveLabels);
+  assert.equal(resolve({ season: "2027", round: 1, roster_id: 20 }), null);
+  // No slot_to_roster_id → resolver is a no-op (draft order not set yet).
+  const noOrder = buildLiveSlotResolver({ ...liveDraft, slot_to_roster_id: {} }, [], liveLabels);
+  assert.equal(noOrder({ season: "2026", round: 1, roster_id: 20 }), null);
+  // Null live draft → safe no-op resolver.
+  assert.equal(buildLiveSlotResolver(null)({ season: "2026", round: 1, roster_id: 20 }), null);
+});
+
+test("buildTradeReview labels a live-draft pick with its seat + owner", () => {
+  const transactions = [
+    {
+      transaction_id: "lt1",
+      type: "trade",
+      created: Date.parse("2026-08-02T00:00:00Z"),
+      draft_picks: [
+        // Team B (roster 20, slot 2) sends its 2026 round-2 pick to roster 11.
+        { season: "2026", round: 2, roster_id: 20, owner_id: 11, previous_owner_id: 20 },
+        // Team A (roster 11, slot 1) sends its 2026 round-3 pick back to roster 20,
+        // so the trade has two sides and a card is built.
+        { season: "2026", round: 3, roster_id: 11, owner_id: 20, previous_owner_id: 11 },
+      ],
+      adds: {},
+    },
+  ];
+  const review = buildTradeReview({
+    transactions,
+    rosterLabelById: liveLabels,
+    liveDraft,
+    liveDraftPicks: [],
+  });
+  const card = review.cards[0];
+  const pickAsset = card.views.fc.sides
+    .flatMap((s) => s.assets)
+    .find((a) => a.kind === "pick_future");
+  assert.equal(pickAsset.label, "2026 2.02");
+  assert.equal(pickAsset.fromTeam, "Team B");
 });
