@@ -200,6 +200,9 @@ export default function LiveDraftTab({
   refreshRef.current = refresh;
   useEffect(() => {
     if (!autoRefresh || isComplete) return undefined;
+    // Fire once immediately so flipping the toggle on feels instant — otherwise
+    // the first poll is a full POLL_MS away and it reads as "nothing happened".
+    refreshRef.current();
     const id = setInterval(() => refreshRef.current(), POLL_MS);
     return () => clearInterval(id);
   }, [autoRefresh, isComplete]);
