@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toPng } from "html-to-image";
 import { verifyLogin } from "../lib/supabase.js";
+import { fetchSleeper } from "../lib/sleeperApi.js";
 import { fetchSeasonWeeklyScores } from "../lib/weeklyScoringApi.js";
 import {
   buildPlayerStreaks,
   rankHot,
   rankCold,
   rankInjured,
+  isEligible,
+  HOT_COLD_MARGIN,
   DEFAULT_ELIGIBILITY,
 } from "../lib/hotStreaks.js";
 import { loadSession, saveSession, clearSession } from "./rookieAdmin/utils.js";
@@ -255,6 +258,7 @@ export default function AdminHotStreaks() {
   const [progress, setProgress] = useState({ done: 0, total: REG_WEEKS });
   const [dataError, setDataError] = useState("");
   const [bySeasonPlayers, setBySeasonPlayers] = useState({}); // { [season]: players[] }
+  const [currentTeamById, setCurrentTeamById] = useState(null); // player_id -> current NFL team (for "moved piece" tagging)
 
   const [mode, setMode] = useState("hot"); // hot | cold
   const [posFilter, setPosFilter] = useState({ QB: true, RB: true, WR: true, TE: true });
@@ -288,6 +292,28 @@ export default function AdminHotStreaks() {
       console.error(err);
     }
   }
+
+  // ── Current NFL rosters (once) — maps player_id → today's team so we can flag
+  // "moved pieces": guys who produced for one team last season but are now
+  // elsewhere. Best-effort; a failure just disables the moved-piece tagging.
+  useEffect(() => {
+    if (!unlocked || currentTeamById) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const db = await fetchSleeper("/players/nfl");
+        if (cancelled || !db) return;
+        const map = {};
+        for (const [id, p] of Object.entries(db)) {
+          if (p?.team) map[id] = p.team;
+        }
+        setCurrentTeamById(map);
+      } catch (err) {
+        console.error("Failed to load current rosters for moved-piece tagging:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [unlocked, currentTeamById]);
 
   // ── Load + compute streaks for the selected season (once each) ─────────────
   useEffect(() => {
@@ -505,6 +531,7 @@ export default function AdminHotStreaks() {
           players={players}
           season={season}
           initialList={mode}
+          currentTeamById={currentTeamById}
           onClose={() => setShowShare(false)}
         />
       )}
@@ -751,19 +778,71 @@ function TeamLogo({ team, size = 64 }) {
   return <img src={url} alt={team} onError={() => setErrored(true)} style={{ width: size, height: size }} className="object-contain shrink-0" />;
 }
 
-// Team "hot zones" card: the team's graded players ranked by recent form, hot at
-// the top (green rail) → cold at the bottom (red rail).
-function TeamShareCard({ innerRef, team, players, season }) {
+// Small "now plays elsewhere" / transition chip for moved pieces. Shows the
+// destination team (optionally the origin too, for the dedicated moved card).
+function TeamTransitionChip({ from, to, withLogos }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-200 bg-amber-500/15 border border-amber-300/40 rounded px-1.5 py-0.5 align-middle">
+      {from && (
+        <>
+          {withLogos && <TeamLogo team={from} size={16} />}
+          <span>{from}</span>
+          <span className="text-amber-300/80">→</span>
+        </>
+      )}
+      {withLogos && <TeamLogo team={to} size={16} />}
+      <span>{to}</span>
+    </span>
+  );
+}
+
+// One graded-player row shared by the team hot/cold and moved-piece cards.
+// `movedTo` (string) renders a destination chip; `transition` ({from,to})
+// renders the full origin→destination chip used on the moved-pieces card.
+function TeamPlayerRow({ p, movedTo, transition }) {
+  const hot = p.recentAvgResidual >= 0;
+  const ac = SHARE_ACCENT[hot ? "hot" : "cold"];
+  return (
+    <div className="flex items-center gap-4 px-5 py-3"
+      style={{ borderLeft: `4px solid ${hot ? "rgba(16,185,129,0.7)" : "rgba(244,63,94,0.7)"}` }}>
+      <ShareAvatar id={p.player_id} name={p.name} size={52} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-lg font-bold text-slate-100 truncate">{p.name}</span>
+          <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${POS_COLORS[p.position] || "border-white/10 text-slate-400"}`}>{p.position}</span>
+          {transition ? <TeamTransitionChip from={transition.from} to={transition.to} withLogos />
+            : movedTo ? <TeamTransitionChip to={movedTo} /> : null}
+        </div>
+        <div className="text-[12px] text-slate-400 mt-0.5">
+          {p.beatCount}/{p.evaluatedWeeks} beat ({Math.round(p.beatRate * 100)}%) · avg {p.avgActual.toFixed(1)} vs {p.avgProj.toFixed(1)} proj
+        </div>
+      </div>
+      <div className="text-right shrink-0">
+        <div className={`text-sm font-bold px-2.5 py-1 rounded border inline-block ${ac.chip}`}>{ac.emoji} {Math.abs(p.currentStreak) || "—"}W</div>
+        <div className={`text-sm font-bold mt-1 ${hot ? "text-emerald-300" : "text-rose-300"}`}>
+          {sign1(p.recentAvgResidual)} <span className="text-[10px] text-slate-500 font-normal">last 4</span>
+        </div>
+      </div>
+      <ShareHeatmap weeks={p.weeks} cell="w-3.5 h-8" />
+    </div>
+  );
+}
+
+// Team hot OR cold card: one side of the team's heat, themed to match the
+// hot/cold leaderboard cards. Moved pieces keep their spot (they earned it that
+// season) but get a "→ NEWTEAM" chip so the production reads honestly.
+function TeamHeatCard({ innerRef, team, tone, players, currentTeamById, season }) {
+  const a = SHARE_ACCENT[tone];
   const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   return (
     <div ref={innerRef} style={{ width: 1080, fontFamily: CARD_FONT }}
       className="bg-slate-950 text-slate-100 p-10 flex flex-col gap-5">
-      <div className="rounded-xl bg-gradient-to-br from-indigo-500 to-violet-700 p-6 flex items-center gap-5">
+      <div className={`rounded-xl bg-gradient-to-br ${a.grad} p-6 flex items-center gap-5`}>
         <TeamLogo team={team} size={76} />
         <div className="flex-1">
           <div className="text-xs uppercase tracking-[0.3em] text-white/80 font-bold mb-1">Heat Map · {season}</div>
-          <div className="text-5xl font-black text-white leading-none">{team} HOT ZONES</div>
-          <div className="text-sm text-white/85 mt-2 font-semibold">actual vs projected PPR · 🔥 sell-high & 🧊 buy-low signals</div>
+          <div className="text-5xl font-black text-white leading-none">{a.emoji} {team} {tone === "hot" ? "RUNNING HOT" : "ICE COLD"}</div>
+          <div className="text-sm text-white/85 mt-2 font-semibold">{a.tag} · actual vs projected PPR · last-4-week form</div>
         </div>
         <div className="text-right">
           <div className="text-[10px] uppercase tracking-widest text-white/70">As of</div>
@@ -773,46 +852,80 @@ function TeamShareCard({ innerRef, team, players, season }) {
 
       <div className="rounded-xl border border-white/10 bg-slate-900/70 divide-y divide-white/5">
         {players.map((p) => {
-          const hot = p.recentAvgResidual >= 0;
-          const ac = SHARE_ACCENT[hot ? "hot" : "cold"];
-          return (
-            <div key={p.player_id} className="flex items-center gap-4 px-5 py-3"
-              style={{ borderLeft: `4px solid ${hot ? "rgba(16,185,129,0.7)" : "rgba(244,63,94,0.7)"}` }}>
-              <ShareAvatar id={p.player_id} name={p.name} size={52} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-lg font-bold text-slate-100 truncate">{p.name}</span>
-                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${POS_COLORS[p.position] || "border-white/10 text-slate-400"}`}>{p.position}</span>
-                </div>
-                <div className="text-[12px] text-slate-400 mt-0.5">
-                  {p.beatCount}/{p.evaluatedWeeks} beat ({Math.round(p.beatRate * 100)}%) · avg {p.avgActual.toFixed(1)} vs {p.avgProj.toFixed(1)} proj
-                </div>
-              </div>
-              <div className="text-right shrink-0">
-                <div className={`text-sm font-bold px-2.5 py-1 rounded border inline-block ${ac.chip}`}>{ac.emoji} {Math.abs(p.currentStreak) || "—"}W</div>
-                <div className={`text-sm font-bold mt-1 ${hot ? "text-emerald-300" : "text-rose-300"}`}>
-                  {sign1(p.recentAvgResidual)} <span className="text-[10px] text-slate-500 font-normal">last 4</span>
-                </div>
-              </div>
-              <ShareHeatmap weeks={p.weeks} cell="w-3.5 h-8" />
-            </div>
-          );
+          const cur = currentTeamById?.[p.player_id] || null;
+          const movedTo = cur && cur !== team ? cur : null;
+          return <TeamPlayerRow key={p.player_id} p={p} movedTo={movedTo} />;
         })}
         {players.length === 0 && (
-          <div className="px-5 py-8 text-center text-slate-500 text-sm">No graded players for {team} this season.</div>
+          <div className="px-5 py-8 text-center text-slate-500 text-sm">No {tone} graded players for {team} this season.</div>
         )}
       </div>
 
       <div className="text-center text-[12px] text-slate-500 pt-1 border-t border-white/10">
-        Dynasty Oracle · weekly actual vs projected (Sleeper) · sorted by recent form
+        Dynasty Oracle · weekly actual vs projected (Sleeper) · {tone === "hot" ? "sell-high signals" : "buy-low signals"}
       </div>
     </div>
   );
 }
 
-const TEAM_MIN_WEEKS = 3;
+// Moved-pieces card: offseason ins & outs relative to the selected team. Leads
+// with incoming ("what your new additions did last year") then outgoing
+// departures. Each row shows the origin→destination team transition.
+function TeamMovedCard({ innerRef, team, incoming, outgoing, season }) {
+  const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return (
+    <div ref={innerRef} style={{ width: 1080, fontFamily: CARD_FONT }}
+      className="bg-slate-950 text-slate-100 p-10 flex flex-col gap-5">
+      <div className="rounded-xl bg-gradient-to-br from-amber-500 to-orange-700 p-6 flex items-center gap-5">
+        <TeamLogo team={team} size={76} />
+        <div className="flex-1">
+          <div className="text-xs uppercase tracking-[0.3em] text-white/80 font-bold mb-1">Moved Pieces · {season}</div>
+          <div className="text-5xl font-black text-white leading-none">🔁 {team} INS & OUTS</div>
+          <div className="text-sm text-white/85 mt-2 font-semibold">last-season form for guys who changed teams · arrived ➡️ & departed ⬅️</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[10px] uppercase tracking-widest text-white/70">As of</div>
+          <div className="text-base font-bold text-white">{date}</div>
+        </div>
+      </div>
 
-function ShareModal({ players, season, initialList, onClose }) {
+      {incoming.length > 0 && (
+        <div>
+          <div className="text-sm font-black uppercase tracking-wide text-emerald-300 mb-2">➡️ In — new for {team} ({incoming.length})</div>
+          <div className="rounded-xl border border-white/10 bg-slate-900/70 divide-y divide-white/5">
+            {incoming.map((p) => (
+              <TeamPlayerRow key={p.player_id} p={p} transition={{ from: p.team, to: team }} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {outgoing.length > 0 && (
+        <div>
+          <div className="text-sm font-black uppercase tracking-wide text-rose-300 mb-2">⬅️ Out — gone from {team} ({outgoing.length})</div>
+          <div className="rounded-xl border border-white/10 bg-slate-900/70 divide-y divide-white/5">
+            {outgoing.map((p) => (
+              <TeamPlayerRow key={p.player_id} p={p} transition={{ from: team, to: p._currentTeam }} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {incoming.length === 0 && outgoing.length === 0 && (
+        <div className="rounded-xl border border-white/10 bg-slate-900/70 px-5 py-8 text-center text-slate-500 text-sm">
+          No graded players changed teams for {team}.
+        </div>
+      )}
+
+      <div className="text-center text-[12px] text-slate-500 pt-1 border-t border-white/10">
+        Dynasty Oracle · weekly actual vs projected (Sleeper) · last-season form, current team per Sleeper rosters
+      </div>
+    </div>
+  );
+}
+
+
+function ShareModal({ players, season, initialList, currentTeamById, onClose }) {
   const modalRef = useModalBehavior(onClose);
   const [view, setView] = useState("leaderboard"); // 'leaderboard' | 'player' | 'team'
   const [list, setList] = useState(
@@ -853,13 +966,41 @@ function ShareModal({ players, season, initialList, onClose }) {
     [players, selectedPlayerId],
   );
 
-  const teamPlayers = useMemo(() => {
-    if (!selectedTeam) return [];
-    return players
-      .filter((p) => p.team === selectedTeam && p.evaluatedWeeks >= TEAM_MIN_WEEKS)
+  // Team view groups: hot / cold (produced for the team that season) plus
+  // moved pieces — incoming (now on the team, produced elsewhere) and outgoing
+  // (produced for the team, now elsewhere). currentTeamById may be null until
+  // rosters load, in which case the moved groups are simply empty.
+  const teamGroups = useMemo(() => {
+    if (!selectedTeam) return { hot: [], cold: [], incoming: [], outgoing: [], all: [] };
+    const cur = (p) => currentTeamById?.[p.player_id] || null;
+    // Gate the team view to the same startable relevance bar as the main board
+    // (position-aware avg-proj floor + min graded weeks) so low-usage, low-
+    // projection players (e.g. a WR projected ~5 PPG) don't pollute the cards.
+    const eligible = players.filter((p) => isEligible(p));
+    const producedFor = eligible.filter((p) => p.team === selectedTeam);
+    // Same neutral-band gate as the main board: only genuinely hot/cold guys,
+    // not players sitting on their projection (e.g. avg +0.1 over).
+    const hot = producedFor
+      .filter((p) => p.recentAvgResidual >= HOT_COLD_MARGIN)
       .sort((a, b) => b.recentAvgResidual - a.recentAvgResidual)
       .slice(0, 16);
-  }, [players, selectedTeam]);
+    const cold = producedFor
+      .filter((p) => p.recentAvgResidual <= -HOT_COLD_MARGIN)
+      .sort((a, b) => a.recentAvgResidual - b.recentAvgResidual)
+      .slice(0, 16);
+    const incoming = eligible
+      .filter((p) => p.team !== selectedTeam && cur(p) === selectedTeam)
+      .sort((a, b) => b.recentAvgResidual - a.recentAvgResidual)
+      .slice(0, 16);
+    const outgoing = producedFor
+      .filter((p) => { const c = cur(p); return c && c !== selectedTeam; })
+      .map((p) => ({ ...p, _currentTeam: cur(p) }))
+      .sort((a, b) => b.recentAvgResidual - a.recentAvgResidual)
+      .slice(0, 16);
+    return { hot, cold, incoming, outgoing, all: [...hot, ...cold, ...incoming, ...outgoing] };
+  }, [players, selectedTeam, currentTeamById]);
+
+  const hasMoved = teamGroups.incoming.length > 0 || teamGroups.outgoing.length > 0;
 
   const a = SHARE_ACCENT[list];
 
@@ -911,10 +1052,22 @@ function ShareModal({ players, season, initialList, onClose }) {
     finally { setDownloading(null); }
   }
 
-  async function downloadTeam() {
-    setDownloading("team");
-    try { await downloadKey("team", `hotzones-${slugify(selectedTeam)}-${season}.png`); }
-    catch (err) { console.error("Failed to generate team card:", err); }
+  async function downloadTeamCard(kind) {
+    setDownloading(`team-${kind}`);
+    try { await downloadKey(`team-${kind}`, `${kind === "moved" ? "movedpieces" : `hot${kind === "cold" ? "cold" : "zones"}`}-${slugify(selectedTeam)}-${kind}-${season}.png`); }
+    catch (err) { console.error(`Failed to generate team ${kind} card:`, err); }
+    finally { setDownloading(null); }
+  }
+
+  async function downloadTeamAll() {
+    setDownloading("team-all");
+    try {
+      const kinds = ["hot", "cold", ...(hasMoved ? ["moved"] : [])];
+      for (const kind of kinds) {
+        await downloadKey(`team-${kind}`, `${kind === "moved" ? "movedpieces" : `hot${kind === "cold" ? "cold" : "zones"}`}-${slugify(selectedTeam)}-${kind}-${season}.png`);
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    } catch (err) { console.error("Failed to generate team cards:", err); }
     finally { setDownloading(null); }
   }
 
@@ -1044,9 +1197,9 @@ function ShareModal({ players, season, initialList, onClose }) {
               </button>
             )}
             {view === "team" && selectedTeam && (
-              <button onClick={downloadTeam} disabled={busy}
-                className="text-xs font-semibold px-3 py-1.5 rounded border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 disabled:opacity-40">
-                {downloading === "team" ? "Generating…" : `Download ${selectedTeam} card`}
+              <button onClick={downloadTeamAll} disabled={busy}
+                className="text-xs font-semibold px-3 py-1.5 rounded border border-emerald-400/60 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-40">
+                {downloading === "team-all" ? "Generating all…" : `Download all (${hasMoved ? 3 : 2})`}
               </button>
             )}
             <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-slate-100 text-lg leading-none px-2">✕</button>
@@ -1124,13 +1277,54 @@ function ShareModal({ players, season, initialList, onClose }) {
 
           {view === "team" && (
             selectedTeam ? (
-              <div className="flex flex-col items-center gap-2">
-                {synopsisPanel(`team-${selectedTeam}`, teamPlayers, `${selectedTeam} team heat map (mixed hot and cold)`)}
-                <TeamShareCard
-                  innerRef={(el) => { cardRefs.current.team = el; }}
-                  team={selectedTeam} players={teamPlayers} season={season}
-                />
-              </div>
+              <>
+                {/* Hot card */}
+                <div className="flex flex-col items-center gap-2">
+                  <button onClick={() => downloadTeamCard("hot")} disabled={busy}
+                    className="text-xs font-semibold px-3 py-1.5 rounded border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 disabled:opacity-40">
+                    {downloading === "team-hot" ? "Generating…" : `Download ${selectedTeam} hot card`}
+                  </button>
+                  {synopsisPanel(`team-hot-${selectedTeam}`, teamGroups.hot, `${selectedTeam} hot players (sell-high)`)}
+                  <TeamHeatCard
+                    innerRef={(el) => { cardRefs.current["team-hot"] = el; }}
+                    team={selectedTeam} tone="hot" players={teamGroups.hot}
+                    currentTeamById={currentTeamById} season={season}
+                  />
+                </div>
+
+                {/* Cold card */}
+                <div className="flex flex-col items-center gap-2">
+                  <button onClick={() => downloadTeamCard("cold")} disabled={busy}
+                    className="text-xs font-semibold px-3 py-1.5 rounded border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 disabled:opacity-40">
+                    {downloading === "team-cold" ? "Generating…" : `Download ${selectedTeam} cold card`}
+                  </button>
+                  {synopsisPanel(`team-cold-${selectedTeam}`, teamGroups.cold, `${selectedTeam} cold players (buy-low)`)}
+                  <TeamHeatCard
+                    innerRef={(el) => { cardRefs.current["team-cold"] = el; }}
+                    team={selectedTeam} tone="cold" players={teamGroups.cold}
+                    currentTeamById={currentTeamById} season={season}
+                  />
+                </div>
+
+                {/* Moved pieces card */}
+                {hasMoved && (
+                  <div className="flex flex-col items-center gap-2">
+                    <button onClick={() => downloadTeamCard("moved")} disabled={busy}
+                      className="text-xs font-semibold px-3 py-1.5 rounded border border-amber-400/60 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 disabled:opacity-40">
+                      {downloading === "team-moved" ? "Generating…" : `Download ${selectedTeam} moved-pieces card`}
+                    </button>
+                    {synopsisPanel(`team-moved-${selectedTeam}`, [...teamGroups.incoming, ...teamGroups.outgoing], `${selectedTeam} moved pieces — players who arrived from or departed to other teams`)}
+                    <TeamMovedCard
+                      innerRef={(el) => { cardRefs.current["team-moved"] = el; }}
+                      team={selectedTeam} incoming={teamGroups.incoming} outgoing={teamGroups.outgoing}
+                      season={season}
+                    />
+                  </div>
+                )}
+                {!currentTeamById && (
+                  <div className="text-slate-500 text-xs">Loading current rosters for moved-piece tagging…</div>
+                )}
+              </>
             ) : (
               <div className="text-slate-500 text-sm py-10">Select a team to see its hot zones.</div>
             )
