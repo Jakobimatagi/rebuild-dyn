@@ -271,6 +271,7 @@ export default function Dashboard({
           leagueId={analysis.liveDraft.leagueId}
           players={analysis.liveDraft.players}
           initialTradeTransactions={analysis.liveDraft.tradeTransactions}
+          tradeReviewInputs={analysis.liveDraft.tradeReviewInputs}
           leagueTeams={analysis.leagueTeams}
           myRosterId={analysis.rosterId}
         />

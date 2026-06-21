@@ -449,6 +449,21 @@ export function buildRosterAnalysis(
           tradeTransactions: (transactions || []).filter(
             (t) => t?.type === "trade",
           ),
+          // Everything buildTradeReview needs *except* transactions, so the live
+          // tab can re-grade over freshly-polled draft trades with the exact same
+          // engine the Activity-tab Trade Report Card uses.
+          tradeReviewInputs: {
+            rosterLabelById,
+            players,
+            fcByPlayerId: fantasyCalcContext.bySleeperId,
+            raByPlayerId: rosterAuditContext.bySleeperId,
+            internalByPlayerId,
+            leagueContext,
+            sleeperDrafts,
+            allDraftPicksMap,
+            rosters,
+            valueSnapshots,
+          },
         }
       : null,
     ocOutlook: {
