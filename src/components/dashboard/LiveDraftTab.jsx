@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { styles } from "../../styles";
-import { fetchSleeper, fetchDraftPicks } from "../../lib/sleeperApi";
+import {
+  fetchSleeper,
+  fetchDraftPicks,
+  fetchDraftTradedPicks,
+} from "../../lib/sleeperApi";
 import { buildLiveDraftState } from "../../lib/liveDraft";
 import { parseTrades, mergeTransactions } from "../../lib/draftTrades";
 import { buildTradeReview } from "../../lib/tradeReview";
@@ -127,6 +131,7 @@ export default function LiveDraftTab({
   tradeReviewInputs = null,
 }) {
   const [picks, setPicks] = useState(initialPicks);
+  const [tradedPicks, setTradedPicks] = useState([]);
   const [liveDraft, setLiveDraft] = useState(draft);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -162,12 +167,14 @@ export default function LiveDraftTab({
       inFlightRef.current = true;
       if (isManual) setRefreshing(true);
       try {
-        const [freshDraft, freshPicks] = await Promise.all([
+        const [freshDraft, freshPicks, freshTraded] = await Promise.all([
           fetchSleeper(`/draft/${draft.draft_id}`).catch(() => null),
           fetchDraftPicks(draft.draft_id).catch(() => null),
+          fetchDraftTradedPicks(draft.draft_id).catch(() => null),
         ]);
         if (freshDraft) setLiveDraft(freshDraft);
         if (Array.isArray(freshPicks)) setPicks(freshPicks);
+        if (Array.isArray(freshTraded)) setTradedPicks(freshTraded);
 
         // Best-effort live trade capture. Offseason/startup-draft trades land in
         // the early transaction "weeks", so poll a small window and merge into the
@@ -194,6 +201,23 @@ export default function LiveDraftTab({
     [draft?.draft_id, leagueId],
   );
 
+  // Traded picks aren't in the seeded payload — pull them once on mount so the
+  // board reads correctly even when auto-refresh is off (the poll keeps them
+  // fresh thereafter).
+  useEffect(() => {
+    let live = true;
+    if (draft?.draft_id) {
+      fetchDraftTradedPicks(draft.draft_id)
+        .then((rows) => {
+          if (live && Array.isArray(rows)) setTradedPicks(rows);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      live = false;
+    };
+  }, [draft?.draft_id]);
+
   // Poll while auto-refresh is on and the draft isn't finished.
   const isComplete = liveDraft?.status === "complete";
   const refreshRef = useRef(refresh);
@@ -215,6 +239,7 @@ export default function LiveDraftTab({
     myRosterId,
     valueBySleeperId,
     ppgBySleeperId,
+    tradedPicks,
   });
 
   if (!state) {
@@ -373,6 +398,11 @@ export default function LiveDraftTab({
                   YOU'RE UP
                 </span>
               )}
+              {state.onTheClock.viaTrade && (
+                <span style={{ fontSize: 10, color: "#ffd84d", marginLeft: 8, letterSpacing: 0.5 }}>
+                  via {state.onTheClock.fromLabel}
+                </span>
+              )}
             </div>
           </div>
           {state.myUpcoming.length > 0 && (
@@ -382,13 +412,20 @@ export default function LiveDraftTab({
               </div>
               <div style={{ display: "flex", gap: 6, marginTop: 4, justifyContent: "flex-end" }}>
                 {state.myUpcoming.map((u) => (
-                  <span key={u.pickNo} style={styles.tag(u.fromNow === 0 ? "#00f5a0" : "#4dd0ff")}>
+                  <span
+                    key={u.pickNo}
+                    title={u.viaTrade ? `Acquired via ${u.fromLabel}` : undefined}
+                    style={styles.tag(
+                      u.viaTrade ? "#ffd84d" : u.fromNow === 0 ? "#00f5a0" : "#4dd0ff",
+                    )}
+                  >
                     {pickLabel(u.round, u.slot)}
                     {u.fromNow > 0 && (
                       <span style={{ opacity: 0.7, marginLeft: 4 }}>
                         +{u.fromNow}
                       </span>
                     )}
+                    {u.viaTrade && <span style={{ marginLeft: 4 }}>⇄</span>}
                   </span>
                 ))}
               </div>
@@ -1226,11 +1263,23 @@ function abbrevTeam(label) {
   return `${trimmed.slice(0, 10)}…`;
 }
 
+// Accent used to spotlight a team's picks when their header is clicked.
+const SELECT_COLOR = "#a78bfa";
+
 function LiveBoard({ state, myRosterId }) {
-  const { board, slotCount, slotToRoster, teams, onTheClock } = state;
+  const { board, boardOwners = [], slotCount, slotToRoster, teams, onTheClock } = state;
   const labelByRoster = new Map((teams || []).map((t) => [t.rosterId, t.label]));
   const onClockRound = onTheClock?.round ?? null;
   const onClockSlot = onTheClock?.slot ?? null;
+
+  // Click a team's column header to spotlight every square they own — picks
+  // already made plus upcoming seats (including ones acquired by trade). Click
+  // again (or the same header) to clear.
+  const [selectedRoster, setSelectedRoster] = useState(null);
+  const toggleRoster = (rosterId) =>
+    setSelectedRoster((cur) => (cur === rosterId ? null : rosterId));
+  const selectedLabel =
+    selectedRoster != null ? labelByRoster.get(selectedRoster) : null;
 
   return (
     <div style={{ ...styles.card, padding: 12, overflowX: "auto" }}>
@@ -1246,32 +1295,52 @@ function LiveBoard({ state, myRosterId }) {
           minWidth: slotCount * 56,
         }}
       >
-        {/* Column headers — each draft slot's team, not a bare number. */}
+        {/* Column headers — each draft slot's team. Click to highlight. */}
         <div />
         {Array.from({ length: slotCount }, (_, i) => {
           const rosterId = slotToRoster.get(i + 1);
           const isMe = rosterId === myRosterId;
+          const isSelected = rosterId != null && rosterId === selectedRoster;
           const label = labelByRoster.get(rosterId);
+          const accent = isSelected ? SELECT_COLOR : isMe ? "#00f5a0" : null;
           return (
-            <div
+            <button
               key={`hdr-${i}`}
-              title={label || `Slot ${i + 1}`}
+              type="button"
+              onClick={() => rosterId != null && toggleRoster(rosterId)}
+              title={
+                label
+                  ? `${label} — click to ${isSelected ? "clear" : "highlight"} their picks`
+                  : `Slot ${i + 1}`
+              }
               style={{
+                font: "inherit",
+                cursor: rosterId != null ? "pointer" : "default",
                 fontSize: 9,
-                color: isMe ? "#00f5a0" : "#aab1c9",
+                color: accent || "#aab1c9",
                 textAlign: "center",
                 letterSpacing: 0.3,
                 padding: "3px 2px 5px",
-                fontWeight: isMe ? 700 : 500,
-                borderBottom: `1px solid ${isMe ? "rgba(0,245,160,0.35)" : "rgba(255,255,255,0.08)"}`,
+                fontWeight: isSelected || isMe ? 700 : 500,
+                background: isSelected ? "rgba(167,139,250,0.12)" : "transparent",
+                borderRadius: 3,
+                border: "none",
+                borderBottom: `1px solid ${
+                  isSelected
+                    ? "rgba(167,139,250,0.6)"
+                    : isMe
+                      ? "rgba(0,245,160,0.35)"
+                      : "rgba(255,255,255,0.08)"
+                }`,
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
+                width: "100%",
               }}
             >
               <span style={{ color: "#54607a", marginRight: 3 }}>{i + 1}</span>
               {abbrevTeam(label)}
-            </div>
+            </button>
           );
         })}
 
@@ -1280,14 +1349,24 @@ function LiveBoard({ state, myRosterId }) {
             key={`row-${rIdx}`}
             round={rIdx + 1}
             row={row}
+            ownerRow={boardOwners[rIdx] || []}
             myRosterId={myRosterId}
+            selectedRoster={selectedRoster}
             onClockSlot={onClockRound === rIdx + 1 ? onClockSlot : null}
           />
         ))}
       </div>
 
-      {/* Position legend — the board is color-coded by position. */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
+      {/* Position legend + highlight hint. */}
+      <div
+        style={{
+          display: "flex",
+          gap: 12,
+          flexWrap: "wrap",
+          marginTop: 12,
+          alignItems: "center",
+        }}
+      >
         {["QB", "RB", "WR", "TE"].map((pos) => (
           <span key={pos} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
             <span
@@ -1302,12 +1381,36 @@ function LiveBoard({ state, myRosterId }) {
             <span style={{ fontSize: 9, color: "#94a3b8", letterSpacing: 0.5 }}>{pos}</span>
           </span>
         ))}
+        <span style={{ flex: 1 }} />
+        {selectedRoster != null ? (
+          <button
+            type="button"
+            onClick={() => setSelectedRoster(null)}
+            style={{
+              font: "inherit",
+              cursor: "pointer",
+              fontSize: 9,
+              letterSpacing: 0.4,
+              color: SELECT_COLOR,
+              background: "rgba(167,139,250,0.12)",
+              border: `1px solid rgba(167,139,250,0.5)`,
+              borderRadius: 4,
+              padding: "3px 8px",
+            }}
+          >
+            Highlighting {abbrevTeam(selectedLabel)} · clear ✕
+          </button>
+        ) : (
+          <span style={{ fontSize: 9, color: "#6b7390", letterSpacing: 0.4 }}>
+            Tap a team header to highlight their picks
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
-function BoardRow({ round, row, myRosterId, onClockSlot }) {
+function BoardRow({ round, row, ownerRow, myRosterId, selectedRoster, onClockSlot }) {
   return (
     <>
       <div
@@ -1327,7 +1430,9 @@ function BoardRow({ round, row, myRosterId, onClockSlot }) {
         <BoardCell
           key={`c-${round}-${sIdx}`}
           pick={cell}
+          owner={ownerRow[sIdx] || null}
           myRosterId={myRosterId}
+          selectedRoster={selectedRoster}
           onClock={onClockSlot === sIdx + 1}
         />
       ))}
@@ -1335,29 +1440,67 @@ function BoardRow({ round, row, myRosterId, onClockSlot }) {
   );
 }
 
-function BoardCell({ pick, myRosterId, onClock }) {
+function BoardCell({ pick, owner, myRosterId, selectedRoster, onClock }) {
+  // Which roster this square belongs to: the actual drafter once a pick is made,
+  // otherwise the current owner of the seat (trade-aware).
+  const cellRoster = pick ? pick.rosterId : owner?.rosterId ?? null;
+  const selecting = selectedRoster != null;
+  const isSelected = selecting && cellRoster != null && cellRoster === selectedRoster;
+  const dim = selecting && !isSelected;
+
   if (!pick) {
-    // Empty future slot — highlight the one that's currently on the clock.
+    // Empty future slot — shows which team owns the pick (so a traded seat reads
+    // out its new owner), plus the on-the-clock flag.
     return (
       <div
         style={{
+          position: "relative",
           padding: 4,
           minHeight: 78,
-          background: onClock ? "rgba(0,245,160,0.07)" : "rgba(255,255,255,0.015)",
-          border: onClock
-            ? "1px dashed rgba(0,245,160,0.5)"
-            : "1px solid rgba(255,255,255,0.04)",
+          background: isSelected
+            ? "rgba(167,139,250,0.12)"
+            : onClock
+              ? "rgba(0,245,160,0.07)"
+              : "rgba(255,255,255,0.015)",
+          border: isSelected
+            ? `1px solid ${SELECT_COLOR}`
+            : onClock
+              ? "1px dashed rgba(0,245,160,0.5)"
+              : "1px solid rgba(255,255,255,0.04)",
           borderRadius: 2,
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
+          gap: 3,
+          textAlign: "center",
+          opacity: dim ? 0.28 : 1,
+          transition: "opacity 120ms",
         }}
       >
         {onClock && (
-          <span style={{ fontSize: 7, letterSpacing: 1, color: "#00f5a0", textAlign: "center" }}>
-            ON THE
-            <br />
-            CLOCK
+          <span style={{ fontSize: 7, letterSpacing: 1, color: "#00f5a0" }}>
+            ON THE CLOCK
+          </span>
+        )}
+        {owner?.label && (
+          <span
+            style={{
+              fontSize: 9,
+              fontWeight: 600,
+              color: owner.isMe ? "#00f5a0" : "#9aa2bd",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              maxWidth: "100%",
+            }}
+          >
+            {abbrevTeam(owner.label)}
+          </span>
+        )}
+        {owner?.traded && (
+          <span style={{ fontSize: 7.5, color: "#ffd84d", letterSpacing: 0.2 }}>
+            ⇄ via {abbrevTeam(owner.fromLabel)}
           </span>
         )}
       </div>
@@ -1366,9 +1509,12 @@ function BoardCell({ pick, myRosterId, onClock }) {
   const isMe = pick.rosterId === myRosterId;
   const color = posColor(pick.position);
   const lastName = pick.name.split(" ").slice(-1)[0] || pick.name;
+  const traded = owner?.traded;
   return (
     <div
-      title={`${pick.name} · ${pick.position}${pick.team ? " " + pick.team : ""} · pick ${pick.pickNo}`}
+      title={`${pick.name} · ${pick.position}${pick.team ? " " + pick.team : ""} · pick ${pick.pickNo}${
+        traded ? ` · ${owner.label} via ${owner.fromLabel}` : ""
+      }`}
       style={{
         position: "relative",
         padding: "7px 6px 6px",
@@ -1376,8 +1522,11 @@ function BoardCell({ pick, myRosterId, onClock }) {
         // Tint each cell by position so positional runs are visible at a glance;
         // my own picks get the signature green wash instead.
         background: isMe ? "rgba(0,245,160,0.10)" : `${color}12`,
-        border: `1px solid ${isMe ? "rgba(0,245,160,0.35)" : `${color}33`}`,
-        borderLeft: `2px solid ${isMe ? "#00f5a0" : color}`,
+        border: isSelected
+          ? `1px solid ${SELECT_COLOR}`
+          : `1px solid ${isMe ? "rgba(0,245,160,0.35)" : `${color}33`}`,
+        borderLeft: `2px solid ${isSelected ? SELECT_COLOR : isMe ? "#00f5a0" : color}`,
+        boxShadow: isSelected ? `0 0 0 1px ${SELECT_COLOR}55` : "none",
         borderRadius: 2,
         display: "flex",
         flexDirection: "column",
@@ -1385,6 +1534,8 @@ function BoardCell({ pick, myRosterId, onClock }) {
         justifyContent: "flex-start",
         gap: 3,
         overflow: "hidden",
+        opacity: dim ? 0.28 : 1,
+        transition: "opacity 120ms",
       }}
     >
       {/* Pick number tucked into the top-left corner. */}
@@ -1400,6 +1551,15 @@ function BoardCell({ pick, myRosterId, onClock }) {
       >
         {pick.pickNo}
       </span>
+      {/* Traded picks flag the seat they came from, top-right. */}
+      {traded && (
+        <span
+          style={{ position: "absolute", top: 3, right: 4, fontSize: 7.5, color: "#ffd84d" }}
+          title={`${owner.label} via ${owner.fromLabel}`}
+        >
+          ⇄
+        </span>
+      )}
       <PlayerHeadshot
         playerId={pick.playerId}
         name={pick.name}

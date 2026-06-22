@@ -85,16 +85,21 @@ function resolveSlotCount(draft, picks) {
 /**
  * Map a 1-indexed overall pick number to its draft slot, honoring snake vs
  * linear ordering. Auction/unknown types fall back to linear.
+ *
+ * `reversalRound` is Sleeper's third-round-reversal setting (0 = none). From
+ * that round on, the snake direction flips: e.g. round 3 reverses again instead
+ * of going forward, so the slot-1 owner picks 1.01, 2.12, 3.12, 4.01, …
  */
-export function slotForPickNo(pickNo, slotCount, type = "snake") {
+export function slotForPickNo(pickNo, slotCount, type = "snake", reversalRound = 0) {
   if (slotCount <= 0) return 0;
   const idxInRound = (pickNo - 1) % slotCount; // 0-indexed within the round
   const round = Math.floor((pickNo - 1) / slotCount) + 1;
   const isSnake = type === "snake";
-  if (isSnake && round % 2 === 0) {
-    return slotCount - idxInRound; // even rounds reverse
+  let reverse = isSnake && round % 2 === 0; // even rounds reverse
+  if (isSnake && reversalRound > 0 && round >= reversalRound) {
+    reverse = !reverse; // flip direction from the reversal round onward
   }
-  return idxInRound + 1;
+  return reverse ? slotCount - idxInRound : idxInRound + 1;
 }
 
 function roundForPickNo(pickNo, slotCount) {
@@ -190,6 +195,7 @@ function gradeFromRatio(ratio) {
  * @param {Array}    args.teams           [{ rosterId, label, avatar, ownerId }]
  * @param {Array}    args.rosterPositions league.roster_positions
  * @param {number}   args.myRosterId      viewer's roster id
+ * @param {Array}    args.tradedPicks     /draft/{id}/traded_picks rows
  */
 export function buildLiveDraftState({
   draft,
@@ -199,6 +205,7 @@ export function buildLiveDraftState({
   myRosterId,
   valueBySleeperId = {},
   ppgBySleeperId = {},
+  tradedPicks = [],
 }) {
   if (!draft) return null;
 
@@ -206,6 +213,7 @@ export function buildLiveDraftState({
 
   const type = draft.type || "snake";
   const slotCount = resolveSlotCount(draft, picks);
+  const reversalRound = Number(draft.settings?.reversal_round || 0);
   const totalRounds = Number(draft.settings?.rounds || 0);
   const totalPicks = slotCount * totalRounds;
 
@@ -221,6 +229,30 @@ export function buildLiveDraftState({
     }
   }
   const rosterForSlot = (slot) => slotToRoster.get(slot) ?? null;
+
+  // Traded picks: a (round, original-seat) pair can now belong to a different
+  // roster. Key by `${round}-${originalRosterId}` → current owner. Scope to this
+  // draft's season so a league-wide feed can't leak future-year picks in.
+  const draftSeason = String(draft.season || "");
+  const tradedByRoundRoster = new Map();
+  for (const t of tradedPicks || []) {
+    if (!t) continue;
+    if (t.season != null && String(t.season) !== draftSeason) continue;
+    const round = Number(t.round);
+    const orig = Number(t.roster_id);
+    const owner = Number(t.owner_id);
+    if (round > 0 && Number.isFinite(orig) && Number.isFinite(owner)) {
+      tradedByRoundRoster.set(`${round}-${orig}`, owner);
+    }
+  }
+  // Who actually owns the pick at (round, slot): the trade's current owner if
+  // the seat's pick changed hands, else the original seat holder.
+  const ownerForRoundSlot = (round, slot) => {
+    const orig = rosterForSlot(slot);
+    if (orig == null) return null;
+    const traded = tradedByRoundRoster.get(`${round}-${orig}`);
+    return traded != null ? traded : orig;
+  };
 
   const made = picks
     .map((p) => normalizePick(p, valueBySleeperId, ppgBySleeperId))
@@ -344,16 +376,23 @@ export function buildLiveDraftState({
 
   let onTheClock = null;
   if (!complete && !draftOver && started && slotToRoster.size > 0) {
-    const slot = slotForPickNo(nextPickNo, slotCount, type);
-    const rosterId = rosterForSlot(slot);
+    const round = roundForPickNo(nextPickNo, slotCount);
+    const slot = slotForPickNo(nextPickNo, slotCount, type, reversalRound);
+    const seatRosterId = rosterForSlot(slot);
+    const rosterId = ownerForRoundSlot(round, slot);
     if (rosterId != null) {
+      const viaTrade = seatRosterId != null && rosterId !== seatRosterId;
       onTheClock = {
         pickNo: nextPickNo,
-        round: roundForPickNo(nextPickNo, slotCount),
+        round,
         slot,
         rosterId,
         label: teamLabel(rosterId),
         isMe: rosterId === myRosterId,
+        // When the pick was traded, surface who it came from for the banner.
+        viaTrade,
+        fromRosterId: viaTrade ? seatRosterId : null,
+        fromLabel: viaTrade ? teamLabel(seatRosterId) : null,
       };
     }
   }
@@ -362,13 +401,21 @@ export function buildLiveDraftState({
   const myUpcoming = [];
   if (slotToRoster.size > 0 && totalPicks > 0 && myRosterId != null) {
     for (let pn = nextPickNo; pn <= totalPicks && myUpcoming.length < 4; pn++) {
-      const slot = slotForPickNo(pn, slotCount, type);
-      if (rosterForSlot(slot) === myRosterId) {
+      const round = roundForPickNo(pn, slotCount);
+      const slot = slotForPickNo(pn, slotCount, type, reversalRound);
+      // Trade-aware: a pick I acquired counts; one I dealt away doesn't.
+      if (ownerForRoundSlot(round, slot) === myRosterId) {
+        const seatRosterId = rosterForSlot(slot);
         myUpcoming.push({
           pickNo: pn,
-          round: roundForPickNo(pn, slotCount),
+          round,
           slot,
           fromNow: pn - nextPickNo,
+          viaTrade: seatRosterId != null && seatRosterId !== myRosterId,
+          fromLabel:
+            seatRosterId != null && seatRosterId !== myRosterId
+              ? teamLabel(seatRosterId)
+              : null,
         });
       }
     }
@@ -388,6 +435,30 @@ export function buildLiveDraftState({
     }
   }
 
+  // Per-cell ownership, parallel to `board`. Drives the team name shown on
+  // every square (so traded future picks read out the new owner) and the
+  // header-click highlight. For made picks the actual drafter (pick.rosterId)
+  // wins — it already reflects who used the pick.
+  const boardOwners = Array.from({ length: boardRounds }, (_, r) =>
+    Array.from({ length: slotCount }, (_, s) => {
+      const round = r + 1;
+      const slot = s + 1;
+      const seat = rosterForSlot(slot);
+      if (seat == null) return null;
+      const cellPick = board[r][s];
+      const rosterId = cellPick ? cellPick.rosterId : ownerForRoundSlot(round, slot);
+      const traded = rosterId !== seat;
+      return {
+        rosterId,
+        label: teamLabel(rosterId),
+        seatRosterId: seat,
+        traded,
+        fromLabel: traded ? teamLabel(seat) : null,
+        isMe: rosterId === myRosterId,
+      };
+    }),
+  );
+
   return {
     draftId: draft.draft_id,
     season: String(draft.season || ""),
@@ -406,6 +477,7 @@ export function buildLiveDraftState({
     powerRankings,
     draftedIds: new Set(made.map((p) => p.playerId).filter(Boolean)),
     board,
+    boardOwners,
     picks: made,
     slotToRoster,
   };

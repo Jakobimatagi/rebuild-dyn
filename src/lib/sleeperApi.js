@@ -100,6 +100,14 @@ export async function fetchDraftPicks(draftId) {
   return fetchSleeper(`/draft/${draftId}/picks`).catch(() => []);
 }
 
+// Picks traded *within* this draft, scoped to its season. Shape per row:
+// { season, round, roster_id (original seat owner), previous_owner_id, owner_id
+// (current owner) } — same shape draftPlanLogic consumes from the league feed.
+export async function fetchDraftTradedPicks(draftId) {
+  if (!draftId) return [];
+  return fetchSleeper(`/draft/${draftId}/traded_picks`).catch(() => []);
+}
+
 async function fetchLeagueTransactionsForSeason(leagueId, maxWeek = 18) {
   const weeks = Array.from({ length: maxWeek }, (_, index) => index + 1);
   const responses = await Promise.all(
