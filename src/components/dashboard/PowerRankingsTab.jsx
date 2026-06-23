@@ -266,7 +266,8 @@ export default function PowerRankingsTab({
               const mine = String(r.rosterId) === String(myRosterId);
               const isOpen = openId === String(r.rosterId);
               const d = dataByRoster.get(String(r.rosterId));
-              const projLosses = Math.max(0, regWeeks - r.avgWins);
+              const projWins = Math.round(r.avgWins);
+              const projLosses = Math.max(0, regWeeks - projWins);
               return (
                 <Fragment key={r.rosterId}>
                   <tr
@@ -292,7 +293,7 @@ export default function PowerRankingsTab({
                       </div>
                     </td>
                     <td style={{ padding: "9px 8px", textAlign: "right", color: "#cbd5e1" }}>
-                      {r.avgWins.toFixed(1)}–{projLosses.toFixed(1)}
+                      {projWins}–{projLosses}
                     </td>
                     <td style={{ padding: "9px 8px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
