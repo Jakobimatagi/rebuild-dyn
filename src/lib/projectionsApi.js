@@ -130,6 +130,61 @@ export async function fetchSeasonProjectionAverages(season) {
 }
 
 /**
+ * Projected points-per-game per Sleeper player_id for a season, in the league's
+ * scoring (PPR / half / standard). "Per game" = the mean of the published weekly
+ * projections, so it's a true forward look rather than last year's box scores.
+ * Used by the live draft's Best Available board so the PPG column reflects what
+ * we expect this season, not stale history (a retired player has no rows here).
+ *
+ * Returns a Map(player_id → ppg). Never throws — an unmigrated table or network
+ * error yields an empty Map so callers fall back to historical PPG.
+ */
+export async function fetchSeasonProjectedPpg(season, ppr = 1) {
+  if (!season) return new Map();
+  const col = ppr >= 1 ? "proj_ppr" : ppr >= 0.5 ? "proj_half" : "proj_std";
+  const cacheKey = `dyn_proj_ppg_${season}_${col}`;
+  let rows = null;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const { timestamp, rows: cachedRows } = JSON.parse(cached);
+      if (Date.now() - timestamp < ONE_HOUR_MS) rows = cachedRows;
+    }
+  } catch {
+    // ignore cache read issues
+  }
+
+  if (!rows) {
+    try {
+      const { data, error } = await supabase
+        .from("player_projections")
+        .select(`player_id, ${col}`)
+        .eq("season", season);
+      if (error) throw error;
+      rows = data || [];
+      safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), rows }));
+    } catch {
+      return new Map();
+    }
+  }
+
+  // Average the scoring column across the season's published weeks → one ppg/player.
+  const acc = new Map(); // player_id → { sum, n }
+  for (const r of rows) {
+    const v = r[col];
+    if (v == null) continue;
+    const id = String(r.player_id);
+    const cur = acc.get(id) || { sum: 0, n: 0 };
+    cur.sum += Number(v);
+    cur.n += 1;
+    acc.set(id, cur);
+  }
+  const out = new Map();
+  for (const [id, v] of acc) if (v.n > 0) out.set(id, v.sum / v.n);
+  return out;
+}
+
+/**
  * Forward production percentile (0-99, within position) per Sleeper player_id,
  * derived from the nflverse-enriched weekly projections — the bridge that feeds
  * dynastyValue.computeDynastyValue's `projPctile`.

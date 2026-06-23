@@ -274,6 +274,7 @@ export default function Dashboard({
           tradeReviewInputs={analysis.liveDraft.tradeReviewInputs}
           leagueTeams={analysis.leagueTeams}
           myRosterId={analysis.rosterId}
+          ppr={analysis.leagueContext?.ppr ?? 1}
         />
       )}
 

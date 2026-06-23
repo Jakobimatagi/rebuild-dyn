@@ -6,6 +6,7 @@ import {
   fetchDraftTradedPicks,
 } from "../../lib/sleeperApi";
 import { buildLiveDraftState } from "../../lib/liveDraft";
+import { fetchNflState, fetchSeasonProjectedPpg } from "../../lib/projectionsApi";
 import { parseTrades, mergeTransactions } from "../../lib/draftTrades";
 import { buildTradeReview } from "../../lib/tradeReview";
 import { FeedTradeBody } from "./tradeReportCard";
@@ -161,6 +162,7 @@ export default function LiveDraftTab({
   players = {},
   initialTradeTransactions = [],
   tradeReviewInputs = null,
+  ppr = 1,
 }) {
   const [picks, setPicks] = useState(initialPicks);
   const [tradedPicks, setTradedPicks] = useState([]);
@@ -175,6 +177,31 @@ export default function LiveDraftTab({
   // Selecting RB + WR shows the best players across *either* room.
   const [posFilter, setPosFilter] = useState([]);
   const [tradeTx, setTradeTx] = useState(initialTradeTransactions);
+  // Forward weekly-projection PPG (Supabase, league scoring) for the Best
+  // Available board. Falls back to the historical PPG prop when a player has no
+  // projection rows (rookies, or the projections table isn't published yet).
+  const [projPpg, setProjPpg] = useState(null); // Map(playerId → ppg) | null
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const state = await fetchNflState().catch(() => null);
+      const season = Number(state?.season) || new Date().getFullYear();
+      const map = await fetchSeasonProjectedPpg(season, ppr).catch(() => new Map());
+      if (alive) setProjPpg(map);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [ppr]);
+
+  // Projection wins where we have it; otherwise the historical PPG carries over.
+  const effectivePpg = useMemo(() => {
+    if (!projPpg || projPpg.size === 0) return ppgBySleeperId;
+    const merged = { ...ppgBySleeperId };
+    for (const [id, v] of projPpg) merged[id] = v;
+    return merged;
+  }, [projPpg, ppgBySleeperId]);
 
   // leagueTeams carries label/avatar/ownerId/rosterId/teamPhase — map to the
   // minimal shape, keeping the dynasty phase (contender/retool/rebuild) so the
@@ -518,6 +545,8 @@ export default function LiveDraftTab({
           draftedIds={state.draftedIds}
           posFilter={posFilter}
           setPosFilter={setPosFilter}
+          ppgBySleeperId={effectivePpg}
+          rosterPositions={rosterPositions}
         />
       )}
 
@@ -594,6 +623,8 @@ export default function LiveDraftTab({
                 draftedIds={state.draftedIds}
                 posFilter={posFilter}
                 setPosFilter={setPosFilter}
+                ppgBySleeperId={effectivePpg}
+                rosterPositions={rosterPositions}
                 rail
               />
             </div>
@@ -743,11 +774,37 @@ function TradesView({ trades, tradeReview, myRosterId }) {
 
 const BEST_AVAIL_LIMIT = 75;
 
-function BestAvailable({ pool, draftedIds, posFilter, setPosFilter, rail = false }) {
+function BestAvailable({
+  pool,
+  draftedIds,
+  posFilter,
+  setPosFilter,
+  ppgBySleeperId = {},
+  rosterPositions = [],
+  rail = false,
+}) {
   const drafted = draftedIds || new Set();
-  const available = pool.filter((p) => !drafted.has(p.playerId));
+  // Only surface positions the league actually rosters. K and DEF are dropped
+  // (board + filter chips) when no roster slot uses them, so a draft that never
+  // picks kickers/defenses isn't cluttered with them.
+  const rostersK = rosterPositions.includes("K");
+  const rostersDef =
+    rosterPositions.includes("DEF") || rosterPositions.includes("DST");
+  // Attach each player's projected PPG (0 when we have no track record, e.g.
+  // rookies) so the value/PPG sliders can filter on it.
+  const available = pool
+    .filter((p) => !drafted.has(p.playerId))
+    .filter((p) => {
+      if (p.position === "K" && !rostersK) return false;
+      if (p.position === "DEF" && !rostersDef) return false;
+      return true;
+    })
+    .map((p) => ({ ...p, ppg: ppgBySleeperId[p.playerId] || 0 }));
   // As the board sidebar, cap the list so it doesn't run off the page.
   const rowLimit = rail ? 40 : BEST_AVAIL_LIMIT;
+
+  // Sort the board by dynasty value (default) or by projected PPG.
+  const [sortBy, setSortBy] = useState("value"); // "value" | "ppg"
 
   // Position filter chips, in a sensible order, only for positions present.
   const presentPositions = [];
@@ -782,9 +839,15 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter, rail = false
 
   const filtered = (
     showAll
-      ? available
+      ? [...available]
       : available.filter((p) => selectedSet.has(p.position))
-  ).slice(0, rowLimit);
+  )
+    .sort((a, b) =>
+      sortBy === "ppg"
+        ? (b.ppg || 0) - (a.ppg || 0)
+        : (b.value || 0) - (a.value || 0),
+    )
+    .slice(0, rowLimit);
 
   // Scale the value bars to the top player currently shown so tier drop-offs
   // read at a glance.
@@ -841,6 +904,48 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter, rail = false
         })}
       </div>
 
+      {/* Sort toggle — rank the board by dynasty value or by projected PPG. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <span
+          style={{
+            fontSize: 9.5,
+            letterSpacing: 0.5,
+            textTransform: "uppercase",
+            fontWeight: 700,
+            color: "#7a819c",
+          }}
+        >
+          Sort
+        </span>
+        {[
+          { key: "value", label: "Value" },
+          { key: "ppg", label: "Proj PPG" },
+        ].map((s) => {
+          const active = sortBy === s.key;
+          return (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => setSortBy(s.key)}
+              style={{
+                padding: "3px 10px",
+                borderRadius: 3,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: 1,
+                cursor: "pointer",
+                border: "1px solid",
+                background: active ? "#00f5a022" : "rgba(255,255,255,0.04)",
+                color: active ? "#00f5a0" : "#7a819c",
+                borderColor: active ? "#00f5a066" : "rgba(255,255,255,0.1)",
+              }}
+            >
+              {s.label}
+            </button>
+          );
+        })}
+      </div>
+
       {filtered.length === 0 ? (
         <div style={{ fontSize: 12, color: "#94a3b8" }}>
           No players available{!showAll ? ` at ${selected.join(" / ")}` : ""}.
@@ -866,6 +971,7 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter, rail = false
               rank={i + 1}
               posRank={posRankById.get(p.playerId)}
               maxValue={maxValue}
+              ppg={p.ppg}
             />
           ))}
         </div>
@@ -884,7 +990,7 @@ function BestAvailable({ pool, draftedIds, posFilter, setPosFilter, rail = false
 // accent, a positional-rank chip (e.g. "WR3"), and a value bar scaled to the
 // top player so tier cliffs are obvious at a glance. The top three overall get
 // a subtly brighter card so the premium names stand out.
-function BestAvailableRow({ player: p, rank, posRank, maxValue }) {
+function BestAvailableRow({ player: p, rank, posRank, maxValue, ppg = 0 }) {
   const color = posColor(p.position);
   const isTop = rank <= 3;
   const barPct = Math.max(4, Math.round(((p.value || 0) / maxValue) * 100));
@@ -938,15 +1044,30 @@ function BestAvailableRow({ player: p, rank, posRank, maxValue }) {
           {p.team && <span style={{ color: "#7a819c" }}> · {p.team}</span>}
         </span>
       </span>
-      <span
-        style={{
-          fontSize: 12,
-          fontWeight: 700,
-          color: "#d9deef",
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {formatValue(p.value)}
+      <span style={{ textAlign: "right" }}>
+        <span
+          style={{
+            display: "block",
+            fontSize: 12,
+            fontWeight: 700,
+            color: "#d9deef",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {formatValue(p.value)}
+        </span>
+        {ppg > 0 && (
+          <span
+            style={{
+              display: "block",
+              fontSize: 9,
+              color: "#7a819c",
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {ppg.toFixed(1)} ppg
+          </span>
+        )}
       </span>
       <div
         style={{
