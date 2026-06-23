@@ -64,6 +64,10 @@ function buildBestAvailablePool(valueBySleeperId, players, limit = 400) {
   for (const [playerId, value] of Object.entries(valueBySleeperId)) {
     const p = players?.[playerId];
     if (!p) continue;
+    // Drop retired / out-of-league players (Sleeper flags these active:false)
+    // so stale names like a retired QB don't sit on the board with a misleading
+    // historical PPG.
+    if (p.active === false) continue;
     const position = (p.fantasy_positions?.[0] || p.position || "").toUpperCase();
     if (!LIVE_DRAFT_POSITIONS.has(position)) continue;
     const name =
