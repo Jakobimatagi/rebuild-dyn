@@ -281,6 +281,9 @@ export function buildLiveDraftState({
       rosterId: t.rosterId,
       label: t.label,
       avatar: t.avatar || null,
+      // Dynasty phase (contender/retool/rebuild) carried from the league analysis
+      // so the live Rosters view can label teams like the League tab.
+      phase: t.phase || null,
       isMe: t.rosterId === myRosterId,
       picks: teamPicks,
       starters,
@@ -293,21 +296,15 @@ export function buildLiveDraftState({
     };
   });
 
-  // Live roster grades + power rankings, when we have a value source. Grade is
-  // value-per-pick vs the league average; power rank is by total roster value.
+  // Live roster grades + power rankings, when we have a value source. We surface
+  // two complementary views (both ranking the *strongest current roster*, not the
+  // most pick-efficient one):
+  //   • dynasty   — ranked by total accumulated dynasty value (best long-term build)
+  //   • contender — ranked by expected PPG (best win-now starting lineup)
+  // Each view's letter grade is derived from that same metric vs the league
+  // average, so the A→F badges always move in lockstep with the rank order.
   let powerRankings = null;
   if (hasValues && made.length > 0) {
-    const totalPickVal = rosterTeams.reduce((s, t) => s + t.totalValue, 0);
-    const totalPickCount = rosterTeams.reduce((s, t) => s + t.totalDrafted, 0);
-    const leagueAvgPerPick = totalPickCount > 0 ? totalPickVal / totalPickCount : 0;
-    rosterTeams.forEach((t) => {
-      const ratio =
-        leagueAvgPerPick > 0 && t.totalDrafted > 0
-          ? t.avgValue / leagueAvgPerPick
-          : 0;
-      t.grade = t.totalDrafted > 0 ? gradeFromRatio(ratio) : null;
-    });
-
     // Per-position grades so weak spots are obvious. Each position is graded on
     // the team's total value there vs the league average for that position, so
     // an empty position grades F — an instant hole flag.
@@ -329,37 +326,56 @@ export function buildLiveDraftState({
       t.positionGrades = relevantPositions.map((pos) => {
         const leagueAvg = (leaguePosTotal[pos] || 0) / numTeams;
         const val = t.posValue[pos] || 0;
+        const count = t.posCount[pos] || 0;
         const ratio = leagueAvg > 0 ? val / leagueAvg : 0;
-        return {
-          pos,
-          value: Math.round(val),
-          count: t.posCount[pos] || 0,
-          // Ungradeable until at least one such player exists league-wide.
-          grade: leagueAvg > 0 ? gradeFromRatio(ratio) : null,
-        };
+        // Ungradeable until at least one such player exists league-wide.
+        let grade = leagueAvg > 0 ? gradeFromRatio(ratio) : null;
+        // F is reserved for an *empty* room — a genuine hole. A room that's
+        // filled but below the league's value average is a weak spot, not a
+        // hole, so floor it at D: having two QBs must never read the same as
+        // having none.
+        if (grade === "F" && count > 0) grade = "D";
+        return { pos, value: Math.round(val), count, grade };
       });
     });
-    // Rank by grade (value-per-pick), not total value — so the best-drafting
-    // team leads regardless of how many picks it happens to have made. avgValue
-    // is the metric the grade is derived from, so this yields a clean A→F order.
-    powerRankings = [...rosterTeams]
-      .filter((t) => t.totalDrafted > 0)
-      .sort((a, b) => b.avgValue - a.avgValue)
-      .map((t, i) => {
-        t.powerRank = i + 1;
-        return {
+
+    const drafted = rosterTeams.filter((t) => t.totalDrafted > 0);
+    const numDrafted = drafted.length || 1;
+
+    // Build a ranked + graded view from a single team metric. The metric vs the
+    // league average drives both the sort order and the letter grade, so the
+    // best team on that metric always leads with the best grade.
+    const buildRanking = (metricFn) => {
+      const leagueAvg =
+        drafted.reduce((s, t) => s + metricFn(t), 0) / numDrafted;
+      return [...drafted]
+        .sort((a, b) => metricFn(b) - metricFn(a))
+        .map((t, i) => ({
           rosterId: t.rosterId,
           label: t.label,
           isMe: t.isMe,
           rank: i + 1,
-          grade: t.grade,
+          grade: leagueAvg > 0 ? gradeFromRatio(metricFn(t) / leagueAvg) : null,
           totalValue: Math.round(t.totalValue),
           avgValue: Math.round(t.avgValue),
           totalDrafted: t.totalDrafted,
           expectedPpg: t.expectedPpg,
           positionGrades: t.positionGrades,
-        };
-      });
+        }));
+    };
+
+    powerRankings = {
+      dynasty: buildRanking((t) => t.totalValue),
+      contender: buildRanking((t) => t.expectedPpg),
+    };
+
+    // The per-team roster card shows the overall (dynasty) grade.
+    const dynastyGradeById = new Map(
+      powerRankings.dynasty.map((r) => [r.rosterId, r.grade]),
+    );
+    rosterTeams.forEach((t) => {
+      t.grade = dynastyGradeById.get(t.rosterId) ?? null;
+    });
   }
 
   // My team first, then by pick count (most active drafters surface).

@@ -262,14 +262,19 @@ test("buildLiveDraftState grades rosters and ranks by total value", () => {
   });
 
   assert.ok(state.powerRankings);
-  assert.equal(state.powerRankings.length, 2);
+  // Dynasty view ranks by total accumulated value.
+  const dynasty = state.powerRankings.dynasty;
+  assert.equal(dynasty.length, 2);
   // Highest total value ranks #1.
-  assert.equal(state.powerRankings[0].rosterId, 10);
-  assert.equal(state.powerRankings[0].rank, 1);
-  assert.equal(state.powerRankings[0].totalValue, 16000);
+  assert.equal(dynasty[0].rosterId, 10);
+  assert.equal(dynasty[0].rank, 1);
+  assert.equal(dynasty[0].totalValue, 16000);
   // Above-average team gets an A, below-average an F.
-  assert.equal(state.powerRankings[0].grade, "A");
-  assert.equal(state.powerRankings[1].grade, "F");
+  assert.equal(dynasty[0].grade, "A");
+  assert.equal(dynasty[1].grade, "F");
+  // Contender view exists and is ranked by expected PPG (no ppg here → all 0,
+  // ungradeable, but still a stable two-team list).
+  assert.equal(state.powerRankings.contender.length, 2);
 
   // Position grades surface per-room weak spots.
   const studs = state.teams.find((t) => t.rosterId === 10);
@@ -330,4 +335,100 @@ test("buildLiveDraftState sums expected PPG from the starting lineup", () => {
   const b = state.teams.find((t) => t.rosterId === 20);
   // RB 200 starts (15); QB 201 fills the QB starter slot (99) → 114.
   assert.equal(b.expectedPpg, 114);
+});
+
+test("a filled-but-weak position room floors at D, not F", () => {
+  const draft = {
+    draft_id: "d5",
+    season: "2026",
+    type: "snake",
+    status: "drafting",
+    settings: { teams: 2, rounds: 1 },
+    slot_to_roster_id: { 1: 10, 2: 20 },
+  };
+  const mk = (pickNo, slot, rosterId, pid, pos) => ({
+    pick_no: pickNo,
+    round: 1,
+    draft_slot: slot,
+    roster_id: rosterId,
+    player_id: pid,
+    metadata: { first_name: "P", last_name: pid, position: pos },
+  });
+  // Both teams have a WR — one elite, one cheap. The cheap room is far below the
+  // league average (would grade F on value), but it's *filled*, so it must read
+  // as a weak spot (D), not an empty hole (F).
+  const picks = [
+    mk(1, 1, 10, "100", "WR"),
+    mk(2, 2, 20, "200", "WR"),
+  ];
+  const valueBySleeperId = { 100: 9000, 200: 200 };
+  const state = buildLiveDraftState({
+    draft,
+    picks,
+    teams: [
+      { rosterId: 10, label: "Elite" },
+      { rosterId: 20, label: "Cheap" },
+    ],
+    rosterPositions: ["WR", "BN"],
+    myRosterId: 10,
+    valueBySleeperId,
+  });
+
+  const cheapWR = state.teams
+    .find((t) => t.rosterId === 20)
+    .positionGrades.find((g) => g.pos === "WR");
+  assert.equal(cheapWR.count, 1); // room is filled
+  assert.equal(cheapWR.grade, "D"); // weak spot, not an F hole
+});
+
+test("dynasty and contender views can rank teams differently", () => {
+  const draft = {
+    draft_id: "d4",
+    season: "2026",
+    type: "snake",
+    status: "drafting",
+    settings: { teams: 2, rounds: 3 },
+    slot_to_roster_id: { 1: 10, 2: 20 },
+  };
+  const mk = (pickNo, slot, rosterId, pid, pos) => ({
+    pick_no: pickNo,
+    round: Math.ceil(pickNo / 2),
+    draft_slot: slot,
+    roster_id: rosterId,
+    player_id: pid,
+    metadata: { first_name: "P", last_name: pid, position: pos },
+  });
+  // Roster 10 (Hoarders): many picks → most total value, but a weak win-now
+  // starting lineup. Roster 20 (WinNow): fewer picks, lower total value, but its
+  // starters project for far more points/game. Dynasty should favor 10;
+  // contender should favor 20.
+  const picks = [
+    mk(1, 1, 10, "100", "QB"),
+    mk(2, 2, 20, "200", "QB"),
+    mk(4, 1, 10, "101", "RB"),
+    mk(6, 1, 10, "102", "WR"),
+  ];
+  const valueBySleeperId = { 100: 5000, 101: 4000, 102: 4000, 200: 6000 };
+  const ppgBySleeperId = { 100: 10, 101: 8, 102: 8, 200: 40 };
+  const state = buildLiveDraftState({
+    draft,
+    picks,
+    teams: [
+      { rosterId: 10, label: "Hoarders" },
+      { rosterId: 20, label: "WinNow" },
+    ],
+    rosterPositions: ["QB", "RB", "WR", "BN"],
+    myRosterId: 10,
+    valueBySleeperId,
+    ppgBySleeperId,
+  });
+
+  // Dynasty: Hoarders lead on total value (13000 > 6000).
+  assert.equal(state.powerRankings.dynasty[0].rosterId, 10);
+  assert.equal(state.powerRankings.dynasty[0].grade, "A");
+  // Contender: WinNow leads on expected PPG (40 > 26) despite less total value.
+  assert.equal(state.powerRankings.contender[0].rosterId, 20);
+  assert.equal(state.powerRankings.contender[0].grade, "A");
+  // The per-team overall grade tracks the dynasty (total-value) view.
+  assert.equal(state.teams.find((t) => t.rosterId === 10).grade, "A");
 });

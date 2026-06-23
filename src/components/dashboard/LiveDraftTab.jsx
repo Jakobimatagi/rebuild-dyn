@@ -43,6 +43,38 @@ function formatValue(v) {
   return String(Math.round(v));
 }
 
+// Dynasty phase styling — mirrors the League tab so teams read the same way
+// across the app (Contender / Retool / Rebuild).
+const PHASE_META = {
+  contender: { label: "Contender", color: "#00f5a0" },
+  retool: { label: "Retool", color: "#ffd84d" },
+  rebuild: { label: "Rebuild", color: "#ff6b35" },
+};
+
+function PhaseBadge({ phase }) {
+  const meta = PHASE_META[phase];
+  if (!meta) return null;
+  return (
+    <span
+      style={{
+        fontSize: 9,
+        letterSpacing: 0.5,
+        textTransform: "uppercase",
+        fontWeight: 600,
+        padding: "2px 6px",
+        borderRadius: 2,
+        color: meta.color,
+        background: `${meta.color}1a`,
+        border: `1px solid ${meta.color}55`,
+        whiteSpace: "nowrap",
+      }}
+      title="Dynasty phase — the team's current contention window (from the League analysis)"
+    >
+      {meta.label}
+    </span>
+  );
+}
+
 function ordinal(n) {
   if (n === 1) return "1st";
   if (n === 2) return "2nd";
@@ -144,12 +176,15 @@ export default function LiveDraftTab({
   const [posFilter, setPosFilter] = useState([]);
   const [tradeTx, setTradeTx] = useState(initialTradeTransactions);
 
-  // leagueTeams carries label/avatar/ownerId/rosterId — map to the minimal shape.
+  // leagueTeams carries label/avatar/ownerId/rosterId/teamPhase — map to the
+  // minimal shape, keeping the dynasty phase (contender/retool/rebuild) so the
+  // Rosters view can label each team the way the League tab does.
   const teams = leagueTeams.map((t) => ({
     rosterId: t.rosterId,
     label: t.label,
     avatar: t.avatar || null,
     ownerId: t.ownerId,
+    phase: t.teamPhase?.phase || null,
   }));
 
   // A fetch is allowed to be in flight only once at a time. The guard lives in a
@@ -961,15 +996,61 @@ function PosGradeStrip({ grades }) {
 }
 
 function PowerRankings({ rankings }) {
-  const hasPpg = rankings.some((t) => t.expectedPpg > 0);
+  // Two views: "dynasty" (ranked by total value) and "contender" (ranked by
+  // expected PPG). Contender only makes sense once we have projection data.
+  const hasPpg = (rankings.contender || []).some((t) => t.expectedPpg > 0);
+  const [mode, setMode] = useState("dynasty");
+  const activeMode = mode === "contender" && hasPpg ? "contender" : "dynasty";
+  const rows = rankings[activeMode] || [];
   const gridCols = hasPpg
     ? "28px 32px 1fr auto 64px 56px"
     : "28px 32px 1fr auto 56px";
 
   return (
     <div style={{ ...styles.card }}>
-      <div style={{ ...styles.sectionLabel, marginBottom: 12 }}>
-        Live Power Rankings
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 12,
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ ...styles.sectionLabel, marginBottom: 0 }}>
+          Live Power Rankings
+        </div>
+        {hasPpg && (
+          <div style={{ display: "flex", gap: 4 }}>
+            {[
+              { key: "dynasty", label: "Dynasty" },
+              { key: "contender", label: "Contender" },
+            ].map((opt) => {
+              const on = activeMode === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  onClick={() => setMode(opt.key)}
+                  style={{
+                    fontSize: 10,
+                    letterSpacing: 0.5,
+                    textTransform: "uppercase",
+                    padding: "4px 10px",
+                    borderRadius: 2,
+                    cursor: "pointer",
+                    border: `1px solid ${on ? "rgba(0,245,160,0.4)" : "rgba(255,255,255,0.1)"}`,
+                    background: on ? "rgba(0,245,160,0.1)" : "transparent",
+                    color: on ? "#00f5a0" : "#94a3b8",
+                    fontWeight: on ? 600 : 400,
+                  }}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Column headers for the numeric columns */}
@@ -994,7 +1075,7 @@ function PowerRankings({ rankings }) {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {rankings.map((t) => (
+        {rows.map((t) => (
           <div
             key={t.rosterId}
             style={{
@@ -1074,11 +1155,11 @@ function PowerRankings({ rankings }) {
         ))}
       </div>
       <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 10 }}>
-        Ranked by roster grade — each team's value-per-pick versus the league
-        average (A best → F worst) — so it rewards drafting efficiently
-        regardless of pick count. Value is total dynasty value drafted.
-        {hasPpg
-          ? " Exp PPG projects the current starting lineup's points/game from the last two seasons (rookies/no-data players count as 0 until they have a track record)."
+        {activeMode === "contender"
+          ? "Contender view ranks by expected PPG — the projected points/game of each team's current starting lineup (rookies/no-data players count as 0 until they have a track record). Grade compares that PPG to the league average (A best → F worst)."
+          : "Dynasty view ranks by total roster value — the strongest accumulated build leads. Grade compares each team's total dynasty value to the league average (A best → F worst)."}
+        {hasPpg && activeMode !== "contender"
+          ? " Exp PPG projects the current starting lineup's points/game from the last two seasons."
           : ""}{" "}
         Per-position grades below each team compare that room to the league
         average — D/F flags a weak spot.
@@ -1090,6 +1171,12 @@ function PowerRankings({ rankings }) {
 function RosterCard({ team, rosterPositions, highlight = false, compact = false }) {
   const filled = team.starters.filter((s) => s.player).length;
   const starterTotal = team.starters.length;
+  // Bench depth: the league's bench slots (BN) as capacity, so an empty/partial
+  // bench reads as remaining depth the way unfilled starter slots do. A team can
+  // over-draft past its bench count mid-draft, so never report fewer than drafted.
+  const benchSlots = (rosterPositions || []).filter((s) => s === "BN").length;
+  const benchTotal = Math.max(benchSlots, team.bench.length);
+  const benchEmpty = Math.max(0, benchTotal - team.bench.length);
 
   return (
     <div
@@ -1126,6 +1213,11 @@ function RosterCard({ team, rosterPositions, highlight = false, compact = false 
               YOU
             </span>
           )}
+          {team.phase && (
+            <span style={{ marginLeft: 8, verticalAlign: "middle" }}>
+              <PhaseBadge phase={team.phase} />
+            </span>
+          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {team.grade && (
@@ -1135,7 +1227,7 @@ function RosterCard({ team, rosterPositions, highlight = false, compact = false 
                 fontWeight: 700,
                 color: gradeColor(team.grade),
               }}
-              title="Live roster grade — value-per-pick vs league average"
+              title="Live roster grade — total dynasty value vs league average"
             >
               {team.grade}
             </span>
@@ -1160,11 +1252,11 @@ function RosterCard({ team, rosterPositions, highlight = false, compact = false 
         ))}
       </div>
 
-      {/* Bench */}
-      {team.bench.length > 0 && (
+      {/* Bench — drafted depth plus the league's remaining bench spots */}
+      {benchTotal > 0 && (
         <div style={{ marginTop: 10 }}>
           <div style={{ fontSize: 8, letterSpacing: 2, color: "#94a3b8", textTransform: "uppercase", marginBottom: 4 }}>
-            Bench ({team.bench.length})
+            Bench ({team.bench.length}/{benchTotal})
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {team.bench.map((p) => (
@@ -1185,6 +1277,23 @@ function RosterCard({ team, rosterPositions, highlight = false, compact = false 
                   {p.position}
                 </span>
                 {p.name.split(" ").slice(-1)[0]}
+              </span>
+            ))}
+            {Array.from({ length: benchEmpty }).map((_, i) => (
+              <span
+                key={`empty-${i}`}
+                style={{
+                  fontSize: 10,
+                  padding: "2px 7px",
+                  borderRadius: 2,
+                  background: "transparent",
+                  border: "1px dashed rgba(255,255,255,0.12)",
+                  color: "#5a6178",
+                  whiteSpace: "nowrap",
+                }}
+                title="Open bench spot"
+              >
+                empty
               </span>
             ))}
           </div>
