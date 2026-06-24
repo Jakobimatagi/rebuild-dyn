@@ -26,6 +26,8 @@ def _json_safe(o):
     - numpy/pandas scalars (int64, bool_, …) → python natives, so json can encode
       them.
     """
+    if o is None or o is pd.NA or o is pd.NaT:  # nullable Int64/string/datetime → null
+        return None
     if isinstance(o, float):
         if math.isnan(o) or math.isinf(o):
             return None
@@ -154,8 +156,21 @@ _UTIL_COLS = [
 ]
 
 
+_CONTRACT_COLS = [
+    "otc_id", "player_name", "position", "team", "total_value", "years",
+    "avg_annual_value", "year_signed", "years_remaining", "guaranteed",
+    "apy_cap_pct", "inflated_apy", "gsis_id", "sleeper_id",
+]
+
+
 def publish_scheme(df: pd.DataFrame) -> int:
     return _upsert_df("team_scheme_seasons", df, "season,team", _SCHEME_COLS)
+
+
+def publish_contracts(df: pd.DataFrame) -> int:
+    # otc_id is the per-player natural key; after the is_active filter there's one row
+    # per active player, so it's a stable conflict target.
+    return _upsert_df("player_contracts", df, "otc_id", _CONTRACT_COLS)
 
 
 def publish_coach_history(df: pd.DataFrame) -> int:

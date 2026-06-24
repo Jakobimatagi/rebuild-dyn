@@ -142,6 +142,7 @@ export function buildRosterAnalysis(
   liveDraftPicks = [],
   projPctileMap = null, // player_id → forward production percentile (weekly engine)
   valueSnapshots = null, // dated value snapshots for trade "value then" (see tradeReview)
+  contractMap = null, // sleeper_id → current contract (player_contracts; see contractsApi)
 ) {
   const currentYear = new Date().getFullYear();
   // Sleeper's `season` field on a draft can be the upcoming NFL season (2026)
@@ -260,6 +261,7 @@ export function buildRosterAnalysis(
       ocOutlookContext,
       completedDraftSeasons,
       projPctileMap,
+      contractMap,
     ),
   );
 
