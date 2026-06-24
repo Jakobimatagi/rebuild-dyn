@@ -12,6 +12,7 @@ import { fetchAiAdvice } from "./lib/aiAdviceApi";
 import { buildRosterAnalysis, DEFAULT_SCORING_WEIGHTS } from "./lib/analysis";
 import { fetchFantasyCalcValues, fetchFantasyCalcTrades } from "./lib/fantasyCalcApi";
 import { fetchSeasonPaceProjPercentiles } from "./lib/projectionsApi";
+import { fetchPlayerContractMap } from "./lib/contractsApi";
 import {
   fetchRosterAuditValues,
   fetchRosterAuditPicks,
@@ -147,6 +148,7 @@ export default function App() {
       payload.liveDraftPicks,
       payload.projPctileMap ?? null,
       payload.valueSnapshots ?? null,
+      payload.contractMap ?? null,
     );
   }
 
@@ -322,6 +324,7 @@ export default function App() {
             fantasyCalcTrades,
             liveDraftPicks,
             projPctileMap,
+            contractMap,
           ] = await Promise.all([
             fetchHistoricalStats(2021),
             fetchHistoricalStats(2020),
@@ -343,6 +346,8 @@ export default function App() {
             // Forward production percentiles from the nflverse-enriched weekly
             // projections (upcoming season) → fused dynasty value. Best-effort.
             fetchSeasonPaceProjPercentiles(lastSeason + 1).catch(() => new Map()),
+            // Active-player contracts (OTC via nflverse) → roster + deep-dive. Best-effort.
+            fetchPlayerContractMap().catch(() => new Map()),
           ]);
 
           const allDraftPicksResults = await Promise.all(
@@ -385,6 +390,7 @@ export default function App() {
             allDraftPicksMap,
             valueSnapshots,
             projPctileMap,
+            contractMap,
             historicalStats: [
               { year: 2021, stats: stats21 },
               { year: 2020, stats: stats20 },

@@ -675,6 +675,36 @@ export default function RosterTab({
                               </span>
                             );
                           })()}
+                          {p.contract && (() => {
+                            const c = p.contract;
+                            const aav = c.avg_annual_value != null ? `$${Math.round(c.avg_annual_value)}M` : null;
+                            const yl = c.years_remaining;
+                            const ylTxt = yl != null ? (yl > 0 ? `${yl}yr left` : "exp") : null;
+                            const body = [aav, ylTxt].filter(Boolean).join(" · ");
+                            if (!body) return null;
+                            const tone = "#5ad1c4";
+                            const tip = `Contract${c.total_value != null ? `: $${Math.round(c.total_value)}M total` : ""}`
+                              + `${c.years != null ? ` · ${c.years}yr` : ""}`
+                              + `${c.year_signed != null ? ` signed ${c.year_signed}` : ""}`
+                              + `${c.guaranteed != null ? ` · $${Math.round(c.guaranteed)}M gtd` : ""}`;
+                            return (
+                              <span
+                                title={tip}
+                                style={{
+                                  fontSize: 9,
+                                  color: tone,
+                                  background: `${tone}18`,
+                                  border: `1px solid ${tone}44`,
+                                  borderRadius: 3,
+                                  padding: "2px 6px",
+                                  letterSpacing: 0.3,
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {body}
+                              </span>
+                            );
+                          })()}
                           <span
                             style={{
                               ...styles.tag(

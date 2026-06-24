@@ -437,6 +437,7 @@ export function buildRosterSnapshot(
   ocOutlookContext = null,
   completedDraftSeasons = new Set(),
   projPctileMap = null,
+  contractMap = null,
 ) {
   const playerIds = roster.players || [];
   const picks = buildRosterPicks(
@@ -616,6 +617,10 @@ export function buildRosterSnapshot(
       enrichedPlayer.dynastyValue = computeDynastyValue(enrichedPlayer, {
         projPctile: projPctileMap?.get(String(id)) ?? null,
       });
+
+      // Active contract (OTC via nflverse), keyed by Sleeper id. Null when the table
+      // isn't published or the player didn't link. See contractsApi.js.
+      enrichedPlayer.contract = contractMap?.get(String(id)) ?? null;
 
       if (ocOutlookContext) {
         enrichedPlayer.ocOutlook = buildPlayerOcOutlook(enrichedPlayer, ocOutlookContext);

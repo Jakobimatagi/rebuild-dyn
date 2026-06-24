@@ -231,6 +231,40 @@ def cmd_publish_oc(args):
     print("\nDone.")
 
 
+def cmd_contracts_check(args):
+    """Self-test the OTC contracts layer with no DB: build the active-player table and
+    print row count, Sleeper-link coverage, and the top deals by AAV (should be the
+    league's marquee QBs)."""
+    from .contracts_table import active_contracts, _resolve_league_year
+
+    ly = _resolve_league_year(args.league_year)
+    df = active_contracts(args.league_year)
+    if df.empty:
+        print("No active contracts produced — check upstream availability.")
+        return
+    linked = df["sleeper_id"].notna().sum() if "sleeper_id" in df.columns else 0
+    print(f"league year {ly}: {len(df):,} active contracts  |  "
+          f"{linked:,} sleeper-linked ({100*linked/len(df):.0f}%)\n")
+
+    top = df.sort_values("avg_annual_value", ascending=False).head(10)
+    print("top 10 by AAV ($M):")
+    for _, r in top.iterrows():
+        aav = r["avg_annual_value"] or 0
+        total = r.get("total_value") or 0
+        print(f"  {str(r['player_name']):<24} {str(r.get('position') or ''):>3} "
+              f"{str(r.get('team') or ''):>4}  AAV=${aav:>5.1f}M  "
+              f"total=${total:>6.1f}M  yrs_left={r['years_remaining']}")
+
+
+def cmd_publish_contracts(args):
+    """Build the active-contract table and upsert to Supabase (service-role key)."""
+    from .contracts_table import active_contracts
+    from .store import publish_contracts
+
+    df = active_contracts(args.league_year)
+    publish_contracts(df)
+
+
 def cmd_backtest(args):
     report = run_backtest(args.season, args.start_week, args.end_week)
     if args.write_readme:
@@ -341,6 +375,16 @@ def main(argv=None):
     oc.add_argument("--start", type=int, default=2016, help="first season (pbp goes back to 1999)")
     oc.add_argument("--end", type=int, default=None, help="last season (defaults to the current NFL season)")
     oc.set_defaults(func=cmd_publish_oc)
+
+    cc = sub.add_parser("contracts-check", help="self-test the OTC contracts data layer (no DB)")
+    cc.add_argument("--league-year", type=int, default=None,
+                    help="league year for years-remaining (defaults to current NFL season)")
+    cc.set_defaults(func=cmd_contracts_check)
+
+    pc = sub.add_parser("publish-contracts", help="build + publish active player contracts to Supabase")
+    pc.add_argument("--league-year", type=int, default=None,
+                    help="league year for years-remaining (defaults to current NFL season)")
+    pc.set_defaults(func=cmd_publish_contracts)
 
     args = p.parse_args(argv)
     args.func(args)

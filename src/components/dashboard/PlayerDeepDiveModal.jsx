@@ -703,6 +703,34 @@ function DynastyValueHeadline({ dynastyValue }) {
   );
 }
 
+function ContractSection({ contract }) {
+  if (!contract) return null;
+  const c = contract;
+  const m = (v) => (v != null ? `$${Number(v) % 1 === 0 ? Number(v) : Number(v).toFixed(1)}M` : "—");
+  const yl = c.years_remaining;
+  return (
+    <>
+      {DIVIDER}
+      <SectionLabel>Contract</SectionLabel>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+        <Stat label="AAV" value={m(c.avg_annual_value)} color="#5ad1c4" />
+        <Stat
+          label="Years Left"
+          value={yl != null ? `${yl}` : "—"}
+          color={yl == null ? "#d1d7ea" : yl > 0 ? "#00f5a0" : "#ff6b35"}
+          hint={c.years != null ? `of ${c.years}yr` : null}
+        />
+        <Stat label="Guaranteed" value={m(c.guaranteed)} color="#d1d7ea" />
+      </div>
+      <div style={{ fontSize: 9, color: "#606878", marginTop: 8, lineHeight: 1.5 }}>
+        {c.years != null ? `${c.years}-yr ` : ""}{m(c.total_value)} deal
+        {c.year_signed != null ? ` signed ${c.year_signed}` : ""}
+        {c.team ? ` · ${c.team}` : ""}. Source: OverTheCap via nflverse.
+      </div>
+    </>
+  );
+}
+
 function PredictionSection({ prediction, dynastyValue, history }) {
   if (!prediction) return null;
   const { projections, trajectory, dynastyOutlook, breakoutProb, bustRisk, comps, keyInsights } = prediction;
@@ -1002,6 +1030,7 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, ageCurves,
     prediction,
     dynastyValue,
     ocOutlook,
+    contract,
   } = player;
 
   const verdictColor = getColor(verdict);
@@ -1295,6 +1324,9 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, ageCurves,
             history={{ pctileOlder, pctilePrev, pctileLast, score, lastSeasonYear, age }}
           />
         )}
+
+        {/* ── Contract ── */}
+        <ContractSection contract={contract} />
 
         {/* ── Market value ── */}
         {(marketValue != null || fantasyCalcValue != null) && (
