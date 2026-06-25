@@ -10,6 +10,20 @@ import { fetchNflState, fetchSeasonProjectedPpg } from "../../lib/projectionsApi
 import { parseTrades, mergeTransactions } from "../../lib/draftTrades";
 import { buildTradeReview } from "../../lib/tradeReview";
 import { FeedTradeBody } from "./tradeReportCard";
+import { useModalBehavior } from "../../lib/useModalBehavior";
+import PlayerDeepDiveModal, {
+  DynastyValueHeadline,
+  PlayerTrajectoryChart,
+  buildTrajectoryChart,
+  ScoreMathTable,
+  AgeCurveChart,
+  ContractSection,
+  Stat,
+  SectionLabel,
+} from "./PlayerDeepDiveModal";
+
+// Max players you can line up in the This or That compare view at once.
+const COMPARE_MAX = 4;
 
 const POS_COLOR = {
   QB: "#ff6b6b",
@@ -158,6 +172,9 @@ export default function LiveDraftTab({
   valueBySleeperId = {},
   ppgBySleeperId = {},
   bestAvailablePool = [],
+  bestAvailableEnriched = {},
+  scoringWeights = null,
+  ageCurves = null,
   leagueId,
   players = {},
   initialTradeTransactions = [],
@@ -176,6 +193,23 @@ export default function LiveDraftTab({
   // Multi-select position filter for Best Available. Empty array = "ALL".
   // Selecting RB + WR shows the best players across *either* room.
   const [posFilter, setPosFilter] = useState([]);
+  // "This or That" compare shortlist — sleeper ids the user has checked off the
+  // Best Available board. Lifted here (like posFilter) so the selection survives
+  // switching between the Best Available view and the Board view's rail. Capped
+  // at COMPARE_MAX; adds past the cap are ignored.
+  const [compareIds, setCompareIds] = useState([]);
+  const [showCompare, setShowCompare] = useState(false);
+  const toggleCompare = useCallback((id) => {
+    setCompareIds((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      if (prev.length >= COMPARE_MAX) return prev; // full — ignore
+      return [...prev, id];
+    });
+  }, []);
+  const clearCompare = useCallback(() => {
+    setCompareIds([]);
+    setShowCompare(false);
+  }, []);
   const [tradeTx, setTradeTx] = useState(initialTradeTransactions);
   // Forward weekly-projection PPG (Supabase, league scoring) for the Best
   // Available board. Falls back to the historical PPG prop when a player has no
@@ -547,6 +581,8 @@ export default function LiveDraftTab({
           setPosFilter={setPosFilter}
           ppgBySleeperId={effectivePpg}
           rosterPositions={rosterPositions}
+          compareIds={compareIds}
+          toggleCompare={toggleCompare}
         />
       )}
 
@@ -625,6 +661,8 @@ export default function LiveDraftTab({
                 setPosFilter={setPosFilter}
                 ppgBySleeperId={effectivePpg}
                 rosterPositions={rosterPositions}
+                compareIds={compareIds}
+                toggleCompare={toggleCompare}
                 rail
               />
             </div>
@@ -637,6 +675,27 @@ export default function LiveDraftTab({
         Updated {new Date(lastUpdated).toLocaleTimeString()}
         {autoRefresh && !state.complete && " · auto-refreshing every 12s"}
       </div>
+
+      {/* ── This or That — floating compare bar + modal ── */}
+      {compareIds.length >= 1 && (
+        <CompareBar
+          count={compareIds.length}
+          onOpen={() => setShowCompare(true)}
+          onClear={clearCompare}
+        />
+      )}
+      {showCompare && compareIds.length >= 2 && (
+        <ThisOrThatModal
+          playerIds={compareIds}
+          enrichedById={bestAvailableEnriched}
+          pool={bestAvailablePool}
+          ppgBySleeperId={effectivePpg}
+          scoringWeights={scoringWeights}
+          ageCurves={ageCurves}
+          onRemove={toggleCompare}
+          onClose={() => setShowCompare(false)}
+        />
+      )}
     </div>
   );
 }
@@ -781,9 +840,17 @@ function BestAvailable({
   setPosFilter,
   ppgBySleeperId = {},
   rosterPositions = [],
+  compareIds = [],
+  toggleCompare,
   rail = false,
 }) {
   const drafted = draftedIds || new Set();
+  // Free-text name search for the board — type a few letters to find specific
+  // guys to line up in This or That without scrolling the whole pool.
+  const [search, setSearch] = useState("");
+  const query = search.trim().toLowerCase();
+  const compareSet = new Set(compareIds);
+  const compareFull = compareIds.length >= COMPARE_MAX;
   // Only surface positions the league actually rosters. K and DEF are dropped
   // (board + filter chips) when no roster slot uses them, so a draft that never
   // picks kickers/defenses isn't cluttered with them.
@@ -842,6 +909,7 @@ function BestAvailable({
       ? [...available]
       : available.filter((p) => selectedSet.has(p.position))
   )
+    .filter((p) => !query || p.name.toLowerCase().includes(query))
     .sort((a, b) =>
       sortBy === "ppg"
         ? (b.ppg || 0) - (a.ppg || 0)
@@ -946,9 +1014,53 @@ function BestAvailable({
         })}
       </div>
 
+      {/* Name search — filter the board to find specific guys to compare. */}
+      <div style={{ position: "relative", marginBottom: 12 }}>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search players…"
+          aria-label="Search best available players"
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "6px 28px 6px 10px",
+            fontSize: 12,
+            color: "#e8e8f0",
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            borderRadius: 4,
+            outline: "none",
+          }}
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            aria-label="Clear search"
+            style={{
+              position: "absolute",
+              right: 6,
+              top: "50%",
+              transform: "translateY(-50%)",
+              background: "none",
+              border: "none",
+              color: "#7a819c",
+              cursor: "pointer",
+              fontSize: 14,
+              lineHeight: 1,
+              padding: 2,
+            }}
+          >
+            ×
+          </button>
+        )}
+      </div>
+
       {filtered.length === 0 ? (
         <div style={{ fontSize: 12, color: "#94a3b8" }}>
-          No players available{!showAll ? ` at ${selected.join(" / ")}` : ""}.
+          No players available{query ? ` matching "${search.trim()}"` : !showAll ? ` at ${selected.join(" / ")}` : ""}.
         </div>
       ) : (
         <div
@@ -972,6 +1084,9 @@ function BestAvailable({
               posRank={posRankById.get(p.playerId)}
               maxValue={maxValue}
               ppg={p.ppg}
+              selected={compareSet.has(p.playerId)}
+              compareDisabled={compareFull && !compareSet.has(p.playerId)}
+              onToggleCompare={toggleCompare ? () => toggleCompare(p.playerId) : null}
             />
           ))}
         </div>
@@ -990,24 +1105,51 @@ function BestAvailable({
 // accent, a positional-rank chip (e.g. "WR3"), and a value bar scaled to the
 // top player so tier cliffs are obvious at a glance. The top three overall get
 // a subtly brighter card so the premium names stand out.
-function BestAvailableRow({ player: p, rank, posRank, maxValue, ppg = 0 }) {
+function BestAvailableRow({
+  player: p,
+  rank,
+  posRank,
+  maxValue,
+  ppg = 0,
+  selected = false,
+  compareDisabled = false,
+  onToggleCompare = null,
+}) {
   const color = posColor(p.position);
   const isTop = rank <= 3;
   const barPct = Math.max(4, Math.round(((p.value || 0) / maxValue) * 100));
+  const showCompare = !!onToggleCompare;
   return (
     <div
       style={{
         position: "relative",
         display: "grid",
-        gridTemplateColumns: "18px 30px 1fr auto",
+        gridTemplateColumns: showCompare
+          ? "18px 30px 1fr auto 24px"
+          : "18px 30px 1fr auto",
         alignItems: "center",
         gap: 9,
         padding: "6px 11px 8px",
-        background: isTop ? `${color}12` : "rgba(255,255,255,0.025)",
-        border: `1px solid ${isTop ? `${color}40` : "rgba(255,255,255,0.07)"}`,
-        borderLeft: `2px solid ${color}`,
+        background: selected
+          ? "rgba(0,245,160,0.10)"
+          : isTop
+            ? `${color}12`
+            : "rgba(255,255,255,0.025)",
+        // All four sides use the `border` shorthand only — the position-tinted
+        // left accent is drawn as an inset box-shadow so we never mix `border`
+        // with `borderLeft` (which warns when the row re-renders on selection).
+        border: `1px solid ${
+          selected
+            ? "rgba(0,245,160,0.55)"
+            : isTop
+              ? `${color}40`
+              : "rgba(255,255,255,0.07)"
+        }`,
         borderRadius: 4,
         overflow: "hidden",
+        boxShadow: `inset 2px 0 0 ${selected ? "#00f5a0" : color}${
+          selected ? ", 0 0 0 1px rgba(0,245,160,0.35)" : ""
+        }`,
       }}
     >
       <span style={{ fontSize: 10, color: "#6b7390", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
@@ -1069,6 +1211,45 @@ function BestAvailableRow({ player: p, rank, posRank, maxValue, ppg = 0 }) {
           </span>
         )}
       </span>
+      {showCompare && (
+        <button
+          type="button"
+          onClick={onToggleCompare}
+          disabled={compareDisabled}
+          aria-pressed={selected}
+          aria-label={
+            selected
+              ? `Remove ${p.name} from compare`
+              : `Add ${p.name} to compare`
+          }
+          title={
+            compareDisabled
+              ? `Compare is full (max ${COMPARE_MAX})`
+              : selected
+                ? "Remove from This or That"
+                : "Add to This or That"
+          }
+          style={{
+            width: 18,
+            height: 18,
+            borderRadius: 4,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 11,
+            fontWeight: 800,
+            lineHeight: 1,
+            cursor: compareDisabled ? "not-allowed" : "pointer",
+            background: selected ? "#00f5a0" : "rgba(255,255,255,0.04)",
+            color: selected ? "#050508" : "#7a819c",
+            border: `1px solid ${selected ? "#00f5a0" : "rgba(255,255,255,0.18)"}`,
+            opacity: compareDisabled ? 0.3 : 1,
+            padding: 0,
+          }}
+        >
+          {selected ? "✓" : "+"}
+        </button>
+      )}
       <div
         style={{
           position: "absolute",
@@ -1081,6 +1262,413 @@ function BestAvailableRow({ player: p, rank, posRank, maxValue, ppg = 0 }) {
         }}
       />
     </div>
+  );
+}
+
+// Floating action bar for the This or That shortlist. Shows the running count
+// and opens the side-by-side compare once at least two players are checked.
+function CompareBar({ count, onOpen, onClear }) {
+  const ready = count >= 2;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left: "50%",
+        bottom: 24,
+        transform: "translateX(-50%)",
+        zIndex: 900,
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 10px 8px 16px",
+        background: "#0d0d16",
+        border: "1px solid rgba(0,245,160,0.35)",
+        borderRadius: 999,
+        boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
+      }}
+    >
+      <span style={{ fontSize: 11, color: "#d9deef", letterSpacing: 0.4, whiteSpace: "nowrap" }}>
+        This or That · <b style={{ color: "#00f5a0" }}>{count}</b>/{COMPARE_MAX}
+      </span>
+      <button
+        type="button"
+        onClick={onOpen}
+        disabled={!ready}
+        title={ready ? "Compare selected players" : "Pick at least 2 players"}
+        style={{
+          padding: "5px 14px",
+          borderRadius: 999,
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.5,
+          cursor: ready ? "pointer" : "not-allowed",
+          border: "1px solid",
+          background: ready ? "#00f5a0" : "rgba(255,255,255,0.05)",
+          color: ready ? "#050508" : "#7a819c",
+          borderColor: ready ? "#00f5a0" : "rgba(255,255,255,0.12)",
+          opacity: ready ? 1 : 0.7,
+        }}
+      >
+        Compare
+      </button>
+      <button
+        type="button"
+        onClick={onClear}
+        title="Clear shortlist"
+        style={{
+          padding: "5px 10px",
+          borderRadius: 999,
+          fontSize: 11,
+          fontWeight: 600,
+          cursor: "pointer",
+          background: "rgba(255,255,255,0.04)",
+          color: "#9aa4bf",
+          border: "1px solid rgba(255,255,255,0.12)",
+        }}
+      >
+        Clear
+      </button>
+    </div>
+  );
+}
+
+// This or That — side-by-side compare of up to COMPARE_MAX undrafted players.
+// Each column reuses the deep-dive model sections (fused dynasty value,
+// trajectory, score math, age curve, contract). A compact stat row up top
+// tints the leader in each headline metric so the pick reads at a glance.
+// Clicking a column header opens the full PlayerDeepDiveModal for that player.
+function ThisOrThatModal({
+  playerIds,
+  enrichedById = {},
+  pool = [],
+  ppgBySleeperId = {},
+  scoringWeights,
+  ageCurves,
+  onRemove,
+  onClose,
+}) {
+  const modalRef = useModalBehavior(onClose);
+  const [drillId, setDrillId] = useState(null);
+
+  const poolById = useMemo(() => {
+    const m = {};
+    (pool || []).forEach((p) => {
+      m[p.playerId] = p;
+    });
+    return m;
+  }, [pool]);
+
+  const cols = playerIds.map((id) => {
+    const e = enrichedById?.[id] || null;
+    const poolP = poolById[id] || null;
+    const value = e?.dynastyValue?.value ?? poolP?.value ?? null;
+    const ppgRaw = ppgBySleeperId?.[id];
+    const ppg = ppgRaw != null ? ppgRaw : e?.ppg != null ? Number(e.ppg) : null;
+    return {
+      id,
+      enriched: e,
+      name: e?.name || poolP?.name || id,
+      position: e?.position || poolP?.position || "—",
+      team: e?.team || poolP?.team || null,
+      value,
+      ppg,
+      score: e?.score ?? null,
+      age: e?.age ?? null,
+      verdict: e?.verdict || null,
+      archetype: e?.archetype || null,
+    };
+  });
+
+  const maxOf = (sel) => {
+    const vals = cols.map(sel).filter((v) => v != null);
+    return vals.length ? Math.max(...vals) : null;
+  };
+  const minOf = (sel) => {
+    const vals = cols.map(sel).filter((v) => v != null);
+    return vals.length ? Math.min(...vals) : null;
+  };
+  const bestValue = maxOf((c) => c.value);
+  const bestPpg = maxOf((c) => c.ppg);
+  const bestScore = maxOf((c) => c.score);
+  const youngest = minOf((c) => c.age);
+  const valueLeader = cols.find((c) => c.value != null && c.value === bestValue);
+
+  const CmpStat = ({ label, value, leader }) => (
+    <div
+      style={{
+        textAlign: "center",
+        flex: 1,
+        minWidth: 0,
+        padding: "6px 4px",
+        borderRadius: 4,
+        background: leader ? "rgba(0,245,160,0.12)" : "rgba(255,255,255,0.03)",
+        border: `1px solid ${leader ? "rgba(0,245,160,0.4)" : "rgba(255,255,255,0.06)"}`,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 8.5,
+          letterSpacing: 0.5,
+          textTransform: "uppercase",
+          color: "#808898",
+          marginBottom: 2,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: leader ? "#00f5a0" : "#d1d7ea" }}>
+        {value ?? "—"}
+      </div>
+    </div>
+  );
+
+  const drillPlayer = drillId ? enrichedById?.[drillId] : null;
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.82)",
+          zIndex: 1000,
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "center",
+          padding: "4vh 16px",
+          overflowY: "auto",
+        }}
+      >
+        <div
+          ref={modalRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="This or That player comparison"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: "#0d0d16",
+            border: "1px solid rgba(0,245,160,0.18)",
+            borderRadius: 8,
+            padding: "20px 22px 26px",
+            width: "min(1200px, 96vw)",
+            maxHeight: "92vh",
+            overflowY: "auto",
+          }}
+        >
+          {/* Header */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 6,
+            }}
+          >
+            <div style={{ ...styles.sectionLabel, marginBottom: 0 }}>This or That</div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close comparison"
+              style={{
+                background: "none",
+                border: "none",
+                color: "#7a819c",
+                cursor: "pointer",
+                fontSize: 20,
+                lineHeight: 1,
+                padding: 4,
+              }}
+            >
+              ×
+            </button>
+          </div>
+          {valueLeader && (
+            <div style={{ fontSize: 12, color: "#9aa4bf", marginBottom: 16 }}>
+              Best dynasty value:{" "}
+              <b style={{ color: "#00f5a0" }}>{valueLeader.name}</b>
+            </div>
+          )}
+
+          {/* Columns — horizontal scroll on narrow screens. */}
+          <div style={{ overflowX: "auto", paddingBottom: 4 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: `repeat(${cols.length}, minmax(248px, 1fr))`,
+                gap: 14,
+                alignItems: "start",
+              }}
+            >
+              {cols.map((c) => {
+                const color = posColor(c.position);
+                const e = c.enriched;
+                const pred = e?.prediction;
+                return (
+                  <div
+                    key={c.id}
+                    style={{
+                      border: "1px solid rgba(255,255,255,0.08)",
+                      borderRadius: 6,
+                      padding: 12,
+                      background: "rgba(255,255,255,0.015)",
+                    }}
+                  >
+                    {/* Column header */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10 }}>
+                      <PlayerHeadshot
+                        playerId={c.id}
+                        name={c.name}
+                        position={c.position}
+                        team={c.team}
+                        size={34}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => e && setDrillId(c.id)}
+                        title={e ? "Open full breakdown" : "Full breakdown unavailable"}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          textAlign: "left",
+                          background: "none",
+                          border: "none",
+                          padding: 0,
+                          cursor: e ? "pointer" : "default",
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: "block",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            color: "#e8e8f0",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {c.name}
+                        </span>
+                        <span style={{ fontSize: 10 }}>
+                          <span style={{ color, fontWeight: 700 }}>{c.position}</span>
+                          {c.team && <span style={{ color: "#7a819c" }}> · {c.team}</span>}
+                          {e && (
+                            <span style={{ color: "#5a6478" }}> · details ›</span>
+                          )}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRemove?.(c.id)}
+                        aria-label={`Remove ${c.name}`}
+                        title="Remove from comparison"
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "#7a819c",
+                          cursor: "pointer",
+                          fontSize: 15,
+                          lineHeight: 1,
+                          padding: 2,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+
+                    {/* Headline compare row — leader tinted green. */}
+                    <div style={{ display: "flex", gap: 5, marginBottom: 12 }}>
+                      <CmpStat label="Value" value={c.value} leader={c.value != null && c.value === bestValue} />
+                      <CmpStat
+                        label="PPG"
+                        value={c.ppg != null ? c.ppg.toFixed(1) : null}
+                        leader={c.ppg != null && c.ppg === bestPpg}
+                      />
+                      <CmpStat label="Grade" value={c.score} leader={c.score != null && c.score === bestScore} />
+                      <CmpStat label="Age" value={c.age} leader={c.age != null && c.age === youngest} />
+                    </div>
+
+                    {/* Verdict / archetype tags */}
+                    {(c.verdict || c.archetype) && (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                        {c.verdict && (
+                          <span style={styles.tag("#4dd0ff")}>{c.verdict}</span>
+                        )}
+                        {c.archetype && (
+                          <span style={styles.tag("#c084fc")}>{c.archetype}</span>
+                        )}
+                      </div>
+                    )}
+
+                    {e ? (
+                      <>
+                        {e.dynastyValue && <DynastyValueHeadline dynastyValue={e.dynastyValue} />}
+                        {pred && pred.projections?.length > 0 && (
+                          <div style={{ marginBottom: 14 }}>
+                            <SectionLabel>Career Trajectory</SectionLabel>
+                            <PlayerTrajectoryChart chart={buildTrajectoryChart(pred, e)} />
+                            {(pred.breakoutProb > 0 || pred.bustRisk > 0) && (
+                              <div style={{ display: "flex", gap: 10, marginTop: 6, fontSize: 10 }}>
+                                {pred.breakoutProb > 0 && (
+                                  <span style={{ color: "#00f5a0" }}>
+                                    Breakout {Math.round(pred.breakoutProb)}%
+                                  </span>
+                                )}
+                                {pred.bustRisk > 0 && (
+                                  <span style={{ color: "#ff6b6b" }}>
+                                    Bust {Math.round(pred.bustRisk)}%
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {e.components && (
+                          <div style={{ marginBottom: 14 }}>
+                            <SectionLabel>Score Math</SectionLabel>
+                            <ScoreMathTable
+                              components={e.components}
+                              internalScore={e.internalScore}
+                              score={e.score}
+                              fantasyCalcNormalized={e.fantasyCalcNormalized}
+                              scoringWeights={scoringWeights}
+                            />
+                          </div>
+                        )}
+                        {c.age != null && (
+                          <div style={{ marginBottom: 14 }}>
+                            <SectionLabel>Age Curve</SectionLabel>
+                            <AgeCurveChart pos={c.position} currentAge={c.age} ageCurves={ageCurves} />
+                          </div>
+                        )}
+                        <ContractSection contract={e.contract} />
+                      </>
+                    ) : (
+                      <div style={{ fontSize: 11, color: "#7a819c", lineHeight: 1.5 }}>
+                        Full deep-dive model unavailable for this player — showing
+                        value, projected PPG and age only.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Drill-in: full single-player deep dive on top of the compare view. */}
+      {drillPlayer && (
+        <PlayerDeepDiveModal
+          player={drillPlayer}
+          scoringWeights={scoringWeights}
+          ageCurves={ageCurves}
+          onClose={() => setDrillId(null)}
+        />
+      )}
+    </>
   );
 }
 

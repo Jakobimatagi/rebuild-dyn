@@ -268,6 +268,9 @@ export default function Dashboard({
           valueBySleeperId={analysis.liveDraft.valueBySleeperId}
           ppgBySleeperId={analysis.liveDraft.ppgBySleeperId}
           bestAvailablePool={analysis.liveDraft.bestAvailablePool}
+          bestAvailableEnriched={analysis.liveDraft.bestAvailableEnriched}
+          scoringWeights={analysis.liveDraft.scoringWeights}
+          ageCurves={analysis.liveDraft.ageCurves}
           leagueId={analysis.liveDraft.leagueId}
           players={analysis.liveDraft.players}
           initialTradeTransactions={analysis.liveDraft.tradeTransactions}

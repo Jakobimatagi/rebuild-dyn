@@ -19,7 +19,7 @@ const DIVIDER = (
   />
 );
 
-function SectionLabel({ children }) {
+export function SectionLabel({ children }) {
   return (
     <div
       style={{
@@ -36,7 +36,7 @@ function SectionLabel({ children }) {
   );
 }
 
-function MiniBar({ value, color, height = 5 }) {
+export function MiniBar({ value, color, height = 5 }) {
   return (
     <div
       style={{
@@ -139,7 +139,7 @@ function situExplanation(score, depthOrder, team, position) {
 // Age curve chart
 // ---------------------------------------------------------------------------
 
-function AgeCurveChart({ pos, currentAge, ageCurves }) {
+export function AgeCurveChart({ pos, currentAge, ageCurves }) {
   const curve = (ageCurves && ageCurves[pos]) || AGE_CURVES_FALLBACK[pos] || AGE_CURVES_FALLBACK.WR;
   const { peak, decline, cliff } = curve;
 
@@ -252,7 +252,7 @@ function AgeCurveChart({ pos, currentAge, ageCurves }) {
 // Score math table
 // ---------------------------------------------------------------------------
 
-function ScoreMathTable({ components, internalScore, score, fantasyCalcNormalized, scoringWeights }) {
+export function ScoreMathTable({ components, internalScore, score, fantasyCalcNormalized, scoringWeights }) {
   const w = scoringWeights || { age: 35, prod: 30, avail: 15, trend: 10, situ: 10 };
   const total = w.age + w.prod + w.avail + w.trend + w.situ;
   const pct = (k) => w[k] / total;
@@ -518,7 +518,7 @@ function OcOutlookSection({ outlook, pos }) {
   );
 }
 
-function Stat({ label, value, color, hint }) {
+export function Stat({ label, value, color, hint }) {
   return (
     <div
       style={{
@@ -540,7 +540,7 @@ function Stat({ label, value, color, hint }) {
 // current grade → the 3-yr projection, with a ceiling/floor band on the future
 // derived from how comparable players actually panned out (falling back to a
 // breakout/bust-scaled spread when comps lack forward data).
-function buildTrajectoryChart(prediction, h) {
+export function buildTrajectoryChart(prediction, h) {
   const past = [
     { label: h.lastSeasonYear ? String(h.lastSeasonYear - 2) : "−2", value: h.pctileOlder, kind: "past" },
     { label: h.lastSeasonYear ? String(h.lastSeasonYear - 1) : "−1", value: h.pctilePrev, kind: "past" },
@@ -575,7 +575,7 @@ function buildTrajectoryChart(prediction, h) {
   return { points, band, nowIndex: past.length };
 }
 
-function PlayerTrajectoryChart({ chart }) {
+export function PlayerTrajectoryChart({ chart }) {
   const { points, band, nowIndex } = chart;
   if (points.length < 2) return null;
 
@@ -630,7 +630,7 @@ function PlayerTrajectoryChart({ chart }) {
   );
 }
 
-function DynastyValueHeadline({ dynastyValue }) {
+export function DynastyValueHeadline({ dynastyValue }) {
   const { value, tier, confidence, breakdown } = dynastyValue;
   const c = getColor(getVerdict(breakdown?.modelScore ?? value));
   const confColor =
@@ -703,7 +703,7 @@ function DynastyValueHeadline({ dynastyValue }) {
   );
 }
 
-function ContractSection({ contract }) {
+export function ContractSection({ contract }) {
   if (!contract) return null;
   const c = contract;
   const m = (v) => (v != null ? `$${Number(v) % 1 === 0 ? Number(v) : Number(v).toFixed(1)}M` : "—");

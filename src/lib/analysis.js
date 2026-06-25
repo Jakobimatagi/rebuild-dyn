@@ -393,6 +393,39 @@ export function buildRosterAnalysis(
   const bestAvailablePool = liveDraft
     ? buildBestAvailablePool(liveValueBySleeperId, players)
     : [];
+  // Full deep-dive enrichment for the undrafted pool, so the "This or That"
+  // compare view can show the same model (fused dynasty value, trajectory,
+  // score math, contract) the roster tabs show. Undrafted players have no
+  // enriched record otherwise — buildRosterSnapshot only runs over rostered
+  // players — so we reuse it with a synthetic roster of the pool's ids. Same
+  // contexts the real teams use (analysis.js:244); one extra synchronous pass,
+  // only while a draft is live. Keyed by sleeper id for O(1) lookup in the tab.
+  const bestAvailableEnriched = liveDraft
+    ? Object.fromEntries(
+        buildRosterSnapshot(
+          { roster_id: -1, players: bestAvailablePool.map((p) => p.playerId) },
+          players,
+          league,
+          tradedPicks,
+          stats24,
+          stats23,
+          stats22,
+          benchmarks,
+          scoringWeights,
+          rosterLabelById,
+          leagueContext,
+          fantasyCalcContext,
+          futureSeasons,
+          lastSeasonYear,
+          predictionContext,
+          rosterAuditContext,
+          ocOutlookContext,
+          completedDraftSeasons,
+          projPctileMap,
+          contractMap,
+        ).enriched.map((p) => [String(p.id), p]),
+      )
+    : {};
   const livePpgBySleeperId = liveDraft
     ? buildPpgBySleeperId(stats24, stats23, leagueContext.ppr)
     : {};
@@ -450,6 +483,12 @@ export function buildRosterAnalysis(
           valueBySleeperId: liveValueBySleeperId,
           ppgBySleeperId: livePpgBySleeperId,
           bestAvailablePool,
+          // Full deep-dive model for the undrafted pool (This or That compare).
+          bestAvailableEnriched,
+          // The score-math + age-curve sections in the compare modal need these,
+          // same as PlayerDeepDiveModal does on the roster tabs.
+          scoringWeights,
+          ageCurves: benchmarks.ageCurves,
           leagueId: league.league_id,
           players,
           tradeTransactions: (transactions || []).filter(
