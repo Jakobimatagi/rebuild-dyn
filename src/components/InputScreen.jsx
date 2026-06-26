@@ -135,7 +135,7 @@ export default function InputScreen({
 
         {/* Optional account: create an account, then connect Sleeper to verify
             your team. Plain username entry above still works without this. */}
-        <div style={{ marginTop: 20 }}>
+        {/* <div style={{ marginTop: 20 }}>
           {account ? (
             <div>
               <div style={{ fontSize: 13, color: "#00f5a0", letterSpacing: 0.5 }}>
@@ -175,7 +175,7 @@ export default function InputScreen({
               Sign in with Sleeper →
             </button>
           )}
-        </div>
+        </div> */}
       </div>
 
       {showLogin && (
