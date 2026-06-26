@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { styles } from "../styles";
-import AuthModal from "./AuthModal.jsx";
+import SleeperLoginModal from "./SleeperLoginModal.jsx";
 import { getAccount, signOutAccount } from "../lib/supabase.js";
 
 export default function InputScreen({
@@ -172,17 +172,17 @@ export default function InputScreen({
               onClick={() => setShowLogin(true)}
               style={exploreLinkStyle}
             >
-              Sign in / create account with Sleeper →
+              Sign in with Sleeper →
             </button>
           )}
         </div>
       </div>
 
       {showLogin && (
-        <AuthModal
+        <SleeperLoginModal
           onClose={() => setShowLogin(false)}
-          onSuccess={({ account: user, sleeper }) => {
-            setAccount({ ...sleeper, email: user?.email });
+          onSuccess={(sleeper) => {
+            setAccount({ ...sleeper });
             setShowLogin(false);
             // Sleeper verification gives us the username — jump straight to the
             // user's leagues instead of making them re-type it.

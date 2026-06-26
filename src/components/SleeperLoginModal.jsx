@@ -1,9 +1,9 @@
 import { useModalBehavior } from "../lib/useModalBehavior.js";
 import SleeperConnect from "./SleeperConnect.jsx";
 
-// Standalone "Sign in with Sleeper" modal — a thin overlay around the reusable
-// SleeperConnect form. The full create-account flow lives in AuthModal, which
-// reuses the same SleeperConnect form as its second step.
+// "Sign in with Sleeper" modal — a thin overlay around the reusable
+// SleeperConnect form. Sleeper verification is the app's only login; it mints a
+// Supabase session keyed on the Sleeper account (sleeper_user_id).
 //
 // onSuccess(sleeperProfile) fires once the Supabase session is established.
 export default function SleeperLoginModal({ onClose, onSuccess }) {

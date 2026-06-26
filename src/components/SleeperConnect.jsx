@@ -14,7 +14,7 @@ import {
 //   code   — enter the code, verify, sign in
 //
 // onSuccess(sleeperProfile) fires once the Supabase session is established.
-// Used both by the standalone SleeperLoginModal and inside AuthModal's flow.
+// Wrapped by SleeperLoginModal, which adds the modal chrome.
 
 const HCAPTCHA_SRC = "https://js.hcaptcha.com/1/api.js?render=explicit";
 
