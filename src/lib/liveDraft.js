@@ -284,6 +284,9 @@ export function buildLiveDraftState({
       // Dynasty phase (contender/retool/rebuild) carried from the league analysis
       // so the live Rosters view can label teams like the League tab.
       phase: t.phase || null,
+      // Live phase derived from the in-progress roster below (null until we have a
+      // value source); the card prefers this over the static league phase.
+      livePhase: null,
       isMe: t.rosterId === myRosterId,
       picks: teamPicks,
       starters,
@@ -375,6 +378,27 @@ export function buildLiveDraftState({
     );
     rosterTeams.forEach((t) => {
       t.grade = dynastyGradeById.get(t.rosterId) ?? null;
+    });
+
+    // Live dynasty phase — recomputed every poll from how each roster is actually
+    // shaping up, so teams move between contender/retool/rebuild as picks come in
+    // (the static, pre-draft League phase reads the same for everyone before the
+    // draft fills rosters out). Win-now strength (expected starting-lineup PPG) is
+    // the signal when projections exist; otherwise accumulated dynasty value
+    // stands in. Each team is classed by its metric vs the league average over the
+    // teams that have actually started drafting.
+    const hasAnyPpg = drafted.some((t) => t.expectedPpg > 0);
+    const phaseMetric = (t) => (hasAnyPpg ? t.expectedPpg : t.totalValue);
+    const phaseAvg =
+      drafted.reduce((s, t) => s + phaseMetric(t), 0) / numDrafted;
+    rosterTeams.forEach((t) => {
+      if (phaseAvg <= 0 || t.totalDrafted === 0) {
+        t.livePhase = null;
+        return;
+      }
+      const ratio = phaseMetric(t) / phaseAvg;
+      t.livePhase =
+        ratio >= 1.08 ? "contender" : ratio <= 0.92 ? "rebuild" : "retool";
     });
   }
 

@@ -66,7 +66,7 @@ const PHASE_META = {
   rebuild: { label: "Rebuild", color: "#ff6b35" },
 };
 
-function PhaseBadge({ phase }) {
+function PhaseBadge({ phase, live = false }) {
   const meta = PHASE_META[phase];
   if (!meta) return null;
   return (
@@ -83,7 +83,11 @@ function PhaseBadge({ phase }) {
         border: `1px solid ${meta.color}55`,
         whiteSpace: "nowrap",
       }}
-      title="Dynasty phase — the team's current contention window (from the League analysis)"
+      title={
+        live
+          ? "Live draft phase — recomputed as the roster fills, from its win-now strength vs the league. Updates with every pick."
+          : "Dynasty phase — the team's current contention window (from the League analysis)"
+      }
     >
       {meta.label}
     </span>
@@ -779,6 +783,9 @@ function PlainTradeTeams({ teams }) {
 }
 
 function TradesView({ trades, tradeReview, myRosterId }) {
+  // "My trades" filter — narrow the league-wide feed to deals the viewer is in.
+  const [mineOnly, setMineOnly] = useState(false);
+
   if (!trades || trades.length === 0) {
     return (
       <div style={{ ...styles.card, color: "#d1d7ea", fontSize: 13 }}>
@@ -791,9 +798,55 @@ function TradesView({ trades, tradeReview, myRosterId }) {
   const cardsById = tradeReview?.byId || {};
   const earliestDate = tradeReview?.snapshotCoverage?.earliestDate || null;
 
+  const myTradeCount = trades.filter((t) =>
+    t.teams.some((team) => team.rosterId === myRosterId),
+  ).length;
+  const visibleTrades = mineOnly
+    ? trades.filter((t) => t.teams.some((team) => team.rosterId === myRosterId))
+    : trades;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {trades.map((trade) => {
+      {/* ── Filter ── */}
+      {myRosterId != null && (
+        <div style={{ display: "flex", gap: 6 }}>
+          {[
+            { key: false, label: `All (${trades.length})` },
+            { key: true, label: `My trades (${myTradeCount})` },
+          ].map((f) => {
+            const active = mineOnly === f.key;
+            return (
+              <button
+                key={String(f.key)}
+                type="button"
+                onClick={() => setMineOnly(f.key)}
+                style={{
+                  padding: "4px 12px",
+                  borderRadius: 3,
+                  fontSize: 10,
+                  fontWeight: 600,
+                  letterSpacing: 1,
+                  cursor: "pointer",
+                  border: "1px solid",
+                  background: active ? "rgba(0,245,160,0.15)" : "rgba(255,255,255,0.06)",
+                  color: active ? "#00f5a0" : "#7a819c",
+                  borderColor: active ? "rgba(0,245,160,0.3)" : "rgba(255,255,255,0.1)",
+                }}
+              >
+                {f.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {visibleTrades.length === 0 ? (
+        <div style={{ ...styles.card, color: "#d1d7ea", fontSize: 13, marginBottom: 0 }}>
+          You haven't made any trades yet.
+        </div>
+      ) : null}
+
+      {visibleTrades.map((trade) => {
         const card = cardsById[trade.id];
         return (
           <div key={trade.id} style={{ ...styles.card, marginBottom: 0 }}>
@@ -1908,23 +1961,39 @@ function RosterCard({ team, rosterPositions, highlight = false, compact = false 
       >
         <div
           style={{
-            fontSize: compact ? 12 : 14,
-            fontWeight: 700,
-            color: highlight ? "#00f5a0" : "#e8e8f0",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flex: 1,
+            minWidth: 0,
           }}
         >
-          {team.label}
+          {/* Only the name truncates — the badges stay as fixed-width siblings so
+              the phase chip / YOU tag are never clipped by a long team name. */}
+          <span
+            style={{
+              fontSize: compact ? 12 : 14,
+              fontWeight: 700,
+              color: highlight ? "#00f5a0" : "#e8e8f0",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              minWidth: 0,
+            }}
+          >
+            {team.label}
+          </span>
           {highlight && (
-            <span style={{ fontSize: 9, color: "#00f5a0", marginLeft: 8, letterSpacing: 1 }}>
+            <span style={{ fontSize: 9, color: "#00f5a0", letterSpacing: 1, flexShrink: 0 }}>
               YOU
             </span>
           )}
-          {team.phase && (
-            <span style={{ marginLeft: 8, verticalAlign: "middle" }}>
-              <PhaseBadge phase={team.phase} />
+          {(team.livePhase || team.phase) && (
+            <span style={{ flexShrink: 0, display: "inline-flex" }}>
+              <PhaseBadge
+                phase={team.livePhase || team.phase}
+                live={!!team.livePhase}
+              />
             </span>
           )}
         </div>

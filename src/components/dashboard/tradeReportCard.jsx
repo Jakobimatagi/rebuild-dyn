@@ -125,10 +125,16 @@ function SideAssets({ side }) {
 export function FeedTradeBody({ card, rosterId, earliestDate, valueSource = "fc" }) {
   const view = card.views?.[valueSource] || card.views?.fc;
   if (!view) return null;
-  const mine = view.sides.find((s) => s.rosterId === rosterId) || view.sides[0];
+  // When the viewer is a participant we frame the trade around them ("you won",
+  // "Got"/"Sent"). When they're not — e.g. a league-wide deal between two other
+  // teams in the live-draft feed — fall back to a neutral, team-labeled view so
+  // it doesn't masquerade as the viewer's own trade.
+  const me = view.sides.find((s) => s.rosterId === rosterId);
+  const isParticipant = !!me;
+  const mine = me || view.sides[0];
   const others = view.sides.filter((s) => s.rosterId !== mine.rosterId);
   const twoTeam = view.sides.length === 2;
-  const won = view.winnerNowRosterId === mine.rosterId;
+  const won = isParticipant && view.winnerNowRosterId === mine.rosterId;
   const winnerLabel = view.sides.find((s) => s.rosterId === view.winnerNowRosterId)?.label;
 
   const verdict = view.evenNow
@@ -153,7 +159,7 @@ export function FeedTradeBody({ card, rosterId, earliestDate, valueSource = "fc"
         <ProvenanceTag provenance={card.provenance} snapDate={card.snapDate} earliestDate={earliestDate} />
       </div>
 
-      {twoTeam ? (
+      {twoTeam && isParticipant ? (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div>
             <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, color: "#00f5a0", textTransform: "uppercase", marginBottom: 4 }}>Got</div>
@@ -166,11 +172,27 @@ export function FeedTradeBody({ card, rosterId, earliestDate, valueSource = "fc"
             {others[0] && <SideAssets side={others[0]} />}
           </div>
         </div>
+      ) : twoTeam ? (
+        /* Viewer isn't in this deal — label both sides by their real team so the
+           feed shows who the trade was actually between, not "you" vs "them". */
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {view.sides.map((side) => {
+            const isWinner = view.winnerNowRosterId === side.rosterId;
+            return (
+              <div key={side.rosterId}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: isWinner ? "#00f5a0" : "#c3c9dd", marginBottom: 5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {side.label} got
+                </div>
+                <SideAssets side={side} />
+              </div>
+            );
+          })}
+        </div>
       ) : (
         /* Multi-team: every side, this team highlighted. */
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
           {view.sides.map((side) => {
-            const isMine = side.rosterId === mine.rosterId;
+            const isMine = isParticipant && side.rosterId === mine.rosterId;
             const isWinner = view.winnerNowRosterId === side.rosterId;
             return (
               <div key={side.rosterId} style={{

@@ -432,3 +432,81 @@ test("dynasty and contender views can rank teams differently", () => {
   // The per-team overall grade tracks the dynasty (total-value) view.
   assert.equal(state.teams.find((t) => t.rosterId === 10).grade, "A");
 });
+
+test("livePhase moves teams between contender/retool/rebuild as rosters fill", () => {
+  const draft = {
+    draft_id: "d5",
+    season: "2026",
+    type: "snake",
+    status: "drafting",
+    settings: { teams: 3, rounds: 2 },
+    slot_to_roster_id: { 1: 10, 2: 20, 3: 30 },
+  };
+  const mk = (pickNo, slot, rosterId, pid, pos) => ({
+    pick_no: pickNo,
+    round: Math.ceil(pickNo / 3),
+    draft_slot: slot,
+    roster_id: rosterId,
+    player_id: pid,
+    metadata: { first_name: "P", last_name: pid, position: pos },
+  });
+  // Three teams with clearly separated win-now lineups: 10 stacked, 30 thin,
+  // 20 in the middle. Phase is driven by expected PPG vs the league average.
+  const picks = [
+    mk(1, 1, 10, "100", "QB"),
+    mk(2, 2, 20, "200", "QB"),
+    mk(3, 3, 30, "300", "QB"),
+    mk(4, 3, 30, "301", "RB"),
+    mk(5, 2, 20, "201", "RB"),
+    mk(6, 1, 10, "101", "RB"),
+  ];
+  const valueBySleeperId = { 100: 5000, 101: 5000, 200: 4000, 201: 4000, 300: 1000, 301: 1000 };
+  const ppgBySleeperId = { 100: 30, 101: 30, 200: 18, 201: 15, 300: 6, 301: 6 };
+  const state = buildLiveDraftState({
+    draft,
+    picks,
+    teams: [
+      { rosterId: 10, label: "Stacked", phase: "retool" },
+      { rosterId: 20, label: "Middle", phase: "retool" },
+      { rosterId: 30, label: "Thin", phase: "retool" },
+    ],
+    rosterPositions: ["QB", "RB", "BN"],
+    myRosterId: 10,
+    valueBySleeperId,
+    ppgBySleeperId,
+  });
+  // expectedPpg: 10→60, 20→33, 30→12; league avg 35. Despite all three
+  // sharing the static "retool" phase, the live phase separates them.
+  const phaseOf = (rid) => state.teams.find((t) => t.rosterId === rid).livePhase;
+  assert.equal(phaseOf(10), "contender");
+  assert.equal(phaseOf(20), "retool");
+  assert.equal(phaseOf(30), "rebuild");
+});
+
+test("livePhase is null before any value source is available", () => {
+  const draft = {
+    draft_id: "d6",
+    season: "2026",
+    type: "snake",
+    status: "drafting",
+    settings: { teams: 2, rounds: 1 },
+    slot_to_roster_id: { 1: 10, 2: 20 },
+  };
+  const picks = [
+    { pick_no: 1, round: 1, draft_slot: 1, roster_id: 10, player_id: "100", metadata: { position: "QB" } },
+    { pick_no: 2, round: 1, draft_slot: 2, roster_id: 20, player_id: "200", metadata: { position: "QB" } },
+  ];
+  const state = buildLiveDraftState({
+    draft,
+    picks,
+    teams: [
+      { rosterId: 10, label: "A", phase: "rebuild" },
+      { rosterId: 20, label: "B" },
+    ],
+    rosterPositions: ["QB", "BN"],
+    myRosterId: 10,
+  });
+  // No values → no live phase; the static League phase still carries through.
+  assert.equal(state.teams.find((t) => t.rosterId === 10).livePhase, null);
+  assert.equal(state.teams.find((t) => t.rosterId === 10).phase, "rebuild");
+});

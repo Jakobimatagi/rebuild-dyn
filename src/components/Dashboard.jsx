@@ -27,8 +27,9 @@ const ROW1 = [
   { key: "trades",    label: "Trades" },
   { key: "league",    label: "League" },
   { key: "perception",label: "Market Signals" },
-  { key: "strategy",  label: "Strategy" },
-  { key: "ai",        label: "AI" },
+  // Hidden for now — re-add to restore the tabs (render branches still live below).
+  // { key: "strategy",  label: "Strategy" },
+  // { key: "ai",        label: "AI" },
 ];
 
 const ROW2 = [
