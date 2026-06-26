@@ -16,36 +16,13 @@ export async function verifyLogin(username, passkey) {
   return data; // { ok, id, username, role } or { ok: false }
 }
 
-// ── App accounts (email/password) ───────────────────────────────────────────
-// Lightweight Supabase email/password auth. Sessions persist in localStorage
-// automatically, so getAccount() restores the signed-in user on reload.
-export async function signUpWithEmail(email, password) {
-  const { data, error } = await supabase.auth.signUp({ email, password });
-  if (error) throw error;
-  return data.user;
-}
-
-export async function signInWithEmail(email, password) {
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  });
-  if (error) throw error;
-  return data.user;
-}
-
+// ── App accounts ────────────────────────────────────────────────────────────
+// The only login is Sleeper verification (see SleeperConnect / api/sleeper-auth).
+// It mints a Supabase session whose user is keyed on the Sleeper account
+// (sleeper_user_id in user_metadata). Sessions persist in localStorage, so
+// getAccount() restores the signed-in user on reload; signOutAccount() ends it.
 export async function signOutAccount() {
   const { error } = await supabase.auth.signOut();
-  if (error) throw error;
-}
-
-// Set/replace the password on the *currently signed-in* user. Used after Sleeper
-// verification to let the user add a password for faster future sign-in. Because
-// the session already exists (the Sleeper OTP minted it), this attaches the
-// password to that same account — Sleeper's OTP and the password are then two
-// login methods for one identity.
-export async function setAccountPassword(password) {
-  const { error } = await supabase.auth.updateUser({ password });
   if (error) throw error;
 }
 

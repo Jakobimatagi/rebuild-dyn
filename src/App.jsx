@@ -29,7 +29,7 @@ import {
   fetchSleeper,
   safeLocalStorageWrite,
 } from "./lib/sleeperApi";
-import { fetchTradeValueSnapshots } from "./lib/supabase";
+import { fetchTradeValueSnapshots, signOutAccount } from "./lib/supabase";
 
 const NINE_MONTHS_MS = 9 * 30 * 24 * 60 * 60 * 1000;
 
@@ -739,7 +739,10 @@ export default function App() {
     }
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    // End the Supabase session too — otherwise getAccount() restores it on the
+    // next load and the user is silently "signed in" again after logging out.
+    try { await signOutAccount(); } catch { /* best-effort */ }
     localStorage.removeItem("sleeper_username");
     localStorage.removeItem("sleeper_league");
     localStorage.removeItem("dynasty_os_platform");
