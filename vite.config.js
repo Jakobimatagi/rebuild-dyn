@@ -14,6 +14,18 @@ function devApiHandler(routePath, importPath) {
         try {
           const mod  = await server.ssrLoadModule(importPath)
           const url  = new URL(req.url, 'http://x')
+          // Read + JSON-parse the body for POST handlers (Vercel does this in
+          // prod; the dev shim must mimic it). GET/HEAD carry no body.
+          let body
+          if (req.method && !['GET', 'HEAD'].includes(req.method)) {
+            body = await new Promise((resolve) => {
+              let raw = ''
+              req.on('data', (c) => { raw += c })
+              req.on('end', () => {
+                try { resolve(raw ? JSON.parse(raw) : {}) } catch { resolve(raw) }
+              })
+            })
+          }
           const proxyRes = {
             statusCode: 200,
             _headers: {},
@@ -34,7 +46,7 @@ function devApiHandler(routePath, importPath) {
             },
           }
           await mod.default(
-            { query: Object.fromEntries(url.searchParams), method: req.method, url: req.url },
+            { query: Object.fromEntries(url.searchParams), method: req.method, url: req.url, headers: req.headers, body },
             proxyRes,
           )
         } catch (err) {
@@ -62,6 +74,7 @@ export default defineConfig(({ mode }) => {
       react(),
       devApiHandler('/api/historical-rosters', '/api/historical-rosters.js'),
       devApiHandler('/api/cfbd', '/api/cfbd.js'),
+      devApiHandler('/api/sleeper-auth', '/api/sleeper-auth.js'),
     ],
     server: {
       proxy: {

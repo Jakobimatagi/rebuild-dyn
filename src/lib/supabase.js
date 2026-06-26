@@ -16,6 +16,38 @@ export async function verifyLogin(username, passkey) {
   return data; // { ok, id, username, role } or { ok: false }
 }
 
+// ── Sleeper-verified login (SMS/email one-time code) ────────────────────────────
+// Public hCaptcha sitekey Sleeper uses on their own login page. The code-send
+// step requires a token generated against THIS key so Sleeper accepts it.
+export const SLEEPER_HCAPTCHA_SITEKEY = "3bb6d565-5eb0-425f-acf8-64374f8bbc7b";
+
+async function sleeperAuth(payload) {
+  const res = await fetch("/api/sleeper-auth", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+// Step 1: ask Sleeper to send the one-time code to the account's contact.
+// `captchaToken` comes from the hCaptcha widget (Sleeper's sitekey above).
+export async function requestSleeperCode(email, captchaToken) {
+  return sleeperAuth({ action: "request-code", email, captcha: captchaToken });
+}
+
+// Step 2: verify the code. On success the server mints a Supabase magic-link
+// token, which we exchange here for a real session — leaving the user signed in.
+// Returns the linked Sleeper profile ({ user_id, username, display_name, avatar }).
+export async function verifySleeperCode(email, code) {
+  const { token_hash, sleeper } = await sleeperAuth({ action: "verify-code", email, code });
+  const { error } = await supabase.auth.verifyOtp({ token_hash, type: "magiclink" });
+  if (error) throw error;
+  return sleeper;
+}
+
 // ── Prospects ─────────────────────────────────────────────────────────────────
 
 export async function fetchAllData() {
