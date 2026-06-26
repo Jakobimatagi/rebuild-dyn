@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { styles } from "../styles";
 import AuthModal from "./AuthModal.jsx";
-import { getAccount } from "../lib/supabase.js";
+import { getAccount, signOutAccount } from "../lib/supabase.js";
 
 export default function InputScreen({
   username,
@@ -22,15 +22,29 @@ export default function InputScreen({
   const [showLogin, setShowLogin] = useState(false);
   const [account, setAccount] = useState(null);
 
-  // Restore the signed-in indicator if a Supabase session persisted from a
-  // previous visit (account creation or Sleeper verification both mint one).
+  // Restore the signed-in state if a Supabase session persisted from a previous
+  // visit (Sleeper verification mints one). Pull the Sleeper username out of
+  // user_metadata so the returning user can jump straight back to their teams.
   useEffect(() => {
     let cancelled = false;
     getAccount()
-      .then((user) => { if (!cancelled && user) setAccount({ email: user.email }); })
+      .then((user) => {
+        if (cancelled || !user) return;
+        const meta = user.user_metadata || {};
+        setAccount({
+          email: user.email,
+          username: meta.sleeper_username || null,
+          display_name: meta.display_name || null,
+        });
+      })
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  async function handleSignOut() {
+    try { await signOutAccount(); } catch { /* ignore */ }
+    setAccount(null);
+  }
 
   function handleInputChange(value) {
     if (error && clearError) clearError();
@@ -123,8 +137,34 @@ export default function InputScreen({
             your team. Plain username entry above still works without this. */}
         <div style={{ marginTop: 20 }}>
           {account ? (
-            <div style={{ fontSize: 13, color: "#00f5a0", letterSpacing: 0.5 }}>
-              ✓ Signed in as {account.display_name || account.username || account.email || "your account"}
+            <div>
+              <div style={{ fontSize: 13, color: "#00f5a0", letterSpacing: 0.5 }}>
+                ✓ Signed in as {account.display_name || account.username || account.email || "your account"}
+              </div>
+              <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                {account.username && (
+                  <button
+                    className="dyn-btn"
+                    style={styles.btn}
+                    onClick={() => onSleeperVerified?.(account.username)}
+                    disabled={loading}
+                  >
+                    {loading ? "Loading..." : "Continue to your teams →"}
+                  </button>
+                )}
+                {!account.username && (
+                  <button
+                    type="button"
+                    onClick={() => setShowLogin(true)}
+                    style={exploreLinkStyle}
+                  >
+                    Connect Sleeper to load your teams →
+                  </button>
+                )}
+                <button type="button" onClick={handleSignOut} style={exploreLinkStyle}>
+                  Sign out
+                </button>
+              </div>
             </div>
           ) : (
             <button
