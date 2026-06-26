@@ -16,6 +16,45 @@ export async function verifyLogin(username, passkey) {
   return data; // { ok, id, username, role } or { ok: false }
 }
 
+// ── App accounts (email/password) ───────────────────────────────────────────
+// Lightweight Supabase email/password auth. Sessions persist in localStorage
+// automatically, so getAccount() restores the signed-in user on reload.
+export async function signUpWithEmail(email, password) {
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) throw error;
+  return data.user;
+}
+
+export async function signInWithEmail(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+  if (error) throw error;
+  return data.user;
+}
+
+export async function signOutAccount() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+// Set/replace the password on the *currently signed-in* user. Used after Sleeper
+// verification to let the user add a password for faster future sign-in. Because
+// the session already exists (the Sleeper OTP minted it), this attaches the
+// password to that same account — Sleeper's OTP and the password are then two
+// login methods for one identity.
+export async function setAccountPassword(password) {
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) throw error;
+}
+
+// Returns the current Supabase user (or null) without throwing.
+export async function getAccount() {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.user ?? null;
+}
+
 // ── Sleeper-verified login (SMS/email one-time code) ────────────────────────────
 // Public hCaptcha sitekey Sleeper uses on their own login page. The code-send
 // step requires a token generated against THIS key so Sleeper accepts it.

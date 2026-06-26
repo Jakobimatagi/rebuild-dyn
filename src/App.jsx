@@ -27,6 +27,7 @@ import {
   fetchHistoricalStats,
   fetchLeagueTransactions,
   fetchSleeper,
+  safeLocalStorageWrite,
 } from "./lib/sleeperApi";
 import { fetchTradeValueSnapshots } from "./lib/supabase";
 
@@ -620,8 +621,12 @@ export default function App() {
     return dynasty.length ? dynasty : leagueData;
   }
 
-  async function handleUsernameSubmit() {
-    const trimmed = username.trim();
+  async function handleUsernameSubmit(overrideName) {
+    // overrideName lets the Sleeper-verified account flow advance straight to
+    // the league picker with the verified username, before `username` state
+    // (set in the same tick) has flushed.
+    const source = typeof overrideName === "string" ? overrideName : username;
+    const trimmed = source.trim();
     if (!trimmed) return;
     if (trimmed !== username) setUsername(trimmed);
 
@@ -726,10 +731,10 @@ export default function App() {
 
   async function handleLeagueSelect(league) {
     if (league._platform === "fleaflicker") {
-      localStorage.setItem("ff_league", JSON.stringify(league));
+      safeLocalStorageWrite("ff_league", JSON.stringify(league));
       await loadFleaflickerDashboard(league, { returnToLeagues: true });
     } else {
-      localStorage.setItem("sleeper_league", JSON.stringify(league));
+      safeLocalStorageWrite("sleeper_league", JSON.stringify(league));
       await loadDashboard(league, username, { returnToLeagues: true });
     }
   }
@@ -764,6 +769,10 @@ export default function App() {
               ? handleUsernameSubmit
               : handleFleaflickerSubmit
           }
+          onSleeperVerified={(name) => {
+            setPlatform("sleeper");
+            handleUsernameSubmit(name);
+          }}
           loading={loading}
           error={error}
           clearError={() => setError("")}
