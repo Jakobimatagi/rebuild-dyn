@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { styles } from "../styles";
-import SleeperLoginModal from "./SleeperLoginModal.jsx";
+import AuthModal from "./AuthModal.jsx";
+import { getAccount } from "../lib/supabase.js";
 
 export default function InputScreen({
   username,
   setUsername,
   onSubmit,
+  onSleeperVerified,
   loading,
   error,
   clearError,
@@ -19,6 +21,16 @@ export default function InputScreen({
 
   const [showLogin, setShowLogin] = useState(false);
   const [account, setAccount] = useState(null);
+
+  // Restore the signed-in indicator if a Supabase session persisted from a
+  // previous visit (account creation or Sleeper verification both mint one).
+  useEffect(() => {
+    let cancelled = false;
+    getAccount()
+      .then((user) => { if (!cancelled && user) setAccount({ email: user.email }); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   function handleInputChange(value) {
     if (error && clearError) clearError();
@@ -107,11 +119,12 @@ export default function InputScreen({
           )}
         </div>
 
-        {/* Sleeper-verified account sign-in (proves you own the Sleeper team) */}
+        {/* Optional account: create an account, then connect Sleeper to verify
+            your team. Plain username entry above still works without this. */}
         <div style={{ marginTop: 20 }}>
           {account ? (
             <div style={{ fontSize: 13, color: "#00f5a0", letterSpacing: 0.5 }}>
-              ✓ Signed in as {account.display_name || account.username || "your Sleeper account"}
+              ✓ Signed in as {account.display_name || account.username || account.email || "your account"}
             </div>
           ) : (
             <button
@@ -119,16 +132,22 @@ export default function InputScreen({
               onClick={() => setShowLogin(true)}
               style={exploreLinkStyle}
             >
-              Sign in with Sleeper (verify it's your team) →
+              Sign in / create account with Sleeper →
             </button>
           )}
         </div>
       </div>
 
       {showLogin && (
-        <SleeperLoginModal
+        <AuthModal
           onClose={() => setShowLogin(false)}
-          onSuccess={(sleeper) => { setAccount(sleeper); setShowLogin(false); }}
+          onSuccess={({ account: user, sleeper }) => {
+            setAccount({ ...sleeper, email: user?.email });
+            setShowLogin(false);
+            // Sleeper verification gives us the username — jump straight to the
+            // user's leagues instead of making them re-type it.
+            if (sleeper?.username) onSleeperVerified?.(sleeper.username);
+          }}
         />
       )}
 

@@ -6,15 +6,24 @@
 //   1. request-code: create_verification_code(email_or_phone, captcha)
 //        → Sleeper sends a one-time code to the account's contact. This step
 //          REQUIRES an hCaptcha token generated against Sleeper's own sitekey
-//          (3bb6d565-5eb0-425f-acf8-64374f8bbc7b) — see SleeperLoginModal.
-//   2. verify-code: verify_verification_code(email_or_phone, code)
-//        → true means the visitor controls that contact. We then resolve the
-//          Sleeper user_id and mint a Supabase magic-link token; the browser
-//          exchanges it for a real session via supabase.auth.verifyOtp.
+//          (3bb6d565-5eb0-425f-acf8-64374f8bbc7b) — see SleeperConnect.
+//   2. verify-code: login(email_or_phone_or_username, password: <code>)
+//        → Sleeper's own apps validate an OTP by signing in with the code AS the
+//          password. A non-null User means the visitor controls that contact; we
+//          read user_id/username/etc. straight off it (no separate lookup), then
+//          mint a Supabase magic-link token the browser exchanges for a session.
 //
 // We never see the user's Sleeper password and never store the code. The only
 // long-lived identity is the Supabase user, with the Sleeper profile mirrored
 // into user_metadata so the rest of the app can load their leagues/rosters.
+//
+// Abuse protection (durable, shared across invocations — see
+// docs/migrations/auth_rate_limits_schema.sql):
+//   • request-code is throttled per-email (anti email-bombing) and per-IP.
+//   • verify-code is attempt-capped per-email and per-IP, then locked out, so
+//     the short code can't be brute-forced. A successful verify clears the
+//     counters. The limiter fails OPEN if the migration isn't applied yet (logs
+//     a warning) so a missing table can't lock everyone out.
 //
 // Required server env (Vercel):
 //   SUPABASE_URL                (falls back to VITE_SUPABASE_URL)
@@ -23,6 +32,14 @@
 import { createClient } from "@supabase/supabase-js";
 
 const SLEEPER_GQL = "https://sleeper.com/graphql";
+
+// Rate-limit configs: { limit attempts, per windowSec, lockSec once exceeded }.
+const LIMITS = {
+  requestCodeEmail: { limit: 4, windowSec: 15 * 60, lockSec: 30 * 60 },
+  requestCodeIp: { limit: 15, windowSec: 15 * 60, lockSec: 30 * 60 },
+  verifyEmail: { limit: 6, windowSec: 10 * 60, lockSec: 15 * 60 },
+  verifyIp: { limit: 30, windowSec: 10 * 60, lockSec: 15 * 60 },
+};
 
 // Talk to Sleeper's GraphQL. Throws with a useful status on GraphQL errors.
 async function sleeperGql(query, variables) {
@@ -43,28 +60,68 @@ async function sleeperGql(query, variables) {
   return json.data || {};
 }
 
-// Lazily build a service-role Supabase client (server-side only).
+// Lazily build a service-role Supabase client (server-side only). Returns null
+// when env isn't configured so the rate limiter can degrade gracefully; the
+// verify step, which truly needs it, checks explicitly.
 function adminClient() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) {
-    const err = new Error("Supabase service-role env is not configured on the server");
-    err.status = 500;
-    throw err;
-  }
+  if (!url || !key) return null;
   return createClient(url, key, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }
 
+// Best-effort client IP from the proxy headers Vercel sets.
+function clientIp(req) {
+  const xff = req.headers["x-forwarded-for"];
+  if (xff) return String(xff).split(",")[0].trim();
+  return req.headers["x-real-ip"] || req.socket?.remoteAddress || "unknown";
+}
+
+// Count one attempt against a bucket; throws 429 if the caller is over-limit or
+// locked out. Fails open (logs) on infra errors so a missing migration or a DB
+// blip can't take auth down.
+async function consumeRateLimit(admin, bucket, cfg) {
+  if (!admin) return; // env not configured — limiter disabled
+  const { data, error } = await admin.rpc("consume_rate_limit", {
+    p_bucket: bucket,
+    p_limit: cfg.limit,
+    p_window_seconds: cfg.windowSec,
+    p_lock_seconds: cfg.lockSec,
+  });
+  if (error) {
+    console.warn("[sleeper-auth] rate-limit check skipped:", error.message);
+    return;
+  }
+  if (data && data.allowed === false) {
+    const mins = Math.ceil((data.retry_after || cfg.lockSec) / 60);
+    const err = new Error(
+      `Too many attempts. Try again in about ${mins} minute${mins === 1 ? "" : "s"}.`,
+    );
+    err.status = 429;
+    throw err;
+  }
+}
+
+async function resetRateLimit(admin, bucket) {
+  if (!admin) return;
+  await admin.rpc("reset_rate_limit", { p_bucket: bucket }).catch(() => {});
+}
+
 // Step 1 — ask Sleeper to send the one-time code.
-async function requestCode({ email, captcha }) {
+async function requestCode(admin, ip, { email, captcha }) {
   if (!email) {
     const err = new Error("email is required"); err.status = 400; throw err;
   }
   if (!captcha) {
     const err = new Error("captcha token is required"); err.status = 400; throw err;
   }
+
+  // Throttle the targeted email first (protects a victim's inbox), then the IP.
+  await consumeRateLimit(admin, `rc:email:${email}`, LIMITS.requestCodeEmail);
+  await consumeRateLimit(admin, `rc:ip:${ip}`, LIMITS.requestCodeIp);
+
   const query = `
     mutation send($email: String, $captcha: String) {
       create_verification_code(email_or_phone: $email, captcha: $captcha)
@@ -74,37 +131,49 @@ async function requestCode({ email, captcha }) {
 }
 
 // Step 2 — verify the code, resolve the Sleeper account, mint a session token.
-async function verifyCode({ email, code }) {
+async function verifyCode(admin, ip, { email, code }) {
   if (!email || !code) {
     const err = new Error("email and code are required"); err.status = 400; throw err;
   }
-
-  // 2a. Confirm the code. The mutation returns true or throws.
-  const verifyQ = `
-    mutation check($email: String, $code: String) {
-      verify_verification_code(email_or_phone: $email, code: $code)
-    }`;
-  const vData = await sleeperGql(verifyQ, { email, code });
-  if (vData.verify_verification_code !== true) {
-    const err = new Error("Incorrect or expired code"); err.status = 401; throw err;
+  if (!admin) {
+    const err = new Error("Supabase service-role env is not configured on the server");
+    err.status = 500; throw err;
   }
 
-  // 2b. Resolve the canonical Sleeper account (id is what we key everything on).
-  const lookupQ = `
-    query who($email: String) {
-      user_by_email_phone_or_username(email_or_phone_or_username: $email) {
+  // Attempt-cap + lockout BEFORE hitting Sleeper, so a brute-forcer can't spray
+  // codes. Counts this attempt; a wrong code leaves the count standing, a right
+  // one clears it below.
+  await consumeRateLimit(admin, `vc:email:${email}`, LIMITS.verifyEmail);
+  await consumeRateLimit(admin, `vc:ip:${ip}`, LIMITS.verifyIp);
+
+  // 2a. Verify by signing in with the code as the password — exactly what
+  // Sleeper's app does. A non-null User both confirms the code and gives us the
+  // account in one call.
+  const loginQ = `
+    mutation login($id: String, $pw: String) {
+      login(email_or_phone_or_username: $id, password: $pw) {
         user_id username display_name avatar
       }
     }`;
-  const lData = await sleeperGql(lookupQ, { email });
-  const sleeper = lData.user_by_email_phone_or_username;
+  let sleeper;
+  try {
+    const data = await sleeperGql(loginQ, { id: email, pw: code });
+    sleeper = data.login;
+  } catch (e) {
+    // Surface real outages (5xx) but treat Sleeper's rejection of a bad/expired
+    // code as a clean 401.
+    if (e.status && e.status >= 500) throw e;
+    const err = new Error("Incorrect or expired code"); err.status = 401; throw err;
+  }
   if (!sleeper?.user_id) {
-    const err = new Error("Verified, but could not resolve the Sleeper account");
-    err.status = 422; throw err;
+    const err = new Error("Incorrect or expired code"); err.status = 401; throw err;
   }
 
-  // 2c. Ensure a Supabase user exists for this email and mirror Sleeper info.
-  const admin = adminClient();
+  // Code was good → clear the failure counters for this email/IP.
+  await resetRateLimit(admin, `vc:email:${email}`);
+  await resetRateLimit(admin, `vc:ip:${ip}`);
+
+  // 2b. Ensure a Supabase user exists for this email and mirror Sleeper info.
   const metadata = {
     sleeper_user_id: sleeper.user_id,
     sleeper_username: sleeper.username || null,
@@ -156,13 +225,15 @@ export default async function handler(req, res) {
 
   // Normalize the email/contact the user typed.
   const email = (body.email || "").trim().toLowerCase();
+  const ip = clientIp(req);
+  const admin = adminClient();
 
   try {
     let data;
     if (body.action === "request-code") {
-      data = await requestCode({ email, captcha: body.captcha });
+      data = await requestCode(admin, ip, { email, captcha: body.captcha });
     } else if (body.action === "verify-code") {
-      data = await verifyCode({ email, code: (body.code || "").trim() });
+      data = await verifyCode(admin, ip, { email, code: (body.code || "").trim() });
     } else {
       return res.status(400).json({ error: `unknown action: ${body.action}` });
     }
