@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { styles } from "../styles";
+import SleeperLoginModal from "./SleeperLoginModal.jsx";
 
 export default function InputScreen({
   username,
@@ -14,6 +16,9 @@ export default function InputScreen({
   onExplore,
 }) {
   const isSleeper = platform === "sleeper";
+
+  const [showLogin, setShowLogin] = useState(false);
+  const [account, setAccount] = useState(null);
 
   function handleInputChange(value) {
     if (error && clearError) clearError();
@@ -101,7 +106,31 @@ export default function InputScreen({
             </button>
           )}
         </div>
+
+        {/* Sleeper-verified account sign-in (proves you own the Sleeper team) */}
+        <div style={{ marginTop: 20 }}>
+          {account ? (
+            <div style={{ fontSize: 13, color: "#00f5a0", letterSpacing: 0.5 }}>
+              ✓ Signed in as {account.display_name || account.username || "your Sleeper account"}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowLogin(true)}
+              style={exploreLinkStyle}
+            >
+              Sign in with Sleeper (verify it's your team) →
+            </button>
+          )}
+        </div>
       </div>
+
+      {showLogin && (
+        <SleeperLoginModal
+          onClose={() => setShowLogin(false)}
+          onSuccess={(sleeper) => { setAccount(sleeper); setShowLogin(false); }}
+        />
+      )}
 
       {/* Features */}
       <div style={dividerStyle} />
