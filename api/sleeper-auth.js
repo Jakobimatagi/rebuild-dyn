@@ -79,29 +79,34 @@ async function verifyCode({ email, code }) {
     const err = new Error("email and code are required"); err.status = 400; throw err;
   }
 
-  // 2a. Confirm the code. The mutation returns true or throws.
-  const verifyQ = `
-    mutation check($email: String, $code: String) {
-      verify_verification_code(email_or_phone: $email, code: $code)
-    }`;
-  const vData = await sleeperGql(verifyQ, { email, code });
-  if (vData.verify_verification_code !== true) {
-    const err = new Error("Incorrect or expired code"); err.status = 401; throw err;
-  }
-
-  // 2b. Resolve the canonical Sleeper account (id is what we key everything on).
-  const lookupQ = `
-    query who($email: String) {
-      user_by_email_phone_or_username(email_or_phone_or_username: $email) {
-        user_id username display_name avatar
+  // 2a. Verify the code by completing Sleeper's login the way their own web app
+  // does: submit the one-time code AS the password. `login` returns the User
+  // (with token + identity) on success, or null for a wrong/expired code. This
+  // is the universal final step in Sleeper's flow (passwordless and new-device
+  // alike); `verify_verification_code` is a different, unrelated code type.
+  // No captcha is needed for the login query itself.
+  const loginQ = `
+    query verify($email: String, $code: String) {
+      login(email_or_phone_or_username: $email, password: $code) {
+        user_id username display_name avatar token
       }
     }`;
-  const lData = await sleeperGql(lookupQ, { email });
-  const sleeper = lData.user_by_email_phone_or_username;
-  if (!sleeper?.user_id) {
-    const err = new Error("Verified, but could not resolve the Sleeper account");
-    err.status = 422; throw err;
+  // A wrong/expired code makes Sleeper return a GraphQL error (which sleeperGql
+  // throws on) or a null login — both mean "bad code" to us, so collapse them
+  // into one friendly 401 rather than leaking Sleeper's raw wording.
+  let sleeper;
+  try {
+    const lData = await sleeperGql(loginQ, { email, code });
+    sleeper = lData.login;
+  } catch {
+    sleeper = null;
   }
+  if (!sleeper?.user_id) {
+    const err = new Error("Incorrect or expired code"); err.status = 401; throw err;
+  }
+  // We don't keep Sleeper's token — ownership is now proven; our session is
+  // Supabase's. Strip it so it never leaves the server.
+  delete sleeper.token;
 
   // 2c. Ensure a Supabase user exists for this email and mirror Sleeper info.
   const admin = adminClient();
