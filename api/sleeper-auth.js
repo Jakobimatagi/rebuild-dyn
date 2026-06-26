@@ -7,11 +7,12 @@
 //        → Sleeper sends a one-time code to the account's contact. This step
 //          REQUIRES an hCaptcha token generated against Sleeper's own sitekey
 //          (3bb6d565-5eb0-425f-acf8-64374f8bbc7b) — see SleeperConnect.
-//   2. verify-code: login(email_or_phone_or_username, password: <code>)
-//        → Sleeper's own apps validate an OTP by signing in with the code AS the
-//          password. A non-null User means the visitor controls that contact; we
-//          read user_id/username/etc. straight off it (no separate lookup), then
-//          mint a Supabase magic-link token the browser exchanges for a session.
+//   2. verify-code: verify_verification_code(email_or_phone, code) -> Boolean
+//        → true means the visitor controls that contact. We then resolve the
+//          account via user_by_email_phone_or_username and mint a Supabase
+//          magic-link token the browser exchanges for a session.
+//        (Both confirmed against Sleeper's live GraphQL schema — there is no
+//         `login` mutation; verify_verification_code is THE verify field.)
 //
 // We never see the user's Sleeper password and never store the code. The only
 // long-lived identity is the Supabase user, with the Sleeper profile mirrored
@@ -146,32 +147,42 @@ async function verifyCode(admin, ip, { email, code }) {
   await consumeRateLimit(admin, `vc:email:${email}`, LIMITS.verifyEmail);
   await consumeRateLimit(admin, `vc:ip:${ip}`, LIMITS.verifyIp);
 
-  // 2a. Verify by signing in with the code as the password — exactly what
-  // Sleeper's app does. A non-null User both confirms the code and gives us the
-  // account in one call.
-  const loginQ = `
-    mutation login($id: String, $pw: String) {
-      login(email_or_phone_or_username: $id, password: $pw) {
-        user_id username display_name avatar
-      }
+  // 2a. Confirm the code. verify_verification_code returns a Boolean; anything
+  // other than true means a bad/expired code.
+  const verifyQ = `
+    mutation check($email: String, $code: String) {
+      verify_verification_code(email_or_phone: $email, code: $code)
     }`;
-  let sleeper;
+  let ok;
   try {
-    const data = await sleeperGql(loginQ, { id: email, pw: code });
-    sleeper = data.login;
+    const vData = await sleeperGql(verifyQ, { email, code });
+    ok = vData.verify_verification_code === true;
   } catch (e) {
-    // Surface real outages (5xx) but treat Sleeper's rejection of a bad/expired
-    // code as a clean 401.
+    // Surface real outages (5xx); treat Sleeper's rejection as a failed code.
     if (e.status && e.status >= 500) throw e;
-    const err = new Error("Incorrect or expired code"); err.status = 401; throw err;
+    ok = false;
   }
-  if (!sleeper?.user_id) {
+  if (!ok) {
     const err = new Error("Incorrect or expired code"); err.status = 401; throw err;
   }
 
   // Code was good → clear the failure counters for this email/IP.
   await resetRateLimit(admin, `vc:email:${email}`);
   await resetRateLimit(admin, `vc:ip:${ip}`);
+
+  // 2b. Resolve the canonical Sleeper account (the id we key everything on).
+  const lookupQ = `
+    query who($email: String) {
+      user_by_email_phone_or_username(email_or_phone_or_username: $email) {
+        user_id username display_name avatar
+      }
+    }`;
+  const lData = await sleeperGql(lookupQ, { email });
+  const sleeper = lData.user_by_email_phone_or_username;
+  if (!sleeper?.user_id) {
+    const err = new Error("Verified, but could not resolve the Sleeper account");
+    err.status = 422; throw err;
+  }
 
   // 2b. Ensure a Supabase user exists for this email and mirror Sleeper info.
   const metadata = {
