@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { toPng } from "html-to-image";
+import { captureShareImage, tiktokFilename } from "../lib/shareImage.js";
+import TikTokFrame from "./TikTokFrame.jsx";
 import { useModalBehavior } from "../lib/useModalBehavior.js";
 import { fetchShareBlurbs, buildOcBlurbInput } from "../lib/aiShareBlurbsApi.js";
 import {
@@ -125,6 +126,7 @@ export default function OcShareModal({
   const [team, setTeam] = useState("DET");
   const [playerId, setPlayerId] = useState(null);
   const [downloading, setDownloading] = useState(false);
+  const [tiktok, setTiktok] = useState(false);
 
   const [blurbs, setBlurbs] = useState(() => new Map());
   const [blurbsLoading, setBlurbsLoading] = useState(false);
@@ -290,9 +292,9 @@ export default function OcShareModal({
     if (!node) return;
     setDownloading(true);
     try {
-      const dataUrl = await toPng(node, { cacheBust: true, pixelRatio: 2, backgroundColor: "#020617" });
+      const dataUrl = await captureShareImage(node, { tiktok });
       const link = document.createElement("a");
-      link.download = `oc-usage-${cardType}-${season}-${slug(scopeLabel)}.png`;
+      link.download = tiktokFilename(`oc-usage-${cardType}-${season}-${slug(scopeLabel)}.png`, tiktok);
       link.href = dataUrl;
       link.click();
     } catch (err) {
@@ -415,11 +417,22 @@ export default function OcShareModal({
               Regenerate
             </button>
             <button
+              onClick={() => setTiktok((v) => !v)}
+              title="Export as a 1080×1920 vertical card sized for TikTok / Reels / Shorts"
+              className={`text-xs font-semibold px-3 py-1.5 rounded border ${
+                tiktok
+                  ? "border-fuchsia-400/70 bg-fuchsia-500/20 text-fuchsia-100"
+                  : "border-white/15 bg-slate-900/40 text-slate-300 hover:text-slate-100"
+              }`}
+            >
+              📱 TikTok 9:16 {tiktok ? "on" : "off"}
+            </button>
+            <button
               onClick={downloadCard}
               disabled={!canRender || downloading}
               className="text-xs font-semibold px-3 py-1.5 rounded border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 disabled:opacity-40"
             >
-              {downloading ? "Generating…" : "Download PNG"}
+              {downloading ? "Generating…" : tiktok ? "Download TikTok PNG" : "Download PNG"}
             </button>
             <button
               onClick={onClose}
@@ -473,23 +486,25 @@ export default function OcShareModal({
             </div>
           )}
           {canRender && (
-            <div ref={shareRef} style={{ width: 1080, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}
-              className="bg-slate-950 text-slate-100 p-10 flex flex-col gap-5">
-              <CardHeader cardType={cardType} season={season} scopeLabel={scopeLabel} ocName={ocName} team={team} />
-              {cardType === "leaderboard" && (
-                <LeaderboardBody board={board} rows={leaderRows} season={season} ocsForSeason={ocsForSeason} blurbs={blurbs} />
-              )}
-              {cardType === "fingerprint" && (
-                <FingerprintBody oc={selectedOc} agg={fingerprint} blurbs={blurbs} />
-              )}
-              {cardType === "team" && (
-                <TeamRoomBody team={team} usage={teamUsage} rooms={teamRooms} blurbs={blurbs} />
-              )}
-              {cardType === "player" && (
-                <PlayerBody player={selectedPlayer} season={season} blurb={blurbs.get(selectedPlayer?.id)} />
-              )}
-              <Footer />
-            </div>
+            <TikTokFrame enabled={tiktok}>
+              <div ref={shareRef} style={{ width: 1080, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}
+                className="bg-slate-950 text-slate-100 p-10 flex flex-col gap-5">
+                <CardHeader cardType={cardType} season={season} scopeLabel={scopeLabel} ocName={ocName} team={team} />
+                {cardType === "leaderboard" && (
+                  <LeaderboardBody board={board} rows={leaderRows} season={season} ocsForSeason={ocsForSeason} blurbs={blurbs} />
+                )}
+                {cardType === "fingerprint" && (
+                  <FingerprintBody oc={selectedOc} agg={fingerprint} blurbs={blurbs} />
+                )}
+                {cardType === "team" && (
+                  <TeamRoomBody team={team} usage={teamUsage} rooms={teamRooms} blurbs={blurbs} />
+                )}
+                {cardType === "player" && (
+                  <PlayerBody player={selectedPlayer} season={season} blurb={blurbs.get(selectedPlayer?.id)} />
+                )}
+                <Footer />
+              </div>
+            </TikTokFrame>
           )}
         </div>
       </div>

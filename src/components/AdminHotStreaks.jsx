@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { toPng } from "html-to-image";
+import { captureShareImage, tiktokFilename } from "../lib/shareImage.js";
+import TikTokFrame from "./TikTokFrame.jsx";
 import { verifyLogin } from "../lib/supabase.js";
 import { fetchSleeper } from "../lib/sleeperApi.js";
 import { fetchSeasonWeeklyScores } from "../lib/weeklyScoringApi.js";
@@ -937,6 +938,7 @@ function ShareModal({ players, season, initialList, currentTeamById, onClose }) 
   const [selectedPlayerId, setSelectedPlayerId] = useState(null);
   const [selectedTeam, setSelectedTeam] = useState("");
   const [downloading, setDownloading] = useState(null);
+  const [tiktok, setTiktok] = useState(false);
   const cardRefs = useRef({});
 
   const ranked = useMemo(() => {
@@ -1008,7 +1010,7 @@ function ShareModal({ players, season, initialList, currentTeamById, onClose }) 
     // skipFonts: cards use system fonts (CARD_FONT), and html-to-image otherwise
     // tries to inline every stylesheet's web fonts — which throws a SecurityError
     // on cross-origin sheets (Google Fonts) and aborts the whole capture.
-    return toPng(node, { cacheBust: true, pixelRatio: 2, backgroundColor: "#020617", skipFonts: true });
+    return captureShareImage(node, { tiktok, skipFonts: true });
   }
 
   async function downloadKey(key, filename) {
@@ -1016,7 +1018,7 @@ function ShareModal({ players, season, initialList, currentTeamById, onClose }) 
     if (!node) return;
     const dataUrl = await capture(node);
     const link = document.createElement("a");
-    link.download = filename;
+    link.download = tiktokFilename(filename, tiktok);
     link.href = dataUrl;
     link.click();
   }
@@ -1173,6 +1175,11 @@ function ShareModal({ players, season, initialList, currentTeamById, onClose }) 
           )}
 
           <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => setTiktok((v) => !v)}
+              title="Export as 1080×1920 vertical cards sized for TikTok / Reels / Shorts"
+              className={`text-xs font-semibold px-3 py-1.5 rounded border ${tiktok ? "border-fuchsia-400/70 bg-fuchsia-500/20 text-fuchsia-100" : "border-white/15 bg-slate-900/40 text-slate-300 hover:text-slate-100"}`}>
+              📱 TikTok 9:16 {tiktok ? "on" : "off"}
+            </button>
             <button onClick={() => setAiOn((v) => !v)}
               title="Show a one-click AI synopsis panel on each card"
               className={`text-xs font-semibold px-3 py-1.5 rounded border ${aiOn ? "border-violet-400/70 bg-violet-500/20 text-violet-100" : "border-white/15 bg-slate-900/40 text-slate-300 hover:text-slate-100"}`}>
@@ -1213,10 +1220,12 @@ function ShareModal({ players, season, initialList, currentTeamById, onClose }) 
               <div className="flex flex-col items-center gap-2">
                 <span className="text-[11px] uppercase tracking-widest text-slate-500">Leaderboard — Top {count} {a.title}</span>
                 {synopsisPanel(`lb-${list}-${count}`, ranked, `${list === "hot" ? "HOT sell-high" : list === "cold" ? "COLD buy-low" : "INJURED / season-cut-short (last-played form is pre-injury) stash"} leaderboard, top ${count}`)}
-                <ShareLeaderboardCard
-                  innerRef={(el) => { cardRefs.current.leaderboard = el; }}
-                  list={list} players={ranked} season={season}
-                />
+                <TikTokFrame enabled={tiktok}>
+                  <ShareLeaderboardCard
+                    innerRef={(el) => { cardRefs.current.leaderboard = el; }}
+                    list={list} players={ranked} season={season}
+                  />
+                </TikTokFrame>
               </div>
               {ranked.map((p) => (
                 <div key={p.player_id} className="flex flex-col items-center gap-2">
@@ -1225,10 +1234,12 @@ function ShareModal({ players, season, initialList, currentTeamById, onClose }) 
                     {downloading === p.player_id ? "Generating…" : `Download ${p.name} card`}
                   </button>
                   {synopsisPanel(`pl-${p.player_id}`, [p], "single-player spotlight")}
-                  <PlayerShareCard
-                    innerRef={(el) => { cardRefs.current[`p-${p.player_id}`] = el; }}
-                    list={list} player={p} season={season}
-                  />
+                  <TikTokFrame enabled={tiktok}>
+                    <PlayerShareCard
+                      innerRef={(el) => { cardRefs.current[`p-${p.player_id}`] = el; }}
+                      list={list} player={p} season={season}
+                    />
+                  </TikTokFrame>
                 </div>
               ))}
             </>
@@ -1262,10 +1273,12 @@ function ShareModal({ players, season, initialList, currentTeamById, onClose }) 
               {lookupPlayer ? (
                 <>
                   {synopsisPanel(`pl-${lookupPlayer.player_id}`, [lookupPlayer], "single-player spotlight")}
-                  <PlayerShareCard
-                    innerRef={(el) => { cardRefs.current.lookup = el; }}
-                    list={accentKey(lookupPlayer)} player={lookupPlayer} season={season}
-                  />
+                  <TikTokFrame enabled={tiktok}>
+                    <PlayerShareCard
+                      innerRef={(el) => { cardRefs.current.lookup = el; }}
+                      list={accentKey(lookupPlayer)} player={lookupPlayer} season={season}
+                    />
+                  </TikTokFrame>
                 </>
               ) : (
                 <div className="text-slate-500 text-sm py-10">
@@ -1285,11 +1298,13 @@ function ShareModal({ players, season, initialList, currentTeamById, onClose }) 
                     {downloading === "team-hot" ? "Generating…" : `Download ${selectedTeam} hot card`}
                   </button>
                   {synopsisPanel(`team-hot-${selectedTeam}`, teamGroups.hot, `${selectedTeam} hot players (sell-high)`)}
-                  <TeamHeatCard
-                    innerRef={(el) => { cardRefs.current["team-hot"] = el; }}
-                    team={selectedTeam} tone="hot" players={teamGroups.hot}
-                    currentTeamById={currentTeamById} season={season}
-                  />
+                  <TikTokFrame enabled={tiktok}>
+                    <TeamHeatCard
+                      innerRef={(el) => { cardRefs.current["team-hot"] = el; }}
+                      team={selectedTeam} tone="hot" players={teamGroups.hot}
+                      currentTeamById={currentTeamById} season={season}
+                    />
+                  </TikTokFrame>
                 </div>
 
                 {/* Cold card */}
@@ -1299,11 +1314,13 @@ function ShareModal({ players, season, initialList, currentTeamById, onClose }) 
                     {downloading === "team-cold" ? "Generating…" : `Download ${selectedTeam} cold card`}
                   </button>
                   {synopsisPanel(`team-cold-${selectedTeam}`, teamGroups.cold, `${selectedTeam} cold players (buy-low)`)}
-                  <TeamHeatCard
-                    innerRef={(el) => { cardRefs.current["team-cold"] = el; }}
-                    team={selectedTeam} tone="cold" players={teamGroups.cold}
-                    currentTeamById={currentTeamById} season={season}
-                  />
+                  <TikTokFrame enabled={tiktok}>
+                    <TeamHeatCard
+                      innerRef={(el) => { cardRefs.current["team-cold"] = el; }}
+                      team={selectedTeam} tone="cold" players={teamGroups.cold}
+                      currentTeamById={currentTeamById} season={season}
+                    />
+                  </TikTokFrame>
                 </div>
 
                 {/* Moved pieces card */}
@@ -1314,11 +1331,13 @@ function ShareModal({ players, season, initialList, currentTeamById, onClose }) 
                       {downloading === "team-moved" ? "Generating…" : `Download ${selectedTeam} moved-pieces card`}
                     </button>
                     {synopsisPanel(`team-moved-${selectedTeam}`, [...teamGroups.incoming, ...teamGroups.outgoing], `${selectedTeam} moved pieces — players who arrived from or departed to other teams`)}
-                    <TeamMovedCard
-                      innerRef={(el) => { cardRefs.current["team-moved"] = el; }}
-                      team={selectedTeam} incoming={teamGroups.incoming} outgoing={teamGroups.outgoing}
-                      season={season}
-                    />
+                    <TikTokFrame enabled={tiktok}>
+                      <TeamMovedCard
+                        innerRef={(el) => { cardRefs.current["team-moved"] = el; }}
+                        team={selectedTeam} incoming={teamGroups.incoming} outgoing={teamGroups.outgoing}
+                        season={season}
+                      />
+                    </TikTokFrame>
                   </div>
                 )}
                 {!currentTeamById && (
