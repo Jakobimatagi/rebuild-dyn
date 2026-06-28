@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { toPng } from "html-to-image";
+import { captureShareImage, tiktokFilename } from "../lib/shareImage.js";
+import TikTokFrame from "./TikTokFrame.jsx";
 import { fetchShareBlurbs, buildTopPlayerBlurbInput } from "../lib/aiShareBlurbsApi.js";
 import { verifyLogin, fetchOcEntries } from "../lib/supabase.js";
 import {
@@ -188,6 +189,7 @@ export default function AdminTopPlayers() {
   const [shareTab, setShareTab] = useState("QB");
   const [shareLimit, setShareLimit] = useState(24);
   const [downloading, setDownloading] = useState(null); // pos key while exporting, "all" for batch
+  const [tiktok, setTiktok] = useState(false);
   const [shareBlurbs, setShareBlurbs] = useState(() => new Map());
   const [blurbsLoading, setBlurbsLoading] = useState(false);
   const [blurbsError, setBlurbsError] = useState("");
@@ -595,11 +597,7 @@ export default function AdminTopPlayers() {
   }
 
   async function captureShareNode(node) {
-    return toPng(node, {
-      cacheBust: true,
-      pixelRatio: 2,
-      backgroundColor: "#020617",
-    });
+    return captureShareImage(node, { tiktok });
   }
 
   async function downloadCard(pos) {
@@ -612,7 +610,7 @@ export default function AdminTopPlayers() {
         if (!node) continue;
         const dataUrl = await captureShareNode(node);
         const link = document.createElement("a");
-        link.download = shareFilenameFor(pos, pages[i]);
+        link.download = tiktokFilename(shareFilenameFor(pos, pages[i]), tiktok);
         link.href = dataUrl;
         link.click();
         if (i < pages.length - 1) await new Promise((r) => setTimeout(r, 250));
@@ -634,7 +632,7 @@ export default function AdminTopPlayers() {
         try {
           const dataUrl = await captureShareNode(node);
           const link = document.createElement("a");
-          link.download = shareFilenameFor(pos, pages[i]);
+          link.download = tiktokFilename(shareFilenameFor(pos, pages[i]), tiktok);
           link.href = dataUrl;
           link.click();
           await new Promise((r) => setTimeout(r, 250));
@@ -793,6 +791,8 @@ export default function AdminTopPlayers() {
           setShareLimit={setShareLimit}
           shareRefs={shareRefs}
           downloading={downloading}
+          tiktok={tiktok}
+          setTiktok={setTiktok}
           tePremium={tePremium}
           ocTargetSeason={computed?.ocTargetSeason}
           blurbs={shareBlurbs}
@@ -811,7 +811,7 @@ export default function AdminTopPlayers() {
 
 function ShareModal({
   sharePages, shareTab, setShareTab, shareLimit, setShareLimit, shareRefs,
-  downloading, tePremium, ocTargetSeason,
+  downloading, tiktok, setTiktok, tePremium, ocTargetSeason,
   blurbs, blurbsLoading, blurbsError, blurbsCached, onRegenerateBlurbs,
   onDownload, onDownloadAll, onClose,
 }) {
@@ -870,6 +870,11 @@ function ShareModal({
               className="text-[10px] font-semibold px-2 py-1 rounded border border-amber-400/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20 disabled:opacity-40">
               Regenerate
             </button>
+            <button onClick={() => setTiktok((v) => !v)}
+              title="Export as 1080×1920 vertical cards sized for TikTok / Reels / Shorts"
+              className={`text-xs font-semibold px-3 py-1.5 rounded border ${tiktok ? "border-fuchsia-400/70 bg-fuchsia-500/20 text-fuchsia-100" : "border-white/15 bg-slate-900/40 text-slate-300 hover:text-slate-100"}`}>
+              📱 TikTok 9:16 {tiktok ? "on" : "off"}
+            </button>
             <button onClick={() => onDownload(shareTab)}
               disabled={!activePages.length || downloading === shareTab || downloading === "all"}
               className="text-xs font-semibold px-3 py-1.5 rounded border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 disabled:opacity-40">
@@ -899,19 +904,20 @@ function ShareModal({
             return (
               <div key={pos} style={wrapperStyle} className="flex flex-col items-center gap-6">
                 {pages.map((page, idx) => (
-                  <ShareCard
-                    key={`${pos}-${idx}`}
-                    innerRef={(el) => { shareRefs.current[`${pos}-${idx}`] = el; }}
-                    pos={pos}
-                    players={page.players}
-                    startRank={page.startRank}
-                    part={page.part}
-                    total={page.total}
-                    shareLimit={shareLimit}
-                    tePremium={tePremium}
-                    ocTargetSeason={ocTargetSeason}
-                    blurbs={blurbs}
-                  />
+                  <TikTokFrame key={`${pos}-${idx}`} enabled={tiktok}>
+                    <ShareCard
+                      innerRef={(el) => { shareRefs.current[`${pos}-${idx}`] = el; }}
+                      pos={pos}
+                      players={page.players}
+                      startRank={page.startRank}
+                      part={page.part}
+                      total={page.total}
+                      shareLimit={shareLimit}
+                      tePremium={tePremium}
+                      ocTargetSeason={ocTargetSeason}
+                      blurbs={blurbs}
+                    />
+                  </TikTokFrame>
                 ))}
               </div>
             );

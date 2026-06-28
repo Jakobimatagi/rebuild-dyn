@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { toPng } from "html-to-image";
+import { captureShareImage, tiktokFilename } from "../../lib/shareImage.js";
+import TikTokFrame from "../TikTokFrame.jsx";
 import { useModalBehavior } from "../../lib/useModalBehavior.js";
 import { computeGrade, deriveSchool, deriveTier } from "../../lib/prospectScoring.js";
 import { fetchShareBlurbs, buildRookieBlurbInput } from "../../lib/aiShareBlurbsApi.js";
@@ -79,6 +80,7 @@ export default function RookieShareModal({
   const [limit, setLimit] = useState(12);
   const [tab, setTab] = useState("Overall");
   const [downloading, setDownloading] = useState(null);
+  const [tiktok, setTiktok] = useState(false);
   const shareRefs = useRef({});
 
   // Per-player AI rationale blurbs. Keyed by prospect id. We accumulate
@@ -214,16 +216,13 @@ export default function RookieShareModal({
   }, [byTab, tab, year, blurbBumpKey]);
 
   async function captureNode(node) {
-    return toPng(node, {
-      cacheBust: true,
-      pixelRatio: 2,
-      backgroundColor: "#020617",
-    });
+    return captureShareImage(node, { tiktok });
   }
 
   function filenameFor(tabKey, page) {
     const base = `rookies-${year}-${tabKey.toLowerCase()}-top${limit}`;
-    return page.total > 1 ? `${base}-pt${page.part}.png` : `${base}.png`;
+    const name = page.total > 1 ? `${base}-pt${page.part}.png` : `${base}.png`;
+    return tiktokFilename(name, tiktok);
   }
 
   async function downloadTab(tabKey) {
@@ -358,6 +357,17 @@ export default function RookieShareModal({
               Regenerate
             </button>
             <button
+              onClick={() => setTiktok((v) => !v)}
+              title="Export as 1080×1920 vertical cards sized for TikTok / Reels / Shorts"
+              className={`text-xs font-semibold px-3 py-1.5 rounded border ${
+                tiktok
+                  ? "border-fuchsia-400/70 bg-fuchsia-500/20 text-fuchsia-100"
+                  : "border-white/15 bg-slate-900/40 text-slate-300 hover:text-slate-100"
+              }`}
+            >
+              📱 TikTok 9:16 {tiktok ? "on" : "off"}
+            </button>
+            <button
               onClick={() => downloadTab(tab)}
               disabled={!totalForTab || downloading === tab || downloading === "all"}
               className="text-xs font-semibold px-3 py-1.5 rounded border border-sky-400/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 disabled:opacity-40"
@@ -392,18 +402,19 @@ export default function RookieShareModal({
             return (
               <div key={t} style={wrapperStyle} className="flex flex-col items-center gap-6">
                 {pages.map((page, idx) => (
-                  <ShareCard
-                    key={`${t}-${idx}`}
-                    innerRef={(el) => { shareRefs.current[`${t}-${idx}`] = el; }}
-                    which={t}
-                    players={page.players}
-                    year={year}
-                    limit={limit}
-                    startRank={page.startRank}
-                    part={page.part}
-                    total={page.total}
-                    blurbs={blurbs}
-                  />
+                  <TikTokFrame key={`${t}-${idx}`} enabled={tiktok}>
+                    <ShareCard
+                      innerRef={(el) => { shareRefs.current[`${t}-${idx}`] = el; }}
+                      which={t}
+                      players={page.players}
+                      year={year}
+                      limit={limit}
+                      startRank={page.startRank}
+                      part={page.part}
+                      total={page.total}
+                      blurbs={blurbs}
+                    />
+                  </TikTokFrame>
                 ))}
               </div>
             );
