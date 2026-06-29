@@ -3,6 +3,13 @@ import { createClient } from "@supabase/supabase-js";
 const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
+// Whether this page load came from a password-reset email link. Captured at
+// module load — BEFORE createClient's async URL handling consumes and strips
+// the hash — so the UI can prompt for a new password instead of auto-navigating
+// the (now recovery-authenticated) user straight to their teams.
+export const isRecoveryRedirect =
+  typeof window !== "undefined" && /\btype=recovery\b/.test(window.location.hash || "");
+
 export const supabase = createClient(url, key);
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -16,11 +23,30 @@ export async function verifyLogin(username, passkey) {
   return data; // { ok, id, username, role } or { ok: false }
 }
 
-// ── App accounts ────────────────────────────────────────────────────────────
-// The only login is Sleeper verification (see SleeperConnect / api/sleeper-auth).
-// It mints a Supabase session whose user is keyed on the Sleeper account
-// (sleeper_user_id in user_metadata). Sessions persist in localStorage, so
-// getAccount() restores the signed-in user on reload; signOutAccount() ends it.
+// ── App accounts (email + password) ─────────────────────────────────────────
+// Plain Supabase Auth: sign up / sign in with email + password, with optional
+// TOTP two-factor (MFA). Sessions persist in localStorage, so getAccount()
+// restores the signed-in user on reload and signOutAccount() ends the session.
+// Accounts are optional — the no-login browse flow still works.
+
+// Create an account. If "Confirm email" is ON in the Supabase dashboard, no
+// session is returned until the user clicks the confirmation link, so callers
+// should check whether `session` came back to know if they're signed in.
+export async function signUpEmail(email, password) {
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) throw error;
+  return { user: data.user, session: data.session };
+}
+
+// Sign in with email + password. Returns the user. If the account has 2FA
+// enabled, the session comes back at AAL1 — call getAal()/challengeTotp() next
+// to step up to AAL2 before treating the user as fully signed in.
+export async function signInEmail(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data.user;
+}
+
 export async function signOutAccount() {
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
@@ -30,6 +56,210 @@ export async function signOutAccount() {
 export async function getAccount() {
   const { data } = await supabase.auth.getSession();
   return data.session?.user ?? null;
+}
+
+// The Sleeper username linked to an account is stored in user_metadata so a
+// returning user jumps straight to their teams. Read it off a user object.
+export function getSleeperUsername(user) {
+  return user?.user_metadata?.sleeper_username || null;
+}
+
+// Admin status lives in the user's app_metadata (set server-side / by the head
+// admin — NOT user-editable, so it can't be self-granted from the client). Read
+// it off a user object; defaults to false.
+export function getIsAdmin(user) {
+  return user?.app_metadata?.is_admin === true;
+}
+
+// Convenience: is the currently signed-in user an admin?
+export async function isAdmin() {
+  return getIsAdmin(await getAccount());
+}
+
+// Shape a Supabase auth user into the { id, username, role } object the admin
+// pages expect. id is the auth uid — which (post-merge) equals the expert id in
+// public.users, so expert_rankings key correctly off session.user.id.
+export function adminUserShape(u) {
+  if (!u) return null;
+  return {
+    id: u.id,
+    username: u.user_metadata?.display_name || u.email,
+    role: "admin",
+  };
+}
+
+// Restore an admin session on mount: shaped admin user, or null if not signed
+// in / not an admin.
+export async function restoreAdmin() {
+  const u = await getAccount();
+  return getIsAdmin(u) ? adminUserShape(u) : null;
+}
+
+// Sign in and require admin. Throws on bad credentials or a non-admin account
+// (and signs that non-admin back out). Returns the shaped admin user.
+export async function adminSignIn(email, password) {
+  const u = await signInEmail(email, password);
+  if (!getIsAdmin(u)) {
+    await signOutAccount().catch(() => {});
+    throw new Error("This account doesn't have admin access.");
+  }
+  return adminUserShape(u);
+}
+
+// ── Admin management (invite / list / revoke other admins) ──────────────────
+// Calls the service-role api/admin-users endpoint, authenticated with the
+// caller's access token. The server re-verifies the caller is an admin.
+async function adminApi(action, payload) {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("You must be signed in.");
+  const res = await fetch("/api/admin-users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
+  return json;
+}
+
+export async function listAdmins() {
+  return (await adminApi("list")).admins || [];
+}
+export function inviteAdmin(email) {
+  return adminApi("invite", { email });
+}
+export function revokeAdmin(userId) {
+  return adminApi("revoke", { userId });
+}
+
+// Persist the Sleeper username on the signed-in account.
+export async function setSleeperUsername(username) {
+  const { error } = await supabase.auth.updateUser({
+    data: { sleeper_username: username },
+  });
+  if (error) throw error;
+}
+
+// Subscribe to auth state changes (sign in / out / token refresh).
+// Returns an unsubscribe function.
+export function onAuthChange(cb) {
+  const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    cb(session?.user ?? null);
+  });
+  return () => data.subscription.unsubscribe();
+}
+
+// ── Password reset ───────────────────────────────────────────────────────────
+// Email the user a reset link. Clicking it returns them to the app with a
+// short-lived recovery session and fires a PASSWORD_RECOVERY auth event
+// (see onPasswordRecovery) so the UI can prompt for a new password.
+export async function requestPasswordReset(email) {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.origin,
+  });
+  if (error) throw error;
+}
+
+// Set a new password for the current session (recovery or normal sign-in).
+export async function updatePassword(newPassword) {
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw error;
+}
+
+// Update editable profile fields stored in user_metadata. Pass only the keys
+// that change. Returns the updated user.
+export async function updateProfileInfo({ displayName, sleeperUsername }) {
+  const data = {};
+  if (displayName !== undefined) data.display_name = displayName;
+  if (sleeperUsername !== undefined) data.sleeper_username = sleeperUsername;
+  const { data: res, error } = await supabase.auth.updateUser({ data });
+  if (error) throw error;
+  return res.user;
+}
+
+// Change the account email. With email-change confirmation on (Supabase default)
+// the new address must be confirmed via an emailed link before it takes effect.
+export async function updateEmail(email) {
+  const { error } = await supabase.auth.updateUser({ email });
+  if (error) throw error;
+}
+
+// Fire cb() when the user lands via a password-reset link. Returns unsubscribe.
+export function onPasswordRecovery(cb) {
+  const { data } = supabase.auth.onAuthStateChange((event) => {
+    if (event === "PASSWORD_RECOVERY") cb();
+  });
+  return () => data.subscription.unsubscribe();
+}
+
+// ── MFA (TOTP / authenticator app) ──────────────────────────────────────────
+// Assurance levels: a fresh password sign-in is AAL1; once a TOTP challenge is
+// verified the session is AAL2. If currentLevel is "aal1" but nextLevel is
+// "aal2", the user has 2FA enabled and still needs to pass a challenge.
+export async function getAal() {
+  const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (error) throw error;
+  return data; // { currentLevel, nextLevel, currentAuthenticationMethods }
+}
+
+// All TOTP factors on the account. `verified` ones gate sign-in; an `unverified`
+// one is a half-finished enrollment that should be cleaned up.
+export async function listTotpFactors() {
+  const { data, error } = await supabase.auth.mfa.listFactors();
+  if (error) throw error;
+  return data?.totp ?? [];
+}
+
+// True when the signed-in user has a fully verified TOTP factor.
+export async function hasMfaEnabled() {
+  const totp = await listTotpFactors();
+  return totp.some((f) => f.status === "verified");
+}
+
+// Begin TOTP enrollment. Returns the factorId plus an SVG QR code (data URI),
+// the raw secret, and the otpauth:// URI for manual entry. Not active until
+// verifyEnrollTotp() confirms a code from the user's authenticator app.
+export async function enrollTotp() {
+  const { data, error } = await supabase.auth.mfa.enroll({ factorType: "totp" });
+  if (error) throw error;
+  return {
+    factorId: data.id,
+    qr: data.totp.qr_code,
+    secret: data.totp.secret,
+    uri: data.totp.uri,
+  };
+}
+
+// Finish enrollment by verifying a 6-digit code against the pending factor.
+// On success the factor becomes "verified" and the session steps up to AAL2.
+export async function verifyEnrollTotp(factorId, code) {
+  const { data: ch, error: chErr } = await supabase.auth.mfa.challenge({ factorId });
+  if (chErr) throw chErr;
+  const { error } = await supabase.auth.mfa.verify({
+    factorId,
+    challengeId: ch.id,
+    code: String(code).trim(),
+  });
+  if (error) throw error;
+}
+
+// Pass a login-time challenge: steps an AAL1 session up to AAL2.
+export async function challengeTotp(factorId, code) {
+  const { data: ch, error: chErr } = await supabase.auth.mfa.challenge({ factorId });
+  if (chErr) throw chErr;
+  const { error } = await supabase.auth.mfa.verify({
+    factorId,
+    challengeId: ch.id,
+    code: String(code).trim(),
+  });
+  if (error) throw error;
+}
+
+// Remove a factor (disable 2FA, or clean up an abandoned enrollment).
+export async function unenrollFactor(factorId) {
+  const { error } = await supabase.auth.mfa.unenroll({ factorId });
+  if (error) throw error;
 }
 
 // ── Sleeper-verified login (SMS/email one-time code) ────────────────────────────

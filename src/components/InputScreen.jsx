@@ -1,13 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { styles } from "../styles";
-import SleeperLoginModal from "./SleeperLoginModal.jsx";
-import { getAccount, signOutAccount } from "../lib/supabase.js";
+import AuthModal from "./AuthModal.jsx";
+import ProfileModal from "./ProfileModal.jsx";
+import {
+  getAccount,
+  signOutAccount,
+  onAuthChange,
+  hasMfaEnabled,
+  onPasswordRecovery,
+  getSleeperUsername,
+  isRecoveryRedirect,
+} from "../lib/supabase.js";
 
 export default function InputScreen({
   username,
   setUsername,
   onSubmit,
-  onSleeperVerified,
+  onAccountTeams,
   loading,
   error,
   clearError,
@@ -19,31 +28,60 @@ export default function InputScreen({
 }) {
   const isSleeper = platform === "sleeper";
 
-  const [showLogin, setShowLogin] = useState(false);
-  const [account, setAccount] = useState(null);
+  // authStage: null = closed; "signin" | "enroll" | "reset" | "linkSleeper".
+  const [authStage, setAuthStage] = useState(null);
+  const [showProfile, setShowProfile] = useState(false);
+  const [account, setAccount] = useState(null); // { email } | null
+  const [mfaOn, setMfaOn] = useState(false);
+  // Auto-routing to a signed-in user's teams should happen at most once per load.
+  const autoRouted = useRef(false);
 
-  // Restore the signed-in state if a Supabase session persisted from a previous
-  // visit (Sleeper verification mints one). Pull the Sleeper username out of
-  // user_metadata so the returning user can jump straight back to their teams.
+  function loadAccount(user) {
+    if (!user) { setAccount(null); setMfaOn(false); return; }
+    setAccount({ email: user.email });
+    hasMfaEnabled().then(setMfaOn).catch(() => setMfaOn(false));
+  }
+
+  // What to do once a user is fully signed in: if their account has a linked
+  // Sleeper username, load their teams; otherwise prompt them to add one.
+  function routeSignedInUser(user) {
+    if (!user) return;
+    const name = getSleeperUsername(user);
+    if (name) {
+      setAuthStage(null);
+      onAccountTeams?.(name);
+    } else {
+      setAuthStage("linkSleeper");
+    }
+  }
+
+  // Restore the signed-in state if a Supabase session persisted, and keep it in
+  // sync with sign in / out events from anywhere in the app. A returning signed-in
+  // user is taken straight to their teams (or prompted to link Sleeper).
   useEffect(() => {
     let cancelled = false;
-    getAccount()
-      .then((user) => {
-        if (cancelled || !user) return;
-        const meta = user.user_metadata || {};
-        setAccount({
-          email: user.email,
-          username: meta.sleeper_username || null,
-          display_name: meta.display_name || null,
-        });
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
+    // A password-reset link must NOT auto-route to teams — the recovery session
+    // is authenticated, but the user came here to set a new password. Show the
+    // reset prompt and skip auto-routing for this load.
+    if (isRecoveryRedirect) setAuthStage("reset");
+    getAccount().then((user) => {
+      if (cancelled) return;
+      loadAccount(user);
+      if (user && !autoRouted.current && !isRecoveryRedirect) {
+        autoRouted.current = true;
+        routeSignedInUser(user);
+      }
+    }).catch(() => {});
+    const unsub = onAuthChange((user) => { if (!cancelled) loadAccount(user); });
+    // Arriving via a password-reset email link opens the modal to set a new one.
+    const unsubReset = onPasswordRecovery(() => { if (!cancelled) setAuthStage("reset"); });
+    return () => { cancelled = true; unsub(); unsubReset(); };
   }, []);
 
   async function handleSignOut() {
     try { await signOutAccount(); } catch { /* ignore */ }
     setAccount(null);
+    setMfaOn(false);
   }
 
   function handleInputChange(value) {
@@ -133,32 +171,37 @@ export default function InputScreen({
           )}
         </div>
 
-        {/* Optional account: create an account, then connect Sleeper to verify
-            your team. Plain username entry above still works without this. */}
-        {/* <div style={{ marginTop: 20 }}>
+        {/* Optional account: email + password sign-in with optional two-factor.
+            Plain username entry above still works without an account. */}
+        <div style={{ marginTop: 20 }}>
           {account ? (
             <div>
               <div style={{ fontSize: 13, color: "#00f5a0", letterSpacing: 0.5 }}>
-                ✓ Signed in as {account.display_name || account.username || account.email || "your account"}
+                ✓ Signed in as {account.email}
               </div>
               <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-                {account.username && (
-                  <button
-                    className="dyn-btn"
-                    style={styles.btn}
-                    onClick={() => onSleeperVerified?.(account.username)}
-                    disabled={loading}
-                  >
-                    {loading ? "Loading..." : "Continue to your teams →"}
-                  </button>
-                )}
-                {!account.username && (
+                <button
+                  className="dyn-btn"
+                  style={styles.btn}
+                  onClick={() => getAccount().then(routeSignedInUser).catch(() => {})}
+                  disabled={loading}
+                >
+                  {loading ? "Loading..." : "View my teams →"}
+                </button>
+                <button type="button" onClick={() => setShowProfile(true)} style={exploreLinkStyle}>
+                  Profile &amp; settings
+                </button>
+                {mfaOn ? (
+                  <span style={{ fontSize: 12, color: "#7fdcc0", letterSpacing: 0.5 }}>
+                    🔒 Two-factor enabled
+                  </span>
+                ) : (
                   <button
                     type="button"
-                    onClick={() => setShowLogin(true)}
+                    onClick={() => setAuthStage("enroll")}
                     style={exploreLinkStyle}
                   >
-                    Connect Sleeper to load your teams →
+                    Set up two-factor authentication →
                   </button>
                 )}
                 <button type="button" onClick={handleSignOut} style={exploreLinkStyle}>
@@ -169,24 +212,42 @@ export default function InputScreen({
           ) : (
             <button
               type="button"
-              onClick={() => setShowLogin(true)}
+              onClick={() => setAuthStage("signin")}
               style={exploreLinkStyle}
             >
-              Sign in with Sleeper →
+              Sign in or create an account →
             </button>
           )}
-        </div> */}
+        </div>
       </div>
 
-      {showLogin && (
-        <SleeperLoginModal
-          onClose={() => setShowLogin(false)}
-          onSuccess={(sleeper) => {
-            setAccount({ ...sleeper });
-            setShowLogin(false);
-            // Sleeper verification gives us the username — jump straight to the
-            // user's leagues instead of making them re-type it.
-            if (sleeper?.username) onSleeperVerified?.(sleeper.username);
+      {authStage && (
+        <AuthModal
+          key={authStage}
+          initialStage={authStage}
+          onClose={() => setAuthStage(null)}
+          onSuccess={(user) => {
+            // enroll/manage passes no user — just refresh the bar and stay put.
+            if (!user) {
+              setAuthStage(null);
+              getAccount().then(loadAccount).catch(() => {});
+              return;
+            }
+            loadAccount(user);
+            routeSignedInUser(user);
+          }}
+          onSleeperLinked={(name) => {
+            setAuthStage(null);
+            onAccountTeams?.(name);
+          }}
+        />
+      )}
+
+      {showProfile && (
+        <ProfileModal
+          onClose={() => {
+            setShowProfile(false);
+            getAccount().then(loadAccount).catch(() => {});
           }}
         />
       )}

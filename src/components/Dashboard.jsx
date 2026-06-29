@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { POSITION_PRIORITY } from "../constants";
 import { styles } from "../styles";
+import ProfileModal from "./ProfileModal";
+import { getAccount, onAuthChange } from "../lib/supabase";
 import AdviceTab from "./dashboard/AdviceTab";
 import GradeKeyModal from "./dashboard/GradeKeyModal";
 import LeagueTab from "./dashboard/LeagueTab";
@@ -101,6 +103,17 @@ export default function Dashboard({
   const [strategyUnlocked, setStrategyUnlocked] = useState(false);
   const [unlockInput, setUnlockInput] = useState("");
 
+  // Show the Profile button only when there's a signed-in account (the no-login
+  // username flow has no account to edit).
+  const [signedIn, setSignedIn] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    getAccount().then((u) => { if (!cancelled) setSignedIn(!!u); }).catch(() => {});
+    const unsub = onAuthChange((u) => { if (!cancelled) setSignedIn(!!u); });
+    return () => { cancelled = true; unsub(); };
+  }, []);
+
   const hasDraft = !!(analysis.draftRecap || analysis.allDraftRecaps?.length > 0);
 
   const {
@@ -157,6 +170,11 @@ export default function Dashboard({
             >
               Admin
             </a>
+            {signedIn && (
+              <button className="dyn-btn-ghost" style={styles.btnGhost} onClick={() => setShowProfile(true)}>
+                Profile
+              </button>
+            )}
             <button className="dyn-btn-ghost" style={styles.btnGhost} onClick={onLogout}>
               Log out
             </button>
@@ -211,6 +229,7 @@ export default function Dashboard({
       </div>
 
       {showGradeKey && <GradeKeyModal onClose={() => setShowGradeKey(false)} />}
+      {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
       {showScoreWeights && (
         <ScoreWeightsModal
           initialWeights={analysis.scoringWeights}

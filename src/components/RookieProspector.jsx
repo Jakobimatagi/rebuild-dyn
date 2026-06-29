@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { verifyLogin, fetchAllData, upsertProspect, upsertAnnotation, fetchMyRankings, upsertExpertRanking, deleteExpertRanking, fetchExpertRankings, fetchHistoricalPlayers } from "../lib/supabase.js";
+import { adminSignIn, restoreAdmin, signOutAccount, fetchAllData, upsertProspect, upsertAnnotation, fetchMyRankings, upsertExpertRanking, deleteExpertRanking, fetchExpertRankings, fetchHistoricalPlayers } from "../lib/supabase.js";
 import { TIER_RANK, computeGrade, deriveTier, dynastyScore, deriveSchool } from "../lib/prospectScoring.js";
 import { buildCompIndex } from "../lib/historicalComps.js";
 import { POS_COLORS, PAGE_SIZE } from "./rookieAdmin/constants.js";
-import { loadSession, saveSession, clearSession, normalizeName, computeCurrentDraftYear, blankSeason, initAddForm, computeValueScore } from "./rookieAdmin/utils.js";
+import { normalizeName, computeCurrentDraftYear, blankSeason, initAddForm, computeValueScore } from "./rookieAdmin/utils.js";
 import { GradeBadge, Pill, TierSelect, CapitalSelect, Pagination, AddPlayerSeasonRow } from "./rookieAdmin/Atoms.jsx";
 import ProspectCard from "./rookieAdmin/ProspectCard.jsx";
 import CfbdAutofill from "./rookieAdmin/CfbdAutofill.jsx";
@@ -22,7 +22,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
     unlocked: false,
     initLoading: true,   // true while we check for a persisted session on mount
     user: null,          // { id, username, role }
-    usernameInput: "",
+    emailInput: "",
     passInput: "",
     gateError: "",
     dbLoading: false,
@@ -67,20 +67,19 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
 
   // ── Session restore on mount ──────────────────────────────────────────────────
   useEffect(() => {
-    const session = loadSession();
-    if (!session) { update({ initLoading: false }); return; }
-    Promise.all([fetchAllData(), fetchMyRankings(session.id)])
-      .then(([{ prospects, annotations }, expertRankings]) => {
-        update({
-          unlocked: true, initLoading: false,
-          user: session, prospects, annotations, expertRankings,
-          tab: prospects.length === 0 ? "add" : "board",
-        });
+    restoreAdmin()
+      .then((session) => {
+        if (!session) { update({ initLoading: false }); return null; }
+        return Promise.all([fetchAllData(), fetchMyRankings(session.id)])
+          .then(([{ prospects, annotations }, expertRankings]) => {
+            update({
+              unlocked: true, initLoading: false,
+              user: session, prospects, annotations, expertRankings,
+              tab: prospects.length === 0 ? "add" : "board",
+            });
+          });
       })
-      .catch(() => {
-        clearSession();
-        update({ initLoading: false });
-      });
+      .catch(() => { update({ initLoading: false }); });
   }, []);
 
   // Re-pull prospects + annotations from the DB (used after a bulk import).
@@ -407,13 +406,10 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
 
   async function handleUnlock(e) {
     e.preventDefault();
-    if (!state.usernameInput.trim()) { update({ gateError: "Enter your username." }); return; }
+    if (!state.emailInput.trim()) { update({ gateError: "Enter your email." }); return; }
     update({ dbLoading: true, gateError: "" });
     try {
-      const result = await verifyLogin(state.usernameInput.trim(), state.passInput);
-      if (!result?.ok) { update({ dbLoading: false, gateError: "Invalid username or passkey." }); return; }
-      const user = { id: result.id, username: result.username, role: result.role };
-      saveSession(user);
+      const user = await adminSignIn(state.emailInput.trim(), state.passInput);
       const [{ prospects, annotations }, expertRankings] = await Promise.all([
         fetchAllData(), fetchMyRankings(user.id),
       ]);
@@ -423,7 +419,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
         tab: prospects.length === 0 ? "add" : "board",
       });
     } catch (err) {
-      update({ dbLoading: false, gateError: "Connection error — check Supabase config." });
+      update({ dbLoading: false, gateError: err.message || "Couldn't sign in. Check your email and password." });
       console.error(err);
     }
   }
@@ -448,10 +444,10 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
         <form onSubmit={handleUnlock} className="w-full max-w-sm bg-slate-900/80 border border-white/10 rounded-2xl p-8">
           <div className="text-emerald-400 text-xs uppercase tracking-widest mb-2">Dynasty Pre-Draft Prospector</div>
           <h1 className="text-slate-100 text-2xl font-bold mb-6">Sign In</h1>
-          <input type="text" autoFocus value={state.usernameInput} onChange={(e) => update({ usernameInput: e.target.value })}
-            className="w-full bg-slate-950 border border-white/10 rounded-lg px-4 py-3 text-slate-100 focus:border-emerald-400 outline-none mb-3" placeholder="Username" />
-          <input type="password" value={state.passInput} onChange={(e) => update({ passInput: e.target.value })}
-            className="w-full bg-slate-950 border border-white/10 rounded-lg px-4 py-3 text-slate-100 focus:border-emerald-400 outline-none" placeholder="Passkey" />
+          <input type="email" autoFocus autoComplete="email" value={state.emailInput} onChange={(e) => update({ emailInput: e.target.value })}
+            className="w-full bg-slate-950 border border-white/10 rounded-lg px-4 py-3 text-slate-100 focus:border-emerald-400 outline-none mb-3" placeholder="Email" />
+          <input type="password" autoComplete="current-password" value={state.passInput} onChange={(e) => update({ passInput: e.target.value })}
+            className="w-full bg-slate-950 border border-white/10 rounded-lg px-4 py-3 text-slate-100 focus:border-emerald-400 outline-none" placeholder="Password" />
           {state.gateError && <div className="text-rose-400 text-sm mt-3">{state.gateError}</div>}
           <button type="submit" disabled={state.dbLoading}
             className="mt-6 w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-emerald-950 font-semibold py-3 rounded-lg">
@@ -689,6 +685,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
               <a href="/admin/oc-rankings" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">OC Rankings</a>
               <a href="/admin/top-players" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">Top Players</a>
               <a href="/admin/hot-streaks" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">Hot &amp; Cold</a>
+              <a href="/admin/users" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">Admins</a>
             </div>
             <h1 className="text-xl font-bold">Dynasty Pre-Draft Prospector</h1>
           </div>
@@ -701,7 +698,7 @@ export default function RookieProspector({ rosterData: rosterDataProp, onLogout 
                 {state.user.username} <span className="text-slate-600">·</span> <span className="text-slate-500">{state.user.role}</span>
               </span>
             )}
-            <button onClick={() => { clearSession(); update({ unlocked: false, user: null, usernameInput: "", passInput: "", prospects: [], annotations: {} }); if (onLogout) onLogout(); }}
+            <button onClick={async () => { await signOutAccount().catch(() => {}); update({ unlocked: false, user: null, emailInput: "", passInput: "", prospects: [], annotations: {} }); if (onLogout) onLogout(); }}
               className="text-xs text-slate-400 hover:text-slate-100 border border-white/10 px-3 py-1.5 rounded-md">Logout</button>
           </div>
         </div>
