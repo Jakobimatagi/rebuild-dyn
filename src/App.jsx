@@ -29,7 +29,7 @@ import {
   fetchSleeper,
   safeLocalStorageWrite,
 } from "./lib/sleeperApi";
-import { fetchTradeValueSnapshots, signOutAccount } from "./lib/supabase";
+import { fetchTradeValueSnapshots, signOutAccount, getAccount, getSleeperUsername, setSleeperUsername } from "./lib/supabase";
 
 const NINE_MONTHS_MS = 9 * 30 * 24 * 60 * 60 * 1000;
 
@@ -637,6 +637,13 @@ export default function App() {
       const fetched = await fetchSleeperLeagues(trimmed);
       localStorage.setItem("dynasty_os_platform", "sleeper");
       localStorage.setItem("sleeper_username", trimmed);
+      // If signed in, remember this username on the account so future logins go
+      // straight to their teams. Best-effort — never block league loading on it.
+      getAccount().then((u) => {
+        if (u && getSleeperUsername(u) !== trimmed) {
+          setSleeperUsername(trimmed).catch(() => {});
+        }
+      }).catch(() => {});
       setLeagues(fetched);
       setStep("leagues");
     } catch (e) {
@@ -772,7 +779,7 @@ export default function App() {
               ? handleUsernameSubmit
               : handleFleaflickerSubmit
           }
-          onSleeperVerified={(name) => {
+          onAccountTeams={(name) => {
             setPlatform("sleeper");
             handleUsernameSubmit(name);
           }}

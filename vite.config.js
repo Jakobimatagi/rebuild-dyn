@@ -75,6 +75,7 @@ export default defineConfig(({ mode }) => {
       devApiHandler('/api/historical-rosters', '/api/historical-rosters.js'),
       devApiHandler('/api/cfbd', '/api/cfbd.js'),
       devApiHandler('/api/sleeper-auth', '/api/sleeper-auth.js'),
+      devApiHandler('/api/admin-users', '/api/admin-users.js'),
     ],
     server: {
       proxy: {

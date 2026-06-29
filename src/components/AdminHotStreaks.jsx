@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { captureShareImage, tiktokFilename } from "../lib/shareImage.js";
 import TikTokFrame from "./TikTokFrame.jsx";
-import { verifyLogin } from "../lib/supabase.js";
+import { adminSignIn, restoreAdmin, signOutAccount } from "../lib/supabase.js";
 import { fetchSleeper } from "../lib/sleeperApi.js";
 import { fetchSeasonWeeklyScores } from "../lib/weeklyScoringApi.js";
 import {
@@ -13,7 +13,6 @@ import {
   HOT_COLD_MARGIN,
   DEFAULT_ELIGIBILITY,
 } from "../lib/hotStreaks.js";
-import { loadSession, saveSession, clearSession } from "./rookieAdmin/utils.js";
 import { useModalBehavior } from "../lib/useModalBehavior.js";
 import { fetchShareBlurbs, buildHotColdBlurbInput } from "../lib/aiShareBlurbsApi.js";
 
@@ -246,7 +245,7 @@ export default function AdminHotStreaks() {
   const [unlocked, setUnlocked] = useState(false);
   const [initLoading, setInitLoading] = useState(true);
   const [user, setUser] = useState(null);
-  const [usernameInput, setUsernameInput] = useState("");
+  const [emailInput, setEmailInput] = useState("");
   const [passInput, setPassInput] = useState("");
   const [gateError, setGateError] = useState("");
   const [signingIn, setSigningIn] = useState(false);
@@ -269,27 +268,26 @@ export default function AdminHotStreaks() {
 
   // ── Session restore ──────────────────────────────────────────────────────
   useEffect(() => {
-    const s = loadSession();
-    if (s) { setUser(s); setUnlocked(true); }
-    setInitLoading(false);
+    let cancelled = false;
+    restoreAdmin()
+      .then((u) => { if (!cancelled && u) { setUser(u); setUnlocked(true); } })
+      .finally(() => { if (!cancelled) setInitLoading(false); });
+    return () => { cancelled = true; };
   }, []);
 
   async function handleUnlock(e) {
     e.preventDefault();
-    if (!usernameInput.trim()) { setGateError("Enter your username."); return; }
+    if (!emailInput.trim()) { setGateError("Enter your email."); return; }
     setSigningIn(true);
     setGateError("");
     try {
-      const result = await verifyLogin(usernameInput.trim(), passInput);
-      if (!result?.ok) { setSigningIn(false); setGateError("Invalid username or passkey."); return; }
-      const u = { id: result.id, username: result.username, role: result.role };
-      saveSession(u);
+      const u = await adminSignIn(emailInput.trim(), passInput);
       setUser(u);
       setUnlocked(true);
       setSigningIn(false);
     } catch (err) {
       setSigningIn(false);
-      setGateError("Connection error — check Supabase config.");
+      setGateError(err.message || "Couldn't sign in. Check your email and password.");
       console.error(err);
     }
   }
@@ -373,10 +371,10 @@ export default function AdminHotStreaks() {
         <form onSubmit={handleUnlock} className="w-full max-w-sm bg-slate-900/80 border border-white/10 rounded-2xl p-8">
           <div className="text-emerald-400 text-xs uppercase tracking-widest mb-2">Admin · Hot & Cold</div>
           <h1 className="text-slate-100 text-2xl font-bold mb-6">Sign In</h1>
-          <input type="text" autoFocus value={usernameInput} onChange={(e) => setUsernameInput(e.target.value)}
-            className="w-full bg-slate-950 border border-white/10 rounded-lg px-4 py-3 text-slate-100 focus:border-emerald-400 outline-none mb-3" placeholder="Username" />
-          <input type="password" value={passInput} onChange={(e) => setPassInput(e.target.value)}
-            className="w-full bg-slate-950 border border-white/10 rounded-lg px-4 py-3 text-slate-100 focus:border-emerald-400 outline-none" placeholder="Passkey" />
+          <input type="email" autoFocus autoComplete="email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)}
+            className="w-full bg-slate-950 border border-white/10 rounded-lg px-4 py-3 text-slate-100 focus:border-emerald-400 outline-none mb-3" placeholder="Email" />
+          <input type="password" autoComplete="current-password" value={passInput} onChange={(e) => setPassInput(e.target.value)}
+            className="w-full bg-slate-950 border border-white/10 rounded-lg px-4 py-3 text-slate-100 focus:border-emerald-400 outline-none" placeholder="Password" />
           {gateError && <div className="text-rose-400 text-sm mt-3">{gateError}</div>}
           <button type="submit" disabled={signingIn}
             className="mt-6 w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-emerald-950 font-semibold py-3 rounded-lg">
@@ -400,6 +398,7 @@ export default function AdminHotStreaks() {
               <a href="/admin/top-players" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">Top Players</a>
               <a href="/admin/rookie-prospector" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">Rookies</a>
               <a href="/admin/oc-rankings" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">OC Rankings</a>
+              <a href="/admin/users" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">Admins</a>
             </div>
             <h1 className="text-xl font-bold">Hot & Cold · Beat-the-Projection Board</h1>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -412,7 +411,7 @@ export default function AdminHotStreaks() {
                 {user.username} <span className="text-slate-600">·</span> <span className="text-slate-500">{user.role}</span>
               </span>
             )}
-            <button onClick={() => { clearSession(); setUnlocked(false); setUser(null); setUsernameInput(""); setPassInput(""); }}
+            <button onClick={async () => { await signOutAccount().catch(() => {}); setUnlocked(false); setUser(null); setEmailInput(""); setPassInput(""); }}
               className="text-xs text-slate-400 hover:text-slate-100 border border-white/10 px-3 py-1.5 rounded-md">Logout</button>
           </div>
         </div>
