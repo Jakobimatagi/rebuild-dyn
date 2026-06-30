@@ -7,9 +7,11 @@ import {
 } from "../../lib/sleeperApi";
 import { buildLiveDraftState } from "../../lib/liveDraft";
 import { fetchNflState, fetchSeasonProjectedPpg } from "../../lib/projectionsApi";
+import { fetchStartupAdp } from "../../lib/startupAdpApi";
 import { parseTrades, mergeTransactions } from "../../lib/draftTrades";
 import { buildTradeReview } from "../../lib/tradeReview";
 import { FeedTradeBody } from "./tradeReportCard";
+import DraftBlueprintPanel from "./DraftBlueprintPanel";
 import { useModalBehavior } from "../../lib/useModalBehavior";
 import PlayerDeepDiveModal, {
   DynastyValueHeadline,
@@ -184,6 +186,7 @@ export default function LiveDraftTab({
   initialTradeTransactions = [],
   tradeReviewInputs = null,
   ppr = 1,
+  leagueContext = {},
 }) {
   const [picks, setPicks] = useState(initialPicks);
   const [tradedPicks, setTradedPicks] = useState([]);
@@ -197,6 +200,9 @@ export default function LiveDraftTab({
   // Multi-select position filter for Best Available. Empty array = "ALL".
   // Selecting RB + WR shows the best players across *either* room.
   const [posFilter, setPosFilter] = useState([]);
+  // Draft Blueprint view — chosen target archetype + strict/blended toggle.
+  const [blueprintId, setBlueprintId] = useState(null);
+  const [strictPlan, setStrictPlan] = useState(false);
   // "This or That" compare shortlist — sleeper ids the user has checked off the
   // Best Available board. Lifted here (like posFilter) so the selection survives
   // switching between the Best Available view and the Board view's rail. Capped
@@ -219,6 +225,7 @@ export default function LiveDraftTab({
   // Available board. Falls back to the historical PPG prop when a player has no
   // projection rows (rookies, or the projections table isn't published yet).
   const [projPpg, setProjPpg] = useState(null); // Map(playerId → ppg) | null
+  const [adpMap, setAdpMap] = useState(null); // Map(sleeperId → {adp,adpRank}) | null
 
   useEffect(() => {
     let alive = true;
@@ -232,6 +239,16 @@ export default function LiveDraftTab({
       alive = false;
     };
   }, [ppr]);
+
+  // Community startup ADP for this league's format — drives realistic availability
+  // in the Blueprint example builds and league outlook. Falls back to value-rank.
+  useEffect(() => {
+    let alive = true;
+    fetchStartupAdp(leagueContext)
+      .then((m) => { if (alive) setAdpMap(m); })
+      .catch(() => { if (alive) setAdpMap(new Map()); });
+    return () => { alive = false; };
+  }, [leagueContext]);
 
   // Projection wins where we have it; otherwise the historical PPG carries over.
   const effectivePpg = useMemo(() => {
@@ -351,6 +368,77 @@ export default function LiveDraftTab({
   }
 
   const myTeam = state.teams.find((t) => t.isMe);
+
+  // My drafted players for the Blueprint view. Live picks carry position/round/value
+  // but not age — pull age from the Sleeper players map already in scope.
+  const myDrafted = (myTeam?.picks || []).map((p) => ({
+    playerId: p.playerId,
+    name: p.name,
+    position: p.position,
+    team: p.team,
+    round: p.round,
+    value: p.value,
+    age: Number(players[p.playerId]?.age) || null,
+  }));
+  // The round we're recommending for: my soonest upcoming pick, else who's on the clock.
+  const nextRound = state.myUpcoming?.[0]?.round ?? state.onTheClock?.round ?? 1;
+  // My draft slot (for the "from slot N" label on the example build).
+  let mySlot = state.myUpcoming?.[0]?.slot ?? state.onTheClock?.slot ?? null;
+  if (mySlot == null && state.slotToRoster) {
+    for (const [slot, rid] of state.slotToRoster) {
+      if (rid === myRosterId) { mySlot = slot; break; }
+    }
+  }
+
+  // Remaining (unmade) picks in draft order, with trade-adjusted ownership. Built
+  // from the board + boardOwners grid so picks traded away aren't projected to the
+  // wrong team — and so a manager who dealt all their picks reads as "complete".
+  const remainingPicks = [];
+  {
+    const board = state.board || [];
+    const owners = state.boardOwners || [];
+    const N = state.slotCount || board[0]?.length || 0;
+    const isSnake = state.type !== "linear";
+    for (let r = 0; r < board.length; r++) {
+      for (let s = 0; s < (board[r]?.length || 0); s++) {
+        if (board[r][s]) continue; // pick already made
+        const owner = owners[r]?.[s];
+        if (!owner || owner.rosterId == null) continue;
+        const round = r + 1;
+        const orderInRound = isSnake && round % 2 === 0 ? N - s : s + 1;
+        remainingPicks.push({
+          round,
+          rosterId: owner.rosterId,
+          mine: !!owner.isMe,
+          _order: (round - 1) * N + orderInRound,
+        });
+      }
+    }
+    remainingPicks.sort((a, b) => a._order - b._order);
+  }
+  // Every team's drafted roster (with ages) for the league-outlook projection.
+  const outlookTeams = state.teams.map((t) => ({
+    rosterId: t.rosterId,
+    label: t.label,
+    isMe: !!t.isMe,
+    roster: (t.picks || []).map((p) => ({
+      position: p.position,
+      age: Number(players[p.playerId]?.age) || null,
+      value: p.value,
+    })),
+  }));
+  // The enriched pool is built once from the initial board, so drop anyone already
+  // taken (live) before recommending — same draftedIds filter the Best Available view uses.
+  const blueprintPool = Object.entries(bestAvailableEnriched)
+    .filter(([id]) => !state.draftedIds.has(id))
+    // Attach the live value (same scale as my picks' value) so pick-impact
+    // projections compare apples to apples against the drafted roster, plus the
+    // community ADP rank (when available) so example builds draft in board order.
+    .map(([id, p]) => ({
+      ...p,
+      liveValue: Number(valueBySleeperId[id]) || p.dynastyValue?.value || 0,
+      adpRank: adpMap?.get(id)?.adpRank ?? null,
+    }));
 
   const teamLabelById = new Map(leagueTeams.map((t) => [t.rosterId, t.label]));
   const trades = parseTrades(tradeTx, { players, teamLabelById, myRosterId });
@@ -539,7 +627,7 @@ export default function LiveDraftTab({
         {[
           ...(state.powerRankings ? [{ key: "power", label: "Power Rankings" }] : []),
           ...(bestAvailablePool.length > 0
-            ? [{ key: "best", label: "Best Available" }]
+            ? [{ key: "best", label: "Best Available" }, { key: "plan", label: "Blueprint" }]
             : []),
           { key: "team", label: "Rosters" },
           {
@@ -587,6 +675,22 @@ export default function LiveDraftTab({
           rosterPositions={rosterPositions}
           compareIds={compareIds}
           toggleCompare={toggleCompare}
+        />
+      )}
+
+      {view === "plan" && (
+        <DraftBlueprintPanel
+          blueprintId={blueprintId}
+          setBlueprintId={setBlueprintId}
+          strict={strictPlan}
+          setStrict={setStrictPlan}
+          round={nextRound}
+          pool={blueprintPool}
+          myDrafted={myDrafted}
+          outlookTeams={outlookTeams}
+          remainingPicks={remainingPicks}
+          mySlot={mySlot}
+          leagueContext={leagueContext}
         />
       )}
 
