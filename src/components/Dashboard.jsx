@@ -17,6 +17,7 @@ import DocumentationTab from "./dashboard/DocumentationTab";
 import DraftRecapTab from "./dashboard/DraftRecapTab";
 import LiveDraftTab from "./dashboard/LiveDraftTab";
 import BlueprintClassifierCard from "./dashboard/BlueprintClassifierCard";
+import BlueprintCoach from "./dashboard/BlueprintCoach";
 import MockBlueprints from "./dashboard/MockBlueprints";
 import RankingsTab from "./dashboard/RankingsTab";
 import StrategyPlannerTab from "./dashboard/StrategyPlannerTab";
@@ -394,11 +395,18 @@ export default function Dashboard({
       {activeTab === "rookies" && <RookieRankingsTab />}
 
       {activeTab === "blueprint" && (
-        <BlueprintClassifierCard
-          analysis={analysis}
-          leagueContext={analysis.leagueContext}
-          leagueTeams={analysis.leagueTeams}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <BlueprintClassifierCard
+            analysis={analysis}
+            leagueContext={analysis.leagueContext}
+            leagueTeams={analysis.leagueTeams}
+          />
+          <BlueprintCoach
+            analysis={analysis}
+            leagueContext={analysis.leagueContext}
+            tradeSuggestions={analysis.tradeSuggestions}
+          />
+        </div>
       )}
 
       {activeTab === "mock" && (

@@ -845,6 +845,102 @@ export function simulateMockDraft({ blueprint, pool = [], slot, numTeams, rounds
   return { board, myRoster };
 }
 
+// ── Active-team Blueprint Coach (post-draft) ─────────────────────────────────
+
+// Tag a rostered player relative to a target blueprint: "core" (cornerstone fit),
+// "off" (works against the plan — a sell candidate), or "fit" (fine / on-plan).
+function playerAlignment(p, blueprint, wts) {
+  const win = blueprint.ageWindow || [21, 30];
+  const age = num(p.age, 26);
+  const val = pVal(p);
+  const posW = num(wts[p.position], 0);
+  const rules = blueprint.assetRules || {};
+  const preferYoung = rules.preferYoung === true;
+
+  // Off-plan: ages past the plan's hard cap.
+  if (rules.maxAgeHardStop && age > rules.maxAgeHardStop) {
+    return { tag: "off", reason: `Ages out of the plan (>${rules.maxAgeHardStop})` };
+  }
+  // Off-plan: a youth-building plan holding an aging asset still worth selling.
+  if (preferYoung && age >= win[1] + 2 && val >= 25) {
+    return { tag: "off", reason: "Aging vs a youth plan — sell while it has value" };
+  }
+  // Off-plan: a win-now plan holding a low-value young dart-throw (convert it).
+  if (blueprint.id === "winNow" && age <= 23 && val < 60) {
+    return { tag: "off", reason: "Young dart-throw — flip for win-now help" };
+  }
+  // Off-plan: a valuable player at a position the plan barely uses (sell high).
+  if (posW <= 0.12 && val >= 70) {
+    return { tag: "off", reason: `Plan is light at ${p.position} — sell into your strengths` };
+  }
+
+  const ageOk = age >= win[0] && age <= win[1];
+  if (val >= 80 && posW >= 0.2 && ageOk) return { tag: "core", reason: "Cornerstone fit" };
+  if (ageOk && posW >= 0.15) return { tag: "fit", reason: "On-plan" };
+  return { tag: "fit", reason: "Roster filler" };
+}
+
+// Does a trade-suggestion's acquire target advance the blueprint?
+function suggestionFit(target, blueprint, wts) {
+  if (!target) return { fitsPlan: false, fitReason: null };
+  const ageFit = ageFitScore(target.age, blueprint.ageWindow);
+  const posW = num(wts[target.position], 0);
+  const reasons = [];
+  if (posW >= 0.2) reasons.push(`fills a ${blueprint.label} priority spot`);
+  if (ageFit >= 0.999) reasons.push(`in the ${blueprint.ageWindow[0]}–${blueprint.ageWindow[1]} age band`);
+  const fitsPlan = posW >= 0.15 && ageFit >= 0.6;
+  return { fitsPlan, fitReason: reasons.length ? reasons.join(", ") : null };
+}
+
+/**
+ * Make a chosen blueprint actionable for an established roster: how well the team
+ * fits it, the gap to close, which players work against it (sell candidates), and
+ * which buy targets advance it.
+ * @param {object} args
+ * @param {object} args.snapshot         my-team roster snapshot (proportions, byPos, enriched, avgAge)
+ * @param {object} args.blueprint        the target DRAFT_BLUEPRINTS entry
+ * @param {object} args.leagueContext
+ * @param {Array}  [args.tradeSuggestions] precomputed buildTradeSuggestions() output
+ * @returns {{ fit, signals, avgAge, targetAge, positions, players, core, sells, wantedPositions, acquireTargets }}
+ */
+export function coachActiveTeam({ snapshot, blueprint, leagueContext, tradeSuggestions = [] } = {}) {
+  if (!snapshot || !blueprint) return null;
+  const cls = classifyDraftBlueprint(snapshot, leagueContext);
+  const match = cls.matches.find((m) => m.id === blueprint.id);
+
+  // Roster-level target positional mix = the blueprint's catch-all (late) band.
+  const wts = posWeightsForRound(blueprint, 99);
+  const positions = POSITIONS.map((pos) => {
+    const actual = Math.round(num(snapshot.proportions?.[pos]?.actual));
+    const target = Math.round(num(wts[pos]) * 100);
+    return { pos, actual, target, delta: actual - target };
+  });
+
+  const enriched = snapshot.enriched || [];
+  const players = enriched.map((p) => ({ player: p, ...playerAlignment(p, blueprint, wts) }));
+  const sells = players.filter((x) => x.tag === "off").sort((a, b) => pVal(b.player) - pVal(a.player));
+  const core = players.filter((x) => x.tag === "core").sort((a, b) => pVal(b.player) - pVal(a.player));
+  const wantedPositions = positions.filter((x) => x.delta <= -8 && x.target >= 12).map((x) => x.pos);
+
+  const acquireTargets = (tradeSuggestions || [])
+    .map((s) => ({ ...s, ...suggestionFit(s.targetPlayer, blueprint, wts) }))
+    .sort((a, b) => (b.fitsPlan ? 1 : 0) - (a.fitsPlan ? 1 : 0))
+    .slice(0, 8);
+
+  return {
+    fit: match?.fit ?? 0,
+    signals: match?.signals ?? [],
+    avgAge: num(snapshot.avgAge),
+    targetAge: blueprint.targetAvgAge,
+    positions,
+    players,
+    core,
+    sells,
+    wantedPositions,
+    acquireTargets,
+  };
+}
+
 // ── Auto-detect blueprint from picks so far ──────────────────────────────────
 
 /**

@@ -26,6 +26,7 @@ import {
   formatTags,
   reshapeForFormat,
   isUnsigned,
+  coachActiveTeam,
 } from "./draftBlueprints.js";
 
 const SF = { isSuperflex: true, tePremium: false, starterCounts: { QB: 1, RB: 2, WR: 3, TE: 1 }, flexCount: 2 };
@@ -143,6 +144,48 @@ describe("classifyDraftBlueprint", () => {
     );
     const { isMature } = classifyDraftBlueprint(snapFrom(players), ONE_QB);
     assert.equal(isMature, true);
+  });
+});
+
+describe("coachActiveTeam (post-draft)", () => {
+  it("flags aging vets as sells under a youth plan and surfaces a fit + gap", () => {
+    const players = [
+      mk("WR", 22, 88), mk("WR", 23, 80), mk("WR", 24, 72),
+      mk("RB", 31, 70), // aging vet — off-plan for a youth build
+      mk("QB", 24, 78), mk("TE", 23, 55),
+    ];
+    const coach = coachActiveTeam({ snapshot: snapFrom(players), blueprint: DRAFT_BLUEPRINTS.anchorWr, leagueContext: ONE_QB });
+    assert.ok(coach.fit >= 0 && coach.fit <= 100);
+    assert.equal(coach.targetAge, DRAFT_BLUEPRINTS.anchorWr.targetAvgAge);
+    assert.equal(coach.positions.length, 4);
+    const sellIds = coach.sells.map((s) => s.player.position);
+    assert.ok(sellIds.includes("RB"), `expected the aging RB as a sell, got ${JSON.stringify(sellIds)}`);
+    assert.ok(coach.sells[0].reason.length > 0);
+  });
+
+  it("win-now plan flags low-value young dart-throws as sells", () => {
+    const players = [
+      mk("RB", 26, 85), mk("WR", 27, 80), mk("QB", 29, 75),
+      mk("WR", 22, 40), // young, low value — convert under win-now
+    ];
+    const coach = coachActiveTeam({ snapshot: snapFrom(players), blueprint: DRAFT_BLUEPRINTS.winNow, leagueContext: ONE_QB });
+    assert.ok(coach.sells.some((s) => s.player.age <= 23 && /win-now/i.test(s.reason)));
+  });
+
+  it("ranks blueprint-fitting trade targets ahead of off-plan ones", () => {
+    const players = [mk("WR", 24, 80), mk("QB", 25, 78)];
+    const tradeSuggestions = [
+      { partnerTeam: "A", targetPlayer: mk("RB", 30, 75), send: ["pick"], tier: "B" }, // old, off-plan
+      { partnerTeam: "B", targetPlayer: mk("WR", 22, 70), send: ["pick"], tier: "A" }, // young WR, on-plan
+    ];
+    const coach = coachActiveTeam({ snapshot: snapFrom(players), blueprint: DRAFT_BLUEPRINTS.anchorWr, leagueContext: ONE_QB, tradeSuggestions });
+    assert.equal(coach.acquireTargets[0].targetPlayer.position, "WR");
+    assert.equal(coach.acquireTargets[0].fitsPlan, true);
+  });
+
+  it("returns null without a snapshot or blueprint", () => {
+    assert.equal(coachActiveTeam({ blueprint: DRAFT_BLUEPRINTS.winNow }), null);
+    assert.equal(coachActiveTeam({ snapshot: snapFrom([mk("WR", 22, 80)]) }), null);
   });
 });
 
