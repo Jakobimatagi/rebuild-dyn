@@ -33,6 +33,10 @@ export function getLeagueRulesContext(league) {
   return {
     isSuperflex,
     tePremium,
+    // Per-reception bonus TEs get over the base (e.g. 0.5 in a +0.5 TEP league).
+    // FantasyCalc values don't bake this in, so the blueprint layer reshapes TE
+    // value by this bonus. 0 when not a TE-premium league.
+    tePremiumBonus: Math.max(0, teRec - recBase),
     passTd,
     ppr: recBase,
     numTeams: Number(league.total_rosters || 12),

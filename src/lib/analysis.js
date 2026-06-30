@@ -80,6 +80,32 @@ function buildBestAvailablePool(valueBySleeperId, players, limit = 400) {
   return out.slice(0, limit);
 }
 
+// Light draftable pool for the standalone Mock Blueprints tab — always available
+// (not gated on a live draft). Shape matches what the blueprint engine expects
+// (id, position, age, liveValue), enriched just enough to mock a startup draft.
+function buildMockPool(valueBySleeperId, players, limit = 600) {
+  const out = [];
+  for (const [playerId, value] of Object.entries(valueBySleeperId)) {
+    const p = players?.[playerId];
+    if (!p || p.active === false) continue;
+    const position = (p.fantasy_positions?.[0] || p.position || "").toUpperCase();
+    if (!["QB", "RB", "WR", "TE"].includes(position)) continue;
+    const name =
+      p.full_name || `${p.first_name || ""} ${p.last_name || ""}`.trim() || `Player ${playerId}`;
+    out.push({
+      id: playerId,
+      name,
+      position,
+      team: p.team || "",
+      age: Number(p.age) || null,
+      value,
+      liveValue: value,
+    });
+  }
+  out.sort((a, b) => b.value - a.value);
+  return out.slice(0, limit);
+}
+
 /**
  * Per-player points-per-game keyed by Sleeper id, for the live draft's expected
  * team PPG. Blends the last two seasons (recent weighted heavier) and uses the
@@ -393,6 +419,12 @@ export function buildRosterAnalysis(
   const bestAvailablePool = liveDraft
     ? buildBestAvailablePool(liveValueBySleeperId, players)
     : [];
+  // Always-available draftable pool for the Mock Blueprints tab (no live draft
+  // needed). Uses the same FC→RA value precedence as the live board.
+  const mockDraftPool = buildMockPool(
+    buildValueBySleeperId(fantasyCalcContext.bySleeperId, rosterAuditContext.bySleeperId),
+    players,
+  );
   // Full deep-dive enrichment for the undrafted pool, so the "This or That"
   // compare view can show the same model (fused dynasty value, trajectory,
   // score math, contract) the roster tabs show. Undrafted players have no
@@ -436,6 +468,7 @@ export function buildRosterAnalysis(
     myTeamLabel: myTeam.label,
     leagueTeams,
     leagueContext,
+    mockDraftPool,
     fantasyCalcSource: {
       enabled: fantasyCalcContext.totalPlayers > 0,
       totalPlayers: fantasyCalcContext.totalPlayers,

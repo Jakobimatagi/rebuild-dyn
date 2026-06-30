@@ -16,6 +16,8 @@ import LeagueActivityTab from "./dashboard/LeagueActivityTab";
 import DocumentationTab from "./dashboard/DocumentationTab";
 import DraftRecapTab from "./dashboard/DraftRecapTab";
 import LiveDraftTab from "./dashboard/LiveDraftTab";
+import BlueprintClassifierCard from "./dashboard/BlueprintClassifierCard";
+import MockBlueprints from "./dashboard/MockBlueprints";
 import RankingsTab from "./dashboard/RankingsTab";
 import StrategyPlannerTab from "./dashboard/StrategyPlannerTab";
 import RookieRankingsTab from "./dashboard/RookieRankingsTab";
@@ -38,6 +40,8 @@ const ROW2 = [
   { key: "power",     label: "Power" },
   { key: "rankings",  label: "Rankings" },
   { key: "rookies",   label: "Rookies" },
+  { key: "blueprint", label: "Blueprint" },
+  { key: "mock",      label: "Mock Blueprints" },
   { key: "tinder",    label: "Trade Jury" },
   { key: "activity",  label: "Activity" },
 ];
@@ -298,6 +302,7 @@ export default function Dashboard({
           leagueTeams={analysis.leagueTeams}
           myRosterId={analysis.rosterId}
           ppr={analysis.leagueContext?.ppr ?? 1}
+          leagueContext={analysis.leagueContext}
         />
       )}
 
@@ -387,6 +392,21 @@ export default function Dashboard({
       )}
 
       {activeTab === "rookies" && <RookieRankingsTab />}
+
+      {activeTab === "blueprint" && (
+        <BlueprintClassifierCard
+          analysis={analysis}
+          leagueContext={analysis.leagueContext}
+          leagueTeams={analysis.leagueTeams}
+        />
+      )}
+
+      {activeTab === "mock" && (
+        <MockBlueprints
+          pool={analysis.mockDraftPool}
+          leagueContext={analysis.leagueContext}
+        />
+      )}
 
       {activeTab === "ai" && !strategyPlannerEnabled && !strategyUnlocked && (
         <PremiumGate
