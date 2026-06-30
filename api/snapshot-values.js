@@ -10,6 +10,7 @@
 // Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY. Optional: CRON_SECRET.
 
 import { createClient } from "@supabase/supabase-js";
+import { buildSleeperIndex, mapFeedToSleeper, rankByValue } from "../src/lib/startupAdp.js";
 
 // Canonical formats we snapshot. Most leagues fall into one of these; off-format
 // leagues reprice against the nearest match. Add formats here when needed — the
@@ -21,6 +22,15 @@ const FORMATS = [
 
 const FC_BASE = "https://api.fantasycalc.com";
 const RA_BASE = "https://rosteraudit.com/wp-json/ra/v1";
+
+// Community startup ADP (KeepTradeCut) → startup_adp table. Folded into this daily
+// cron rather than its own function to stay under the Hobby plan's 12-function cap.
+const KTC_URL = process.env.KTC_ADP_URL || "https://keeptradecut.com/dev-api/v1/players";
+const SLEEPER_PLAYERS_URL = "https://api.sleeper.app/v1/players/nfl";
+const ADP_FORMATS = [
+  { key: "sf_12", valueKey: "superflexValues" },
+  { key: "1qb_12", valueKey: "oneQBValues" },
+];
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -124,6 +134,42 @@ async function upsertChunked(supabase, table, rows, conflict) {
   }
 }
 
+// Refresh community startup ADP: map a KTC value feed onto Sleeper ids and rank
+// per format into startup_adp (value-rank ≈ startup ADP). Each format is replaced
+// wholesale so dropped players don't linger.
+async function refreshStartupAdp(supabase) {
+  const [players, feed] = await Promise.all([
+    fetch(SLEEPER_PLAYERS_URL).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    fetch(KTC_URL, { headers: { "User-Agent": "dynasty-oracle/adp" } })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+  ]);
+  if (!players || !feed) return { ok: false, reason: "feed unavailable" };
+
+  const idx = buildSleeperIndex(players);
+  const feedRows = Array.isArray(feed) ? feed : feed?.players || feed?.data || [];
+  const updatedAt = new Date().toISOString();
+  let total = 0;
+  for (const f of ADP_FORMATS) {
+    const rows = rankByValue(mapFeedToSleeper(feedRows, idx, f.valueKey)).map((r) => ({
+      format: f.key,
+      sleeper_id: r.sleeper_id,
+      name: r.name,
+      position: r.position,
+      value: r.value,
+      adp_rank: r.adp_rank,
+      updated_at: updatedAt,
+    }));
+    if (rows.length) {
+      await supabase.from("startup_adp").delete().eq("format", f.key);
+      const { error } = await supabase.from("startup_adp").insert(rows);
+      if (error) throw error;
+      total += rows.length;
+    }
+  }
+  return { ok: true, total };
+}
+
 export default async function handler(req, res) {
   // Optional shared-secret guard for the cron endpoint.
   const secret = process.env.CRON_SECRET;
@@ -164,11 +210,20 @@ export default async function handler(req, res) {
       "snap_date,source,format,season,round,slot",
     );
 
+    // Refresh startup ADP too. Isolated so a KTC outage can't fail the snapshot.
+    let adp;
+    try {
+      adp = await refreshStartupAdp(supabase);
+    } catch (e) {
+      adp = { ok: false, error: String(e?.message || e) };
+    }
+
     return res.status(200).json({
       ok: true,
       snap_date: snapDate,
       players: playerRows.length,
       picks: pickRows.length,
+      adp,
     });
   } catch (err) {
     return res.status(502).json({ error: String(err?.message || err) });

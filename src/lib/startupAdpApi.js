@@ -1,5 +1,5 @@
 // Read-only access to community startup ADP published to Supabase by the weekly
-// cron (api/refresh-startup-adp.js). The browser only reads (anon SELECT under
+// cron (api/snapshot-values.js). The browser only reads (anon SELECT under
 // RLS); the cron writes with the service-role key. See
 // docs/migrations/startup_adp_schema.sql.
 

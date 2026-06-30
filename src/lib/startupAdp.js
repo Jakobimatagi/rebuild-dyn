@@ -1,6 +1,6 @@
 // Pure helpers for turning a community startup value feed (e.g. KeepTradeCut)
 // into per-format ADP mapped onto Sleeper player_ids. No network, no Supabase,
-// no browser globals — so both the Vercel cron (api/refresh-startup-adp.js) and
+// no browser globals — so both the Vercel cron (api/snapshot-values.js) and
 // the unit tests can import it. See docs/migrations/startup_adp_schema.sql.
 
 const SUFFIX_RE = /\b(jr|sr|ii|iii|iv|v)\b/g;

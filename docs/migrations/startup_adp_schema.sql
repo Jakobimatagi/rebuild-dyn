@@ -1,4 +1,4 @@
--- Community-derived startup draft ADP, refreshed weekly by api/refresh-startup-adp.js
+-- Community-derived startup draft ADP, refreshed daily by api/snapshot-values.js
 -- (Vercel cron). Dynasty startups have no public ADP endpoint, so we rank a community
 -- value feed (KeepTradeCut) per format and treat value-rank as ADP — in startups the
 -- two track closely. Drives the Draft Blueprint example builds and league outlook.

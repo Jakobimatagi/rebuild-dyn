@@ -10,13 +10,11 @@
     { "source": "/api/historical-rosters", "destination": "/api/historical-rosters" },
     { "source": "/api/cfbd", "destination": "/api/cfbd" },
     { "source": "/api/snapshot-values", "destination": "/api/snapshot-values" },
-    { "source": "/api/refresh-startup-adp", "destination": "/api/refresh-startup-adp" },
     { "source": "/ingest/static/:path*", "destination": "https://us-assets.i.posthog.com/static/:path*" },
     { "source": "/ingest/:path*", "destination": "https://us.i.posthog.com/:path*" },
     { "source": "/admin/:path*", "destination": "/index.html" }
   ],
   "crons": [
-    { "path": "/api/snapshot-values", "schedule": "0 9 * * *" },
-    { "path": "/api/refresh-startup-adp", "schedule": "0 8 * * 1" }
+    { "path": "/api/snapshot-values", "schedule": "0 9 * * *" }
   ]
 }
