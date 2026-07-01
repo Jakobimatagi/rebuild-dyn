@@ -17,6 +17,7 @@ import DocumentationTab from "./dashboard/DocumentationTab";
 import DraftRecapTab from "./dashboard/DraftRecapTab";
 import LiveDraftTab from "./dashboard/LiveDraftTab";
 import BlueprintClassifierCard from "./dashboard/BlueprintClassifierCard";
+import BlueprintCoach from "./dashboard/BlueprintCoach";
 import MockBlueprints from "./dashboard/MockBlueprints";
 import RankingsTab from "./dashboard/RankingsTab";
 import StrategyPlannerTab from "./dashboard/StrategyPlannerTab";
@@ -41,7 +42,6 @@ const ROW2 = [
   { key: "rankings",  label: "Rankings" },
   { key: "rookies",   label: "Rookies" },
   { key: "blueprint", label: "Blueprint" },
-  { key: "mock",      label: "Mock Blueprints" },
   { key: "tinder",    label: "Trade Jury" },
   { key: "activity",  label: "Activity" },
 ];
@@ -145,6 +145,14 @@ export default function Dashboard({
     ? [{ key: "live", label: "Live Draft" }]
     : [];
   const draftTab = hasDraft ? [{ key: "recap", label: "Draft" }] : [];
+  // Mock Blueprints is a startup-draft tool — only relevant while a team is in its
+  // startup draft. Startups fill a full roster (~15-30 rounds); rookie drafts run
+  // ~3-5, so the round count distinguishes the phase.
+  const draftRounds = Number(analysis.liveDraft?.draft?.settings?.rounds) || 0;
+  const isStartupPhase = hasLiveDraft && draftRounds >= 10;
+  const mockTab = isStartupPhase
+    ? [{ key: "mock", label: "Mock Blueprints" }]
+    : [];
 
   return (
     <>
@@ -224,7 +232,7 @@ export default function Dashboard({
         <div style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", paddingTop: 2 }}>
           <TabRow
             tabs={ROW2}
-            extraTabs={[...liveDraftTab, ...draftTab, { key: "docs", label: "Docs" }]}
+            extraTabs={[...liveDraftTab, ...draftTab, ...mockTab, { key: "docs", label: "Docs" }]}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             dimmed
@@ -394,14 +402,21 @@ export default function Dashboard({
       {activeTab === "rookies" && <RookieRankingsTab />}
 
       {activeTab === "blueprint" && (
-        <BlueprintClassifierCard
-          analysis={analysis}
-          leagueContext={analysis.leagueContext}
-          leagueTeams={analysis.leagueTeams}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <BlueprintClassifierCard
+            analysis={analysis}
+            leagueContext={analysis.leagueContext}
+            leagueTeams={analysis.leagueTeams}
+          />
+          <BlueprintCoach
+            analysis={analysis}
+            leagueContext={analysis.leagueContext}
+            tradeSuggestions={analysis.tradeSuggestions}
+          />
+        </div>
       )}
 
-      {activeTab === "mock" && (
+      {activeTab === "mock" && isStartupPhase && (
         <MockBlueprints
           pool={analysis.mockDraftPool}
           leagueContext={analysis.leagueContext}
