@@ -142,12 +142,17 @@ export function buildStrengths(teams, { blendActual = 0.25 } = {}) {
 }
 
 // ── Monte-Carlo simulation ───────────────────────────────────────────────────
-function simulateOneSeason(strengths, schedule, rng) {
+// When `focusIdx >= 0` we also return `trace`: the focus team's *cumulative*
+// wins after each scheduled week, used to animate season "paths". Tracing is a
+// single extra read per round, so the untraced hot path (focusIdx = -1) is
+// unaffected.
+function simulateOneSeason(strengths, schedule, rng, focusIdx = -1) {
   const n = strengths.length;
   const wins = new Array(n).fill(0);
   const pf = new Array(n).fill(0);
+  const trace = focusIdx >= 0 ? new Array(schedule.length) : null;
 
-  for (const round of schedule) {
+  schedule.forEach((round, wi) => {
     for (const [a, b] of round) {
       const sa = gaussian(rng, strengths[a].mean, strengths[a].sigma);
       const sb = gaussian(rng, strengths[b].mean, strengths[b].sigma);
@@ -156,8 +161,74 @@ function simulateOneSeason(strengths, schedule, rng) {
       if (sa >= sb) wins[a] += 1;
       else wins[b] += 1;
     }
+    if (trace) trace[wi] = wins[focusIdx]; // cumulative wins through this week
+  });
+  return { wins, pf, trace };
+}
+
+/**
+ * Play one full simulated season + playoff and fold the outcome into the shared
+ * `counters` (madePlayoffs / champ / sumWins / sumSeed). Returns the raw
+ * per-team results so a caller tracking a focus team can read its win total,
+ * final standing, and title. Keeping this in one place means the instant
+ * one-shot `simulatePowerRankings` and the streaming `createSeasonSimulator`
+ * advance the RNG in exactly the same order.
+ */
+function runOneSim(strengths, schedule, rng, field, priorWins, counters, focusIdx = -1) {
+  const n = strengths.length;
+  const { wins, pf, trace } = simulateOneSeason(strengths, schedule, rng, focusIdx);
+  const order = seedStandings(wins, pf, priorWins);
+  for (let rank = 0; rank < n; rank++) {
+    const ti = order[rank];
+    counters.sumWins[ti] += wins[ti] + priorWins[ti];
+    counters.sumSeed[ti] += rank + 1;
   }
-  return { wins, pf };
+  const seeds = order.slice(0, field);
+  for (const ti of seeds) counters.madePlayoffs[ti] += 1;
+  const championIdx = simulatePlayoffs(seeds, strengths, rng);
+  if (championIdx != null) counters.champ[championIdx] += 1;
+  return { wins, order, championIdx, trace };
+}
+
+/** Fresh, zeroed counter set for a league of `n` teams. */
+function makeCounters(n) {
+  return {
+    madePlayoffs: new Array(n).fill(0),
+    champ: new Array(n).fill(0),
+    sumWins: new Array(n).fill(0),
+    sumSeed: new Array(n).fill(0),
+  };
+}
+
+/**
+ * Turn accumulated counters into the sorted, ranked per-team results. Shared by
+ * the one-shot simulator and the streaming runner so both emit identical shapes.
+ */
+function finalizeResults(strengths, counters, sims) {
+  const n = strengths.length;
+  const means = strengths.map((s) => s.mean);
+  const powerScoreOf = (mean) => {
+    const below = means.filter((v) => v < mean).length;
+    return n > 1 ? Math.round((below / (n - 1)) * 100) : 50;
+  };
+
+  const results = strengths.map((s, i) => ({
+    rosterId: s.rosterId,
+    label: s.label,
+    mean: s.mean,
+    sigma: s.sigma,
+    playoffOdds: sims ? counters.madePlayoffs[i] / sims : 0,
+    championOdds: sims ? counters.champ[i] / sims : 0,
+    avgWins: sims ? counters.sumWins[i] / sims : 0,
+    avgSeed: sims ? counters.sumSeed[i] / sims : 0,
+    powerScore: powerScoreOf(s.mean),
+  }));
+
+  results.sort((a, b) => b.championOdds - a.championOdds || b.mean - a.mean);
+  results.forEach((r, i) => {
+    r.powerRank = i + 1;
+  });
+  return results;
 }
 
 /** Seed standings by wins, breaking ties on total points-for. Returns indices. */
@@ -240,52 +311,152 @@ export function simulatePowerRankings(teams, opts = {}) {
   const field = Math.min(Math.max(2, playoffTeams), n);
   const schedule = buildSchedule(n, weeks);
   const rng = mulberry32(seed);
-
-  const madePlayoffs = new Array(n).fill(0);
-  const champ = new Array(n).fill(0);
-  const sumWins = new Array(n).fill(0);
-  const sumSeed = new Array(n).fill(0);
   const priorWins = strengths.map((s) => s.priorWins);
+  const counters = makeCounters(n);
 
   for (let s = 0; s < sims; s++) {
-    const { wins, pf } = simulateOneSeason(strengths, schedule, rng);
-    const order = seedStandings(wins, pf, priorWins);
-    for (let rank = 0; rank < n; rank++) {
-      const ti = order[rank];
-      sumWins[ti] += wins[ti] + priorWins[ti];
-      sumSeed[ti] += rank + 1;
-    }
-    const seeds = order.slice(0, field);
-    for (const ti of seeds) madePlayoffs[ti] += 1;
-    const championIdx = simulatePlayoffs(seeds, strengths, rng);
-    if (championIdx != null) champ[championIdx] += 1;
+    runOneSim(strengths, schedule, rng, field, priorWins, counters);
   }
 
-  // Power score: percentile of the projected max-points mean, 0..100.
-  const means = strengths.map((s) => s.mean);
-  const powerScoreOf = (mean) => {
-    const below = means.filter((v) => v < mean).length;
-    return n > 1 ? Math.round((below / (n - 1)) * 100) : 50;
+  return finalizeResults(strengths, counters, sims);
+}
+
+/**
+ * A stateful, batch-drivable version of the Monte-Carlo for the animated
+ * "Run Simulations" experience. Build it once with the same team inputs the
+ * one-shot simulator takes, then call `runBatch(count)` repeatedly (e.g. from a
+ * requestAnimationFrame loop) to advance the sim without blocking the UI. Each
+ * batch returns a fresh `snapshot()`.
+ *
+ * Beyond the league-wide odds, it tracks — for an optional `focusRosterId`
+ * (the viewing manager's team) — a win-total histogram, a final-seed histogram,
+ * and a capped ring buffer of sampled season "paths" (cumulative wins by week)
+ * for the animation. The default `seed` is fresh each call so re-running feels
+ * alive; pass a fixed `seed` for reproducibility.
+ *
+ * @returns {{ runBatch(count:number): object, snapshot(): object, simsDone:number,
+ *             weeks:number, field:number, numTeams:number, focusIdx:number }}
+ */
+export function createSeasonSimulator(teams, opts = {}) {
+  const {
+    weeks = 14,
+    playoffTeams = 6,
+    seed = (Math.random() * 2 ** 32) >>> 0,
+    blendActual = 0.25,
+    focusRosterId = null,
+    sampleTrajectories = 40,
+  } = opts;
+
+  const strengths = buildStrengths(teams, { blendActual });
+  const n = strengths.length;
+  const field = Math.min(Math.max(2, playoffTeams), Math.max(2, n));
+  const schedule = buildSchedule(n, weeks);
+  const rng = mulberry32(seed >>> 0);
+  const priorWins = strengths.map((s) => s.priorWins);
+  const counters = makeCounters(n);
+  const focusIdx =
+    focusRosterId != null
+      ? strengths.findIndex((s) => String(s.rosterId) === String(focusRosterId))
+      : -1;
+
+  let simsDone = 0;
+
+  // Focus-team accumulators (only populated when focusIdx >= 0).
+  const winsHistogram = new Array(weeks + 1).fill(0); // final wins 0..weeks
+  const seedHistogram = new Array(n + 1).fill(0); // final seed 1..n (index 0 unused)
+  let focusWinsSum = 0;
+  const trajectories = []; // ring buffer of { wins:number[], champ, madePlayoffs, finalWins }
+  let trajCursor = 0;
+
+  // The focus team's fixed weekly opponent (the round-robin pairing is
+  // deterministic, so it faces the same opponent index every sim in a given
+  // week). -1 marks a bye. `weekWins[w]` counts sims the focus won that week,
+  // giving a per-week win probability for the week-by-week deep dive.
+  const focusOpp =
+    focusIdx >= 0
+      ? schedule.map((round) => {
+          for (const [a, b] of round) {
+            if (a === focusIdx) return b;
+            if (b === focusIdx) return a;
+          }
+          return -1;
+        })
+      : [];
+  const weekWins = new Array(schedule.length).fill(0);
+
+  function runBatch(count) {
+    for (let k = 0; k < count && n > 0; k++) {
+      const { wins, order, championIdx, trace } = runOneSim(
+        strengths, schedule, rng, field, priorWins, counters, focusIdx,
+      );
+      simsDone++;
+
+      if (focusIdx >= 0) {
+        const fw = wins[focusIdx];
+        winsHistogram[Math.min(weeks, Math.max(0, fw))]++;
+        focusWinsSum += fw;
+        const seedRank = order.indexOf(focusIdx) + 1; // 1-based standing
+        if (seedRank >= 1 && seedRank <= n) seedHistogram[seedRank]++;
+        const made = seedRank >= 1 && seedRank <= field;
+        const won = championIdx === focusIdx;
+        if (trace) {
+          // Per-week win from the cumulative-wins trace (delta is 0 or 1).
+          let prev = 0;
+          for (let w = 0; w < trace.length; w++) {
+            if (focusOpp[w] >= 0 && trace[w] > prev) weekWins[w] += 1;
+            prev = trace[w];
+          }
+          const entry = { wins: trace, champ: won, madePlayoffs: made, finalWins: fw };
+          if (trajectories.length < sampleTrajectories) {
+            trajectories.push(entry);
+          } else {
+            trajectories[trajCursor] = entry;
+            trajCursor = (trajCursor + 1) % sampleTrajectories;
+          }
+        }
+      }
+    }
+    return snapshot();
+  }
+
+  function snapshot() {
+    const results = finalizeResults(strengths, counters, simsDone);
+    let focus = null;
+    if (focusIdx >= 0) {
+      const fid = String(strengths[focusIdx].rosterId);
+      const fr = results.find((r) => String(r.rosterId) === fid);
+      focus = {
+        rosterId: strengths[focusIdx].rosterId,
+        label: strengths[focusIdx].label,
+        playoffOdds: fr ? fr.playoffOdds : 0,
+        championOdds: fr ? fr.championOdds : 0,
+        powerRank: fr ? fr.powerRank : null,
+        avgWins: simsDone ? focusWinsSum / simsDone : 0, // simulated wins (excl. carried record)
+        weeks,
+        field,
+        winsHistogram: winsHistogram.slice(),
+        seedHistogram: seedHistogram.slice(),
+        trajectories: trajectories.slice(),
+        weekly: focusOpp.map((opp, w) => ({
+          week: w + 1,
+          bye: opp < 0,
+          opponentRosterId: opp >= 0 ? strengths[opp].rosterId : null,
+          opponentLabel: opp >= 0 ? strengths[opp].label : null,
+          opponentMean: opp >= 0 ? strengths[opp].mean : null,
+          winOdds: opp >= 0 && simsDone ? weekWins[w] / simsDone : null,
+        })),
+      };
+    }
+    return { simsDone, results, focus };
+  }
+
+  return {
+    runBatch,
+    snapshot,
+    get simsDone() { return simsDone; },
+    weeks,
+    field,
+    numTeams: n,
+    focusIdx,
   };
-
-  const results = strengths.map((s, i) => ({
-    rosterId: s.rosterId,
-    label: s.label,
-    mean: s.mean,
-    sigma: s.sigma,
-    playoffOdds: madePlayoffs[i] / sims,
-    championOdds: champ[i] / sims,
-    avgWins: sumWins[i] / sims,
-    avgSeed: sumSeed[i] / sims,
-    powerScore: powerScoreOf(s.mean),
-  }));
-
-  // Rank by championship odds first (the headline), then projected strength.
-  results.sort(
-    (a, b) => b.championOdds - a.championOdds || b.mean - a.mean,
-  );
-  results.forEach((r, i) => {
-    r.powerRank = i + 1;
-  });
-  return results;
 }

@@ -8,6 +8,7 @@ import {
   lineupStrength,
   buildStrengths,
   simulatePowerRankings,
+  createSeasonSimulator,
 } from "./powerRankings.js";
 
 test("mulberry32 is deterministic for a given seed", () => {
@@ -126,4 +127,97 @@ test("simulatePowerRankings is reproducible for a fixed seed", () => {
   const r1 = simulatePowerRankings(teams, { sims: 500, seed: 5 });
   const r2 = simulatePowerRankings(teams, { sims: 500, seed: 5 });
   assert.deepEqual(r1, r2);
+});
+
+const SIM_TEAMS = [
+  { rosterId: 1, label: "Juggernaut", projMean: 140, projSigma: 18 },
+  { rosterId: 2, label: "Contender", projMean: 120, projSigma: 18 },
+  { rosterId: 3, label: "Middle", projMean: 110, projSigma: 18 },
+  { rosterId: 4, label: "Middle2", projMean: 108, projSigma: 18 },
+  { rosterId: 5, label: "Weak", projMean: 95, projSigma: 18 },
+  { rosterId: 6, label: "Tank", projMean: 85, projSigma: 18 },
+];
+
+test("createSeasonSimulator: chunked runBatch equals one big batch for a fixed seed", () => {
+  const opts = { weeks: 12, playoffTeams: 4, seed: 77 };
+  const big = createSeasonSimulator(SIM_TEAMS, opts);
+  big.runBatch(1000);
+
+  const chunked = createSeasonSimulator(SIM_TEAMS, opts);
+  for (let i = 0; i < 10; i++) chunked.runBatch(100); // same 1000 sims, split up
+
+  assert.equal(big.simsDone, 1000);
+  assert.equal(chunked.simsDone, 1000);
+  // Identical RNG stream → identical odds regardless of batch boundaries.
+  assert.deepEqual(chunked.snapshot().results, big.snapshot().results);
+});
+
+test("createSeasonSimulator matches simulatePowerRankings for the same seed", () => {
+  const opts = { weeks: 12, playoffTeams: 4, seed: 123 };
+  const oneShot = simulatePowerRankings(SIM_TEAMS, { ...opts, sims: 800 });
+  const streamed = createSeasonSimulator(SIM_TEAMS, opts);
+  streamed.runBatch(800);
+  assert.deepEqual(streamed.snapshot().results, oneShot);
+});
+
+test("createSeasonSimulator focus histogram counts sum to sims", () => {
+  const sim = createSeasonSimulator(SIM_TEAMS, {
+    weeks: 12,
+    playoffTeams: 4,
+    seed: 9,
+    focusRosterId: 1,
+    sampleTrajectories: 25,
+  });
+  sim.runBatch(600);
+  const { focus, simsDone } = sim.snapshot();
+
+  assert.equal(simsDone, 600);
+  assert.ok(focus, "focus block present when focusRosterId is set");
+  assert.equal(focus.rosterId, 1);
+  // Every sim lands in exactly one win-total bin (0..weeks).
+  assert.equal(focus.winsHistogram.reduce((a, b) => a + b, 0), 600);
+  assert.equal(focus.winsHistogram.length, 13); // weeks + 1
+  // Every sim lands in exactly one final-seed bin (1..n).
+  assert.equal(focus.seedHistogram.reduce((a, b) => a + b, 0), 600);
+  // Ring buffer is capped and trajectories span the season.
+  assert.ok(focus.trajectories.length <= 25);
+  assert.ok(focus.trajectories.every((t) => t.wins.length === 12));
+  // Playoff odds are a fraction; a strong team should be well above zero.
+  assert.ok(focus.playoffOdds > 0 && focus.playoffOdds <= 1);
+});
+
+test("createSeasonSimulator tracks per-week win odds for the focus team", () => {
+  const sim = createSeasonSimulator(SIM_TEAMS, {
+    weeks: 10,
+    playoffTeams: 4,
+    seed: 21,
+    focusRosterId: 1, // the juggernaut
+  });
+  sim.runBatch(1000);
+  const { focus } = sim.snapshot();
+
+  assert.equal(focus.weekly.length, 10);
+  for (const wk of focus.weekly) {
+    assert.ok(wk.week >= 1 && wk.week <= 10);
+    if (wk.bye) {
+      assert.equal(wk.winOdds, null);
+      assert.equal(wk.opponentLabel, null);
+    } else {
+      assert.ok(wk.winOdds >= 0 && wk.winOdds <= 1);
+      assert.ok(wk.opponentLabel && wk.opponentRosterId != null);
+    }
+  }
+  // The strongest team should be favored (>50%) in a typical week.
+  const played = focus.weekly.filter((w) => !w.bye);
+  const favored = played.filter((w) => w.winOdds > 0.5).length;
+  assert.ok(favored >= played.length - 1, "juggernaut favored in nearly every week");
+});
+
+test("createSeasonSimulator with no focus roster still runs the league", () => {
+  const sim = createSeasonSimulator(SIM_TEAMS, { weeks: 10, playoffTeams: 4, seed: 3 });
+  const snap = sim.runBatch(200);
+  assert.equal(snap.focus, null);
+  assert.equal(snap.results.length, 6);
+  const champSum = snap.results.reduce((s, r) => s + r.championOdds, 0);
+  assert.ok(Math.abs(champSum - 1) < 1e-9);
 });
