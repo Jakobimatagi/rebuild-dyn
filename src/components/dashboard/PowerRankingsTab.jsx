@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { styles } from "../../styles";
 import { fetchNflState, fetchSeasonProjectionAverages } from "../../lib/projectionsApi";
 import { lineupStrength, simulatePowerRankings } from "../../lib/powerRankings";
+import SeasonSimulationPanel from "./SeasonSimulationPanel";
 
 const ACCENT = "#00f5a0";
 const MUTED = "#94a3b8";
@@ -195,25 +196,32 @@ export default function PowerRankingsTab({
 
   const hasProj = (avg?.count || 0) > 0;
 
+  // Shared strength inputs for both the instant table and the on-demand
+  // simulation panel, so they run off identical team distributions.
+  const simInput = useMemo(
+    () =>
+      teamData.map(({ team, strength, actualPPG }) => ({
+        rosterId: team.rosterId,
+        label: teamName(team),
+        projMean: hasProj ? strength.mean : undefined,
+        projSigma: hasProj ? strength.sigma : undefined,
+        actualPPG,
+        wins: team.wins || 0,
+        losses: team.losses || 0,
+        ties: team.ties || 0,
+      })),
+    [teamData, hasProj],
+  );
+
   const results = useMemo(() => {
-    if (teamData.length === 0) return [];
-    const input = teamData.map(({ team, strength, actualPPG }) => ({
-      rosterId: team.rosterId,
-      label: teamName(team),
-      projMean: hasProj ? strength.mean : undefined,
-      projSigma: hasProj ? strength.sigma : undefined,
-      actualPPG,
-      wins: team.wins || 0,
-      losses: team.losses || 0,
-      ties: team.ties || 0,
-    }));
-    return simulatePowerRankings(input, {
+    if (simInput.length === 0) return [];
+    return simulatePowerRankings(simInput, {
       weeks: regWeeks,
       playoffTeams,
       sims: 4000,
       seed: 1337,
     });
-  }, [teamData, hasProj, regWeeks, playoffTeams]);
+  }, [simInput, regWeeks, playoffTeams]);
 
   const dataByRoster = useMemo(
     () => new Map(teamData.map((d) => [String(d.team.rosterId), d])),
@@ -321,6 +329,15 @@ export default function PowerRankingsTab({
           </tbody>
         </table>
       </div>
+
+      {/* On-demand animated season simulations */}
+      <SeasonSimulationPanel
+        input={simInput}
+        myRosterId={myRosterId}
+        regWeeks={regWeeks}
+        playoffTeams={playoffTeams}
+        hasProj={hasProj}
+      />
 
       {/* Methodology */}
       <details style={{ ...styles.card }}>
