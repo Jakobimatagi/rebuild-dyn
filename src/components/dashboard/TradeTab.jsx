@@ -512,24 +512,38 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
 
       const playerOpts = [...(team.enriched || [])]
         .sort((a, b) => b.score - a.score)
-        .map((p) => ({
-          key: `player|${p.id}`,
-          searchText: `${p.name} ${p.position}`,
-          render: () => (
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <span style={{ fontSize: 12, color: "#e8e8f0" }}>{p.name}</span>
-                <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 8 }}>
-                  {p.position} · {p.age}yo
+        .map((p) => {
+          // Market trade value alongside the internal grade — the grade is
+          // trailing production, but the pts are what the verdict trades on
+          // (a 95-grade RB can be a 34-pt asset in a superflex market).
+          const val = getAssetTradeValue(
+            { ...p, type: "player" },
+            playerMarketMap,
+            leagueContext,
+            tradeMarket,
+          );
+          return {
+            key: `player|${p.id}`,
+            searchText: `${p.name} ${p.position}`,
+            render: () => (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <span style={{ fontSize: 12, color: "#e8e8f0" }}>{p.name}</span>
+                  <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 8 }}>
+                    {p.position} · {p.age}yo
+                  </span>
+                </div>
+                <span style={{ fontSize: 10, color: "#94a3b8", flexShrink: 0 }}>
+                  ~{val} pts
+                  <span style={{ fontSize: 11, color: p.score >= 70 ? "#00f5a0" : "#94a3b8", marginLeft: 8 }}>
+                    {p.score}
+                  </span>
                 </span>
               </div>
-              <span style={{ fontSize: 11, color: p.score >= 70 ? "#00f5a0" : "#94a3b8", flexShrink: 0 }}>
-                {p.score}
-              </span>
-            </div>
-          ),
-          asset: { ...p, type: "player" },
-        }));
+            ),
+            asset: { ...p, type: "player" },
+          };
+        });
 
       const pickOpts = (team.picks || [])
         .filter((p) => p.round <= 4)
@@ -863,7 +877,8 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
         />
       </div>
 
-      {/* Selected asset chips */}
+      {/* Selected asset chips — each shows its market trade value so the
+          currency the verdict uses is visible per-asset, not just in totals */}
       <div style={{ minHeight: 32 }}>
         {assets.map((asset, i) => (
           <span
@@ -871,6 +886,9 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
             style={chipStyle(accent)}
           >
             {asset.type === "pick" ? asset.label : `${asset.name} (${asset.position})`}
+            <span style={{ color: "#808898", fontSize: 10 }}>
+              {getAssetTradeValue(asset, playerMarketMap, leagueContext, tradeMarket)} pts
+            </span>
             <button
               type="button"
               onClick={() => removeAsset(side, i)}
