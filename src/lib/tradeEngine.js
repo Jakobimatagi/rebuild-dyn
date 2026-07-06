@@ -2,15 +2,16 @@
  * tradeEngine.js
  * Trade market calibration, offer-package building, and suggestion ranking.
  */
-import { POSITION_PRIORITY, IDEAL_PROPORTION } from "../constants";
-import { pickFcValue } from "./marketValue";
+import { POSITION_PRIORITY, IDEAL_PROPORTION } from "../constants.js";
+import { isNflBackupQb } from "./tradeTypes.js";
+import { pickFcValue } from "./marketValue.js";
 import {
   classifyLeagueTeams,
   getRosterNeeds,
   getRosterSurplusPositions,
-} from "./rosterBuilder";
-import { assignPositionRanks } from "./playerGrading";
-import { dynastyForwardMultiplier } from "./dynastyValue";
+} from "./rosterBuilder.js";
+import { assignPositionRanks } from "./playerGrading.js";
+import { dynastyForwardMultiplier } from "./dynastyValue.js";
 
 // ---------------------------------------------------------------------------
 // Asset helpers
@@ -542,6 +543,12 @@ function phaseAdjustment(assets, phase) {
       ) {
         adj += phase === "rebuild" ? 4 : 0;
       }
+      // An NFL backup QB produces zero weekly points while his starter is
+      // healthy. Market price ignores that; a points-now team can't. Rebuilds
+      // can stash the lottery ticket, contenders are paying for dead weight.
+      if (isNflBackupQb(asset)) {
+        adj += phase === "contender" ? -6 : phase === "retool" ? -2 : 0;
+      }
     }
   }
   return adj;
@@ -826,7 +833,15 @@ export function buildTradeRationale({
     const ppg = parseFloat(p.ppg) || 0;
     const archetype = p.archetype || "—";
 
-    if (ownNeeds.has(p.position)) {
+    if (isNflBackupQb(p)) {
+      // Trailing PPG from spot starts is not forward production — never sell
+      // a backup QB as filling a need.
+      concerns.push(
+        `${p.name} is an NFL backup — no weekly points unless the starter goes down${
+          ownPhase === "contender" ? ", a real cost for a title push" : ""
+        }.`,
+      );
+    } else if (ownNeeds.has(p.position)) {
       positives.push(
         `Fills your ${p.position} need: ${p.name} (${archetype}${ppg ? `, ${ppg.toFixed(1)} PPG` : ""}).`,
       );
@@ -839,7 +854,8 @@ export function buildTradeRationale({
     } else if (
       ownPhase === "contender" &&
       PRODUCTIVE_VET_ARCHETYPES.has(archetype) &&
-      ppg >= 11
+      ppg >= 11 &&
+      !isNflBackupQb(p)
     ) {
       positives.push(
         `Plug-and-play starter for the title push: ${p.name} averaged ${ppg.toFixed(1)} PPG.`,
@@ -1083,7 +1099,7 @@ export function suggestBalancingAsset({
 // What-If trade simulation
 // ---------------------------------------------------------------------------
 
-function projectRosterAfterTrade(
+export function projectRosterAfterTrade(
   team,
   outgoingAssets,
   incomingAssets,

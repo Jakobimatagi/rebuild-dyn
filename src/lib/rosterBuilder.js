@@ -3,24 +3,24 @@
  * Builds enriched roster snapshots: per-player scoring, positional breakdowns,
  * needs/surplus analysis, and tradeable/targetable player lists.
  */
-import { POSITION_PRIORITY, IDEAL_PROPORTION } from "../constants";
-import { clamp, playerPctiles, calcScore, draftTierLabel } from "./scoringEngine";
+import { POSITION_PRIORITY, IDEAL_PROPORTION } from "../constants.js";
+import { clamp, playerPctiles, calcScore, draftTierLabel } from "./scoringEngine.js";
 import {
   getVerdict,
   getArchetype,
   getArchetypeTags,
   getConfidence,
   getConvictionTier,
-} from "./playerGrading";
-import { computeBlendedScore } from "./fantasyCalcBlend";
+} from "./playerGrading.js";
+import { computeBlendedScore } from "./fantasyCalcBlend.js";
 import {
   buildPlayerMarketValue,
   getKeepCount,
   estimatePickValue,
-} from "./marketValue";
-import { buildPlayerPrediction } from "./predictionEngine";
+} from "./marketValue.js";
+import { buildPlayerPrediction } from "./predictionEngine.js";
 import { computeDynastyValue } from "./dynastyValue.js";
-import { buildPlayerOcOutlook } from "./ocAdjustment";
+import { buildPlayerOcOutlook } from "./ocAdjustment.js";
 
 // ---------------------------------------------------------------------------
 // Own/acquired draft picks for a roster
@@ -472,6 +472,10 @@ export function buildRosterSnapshot(
       const draftYear = p.draft_year ?? p.metadata?.draft_year ?? null;
 
       const depthOrder = p.depth_chart_order || 2;
+      // The || 2 default keeps situComponent scoring conservative, but flag
+      // whether Sleeper actually reported a slot so consumers (e.g. the
+      // NFL-backup rule in trade analysis) don't treat the default as fact.
+      const depthOrderKnown = p.depth_chart_order != null;
 
       const playerData = {
         position: pos,
@@ -482,6 +486,7 @@ export function buildRosterSnapshot(
         team: p.team || "FA",
         injuryStatus: p.injury_status || null,
         depthOrder,
+        depthOrderKnown,
       };
 
       const pctiles = playerPctiles(
@@ -560,6 +565,7 @@ export function buildRosterSnapshot(
         gp24,
         lastSeasonYear,
         depthOrder,
+        depthOrderKnown,
         peakPctile: pctiles.peak,
         currentPctile: pctiles.current,
         pctileLast: pctiles.pLast,

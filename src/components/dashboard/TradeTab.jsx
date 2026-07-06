@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { POSITION_PRIORITY } from "../../constants";
 import { evaluateTrade, evaluateThreeWayTrade, simulateTrade, buildTradeRationale, suggestBalancingAsset, getAssetTradeValue } from "../../lib/tradeEngine";
+import { buildBlueprintImpact, compareBuildFit } from "../../lib/tradeBlueprintImpact";
+import { buildFairPackages } from "../../lib/tradePackages";
 import { pickSlotLabel } from "../../lib/marketValue";
 import { rankLabel } from "../../lib/playerGrading";
 import { ConvictionChip, ConvictionLegend } from "./OverviewTab";
@@ -424,6 +426,11 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
   const [triIds, setTriIds] = useState(["", "", ""]);
   const [triSends, setTriSends] = useState([[], [], []]);
 
+  // Package Architect — anchor one asset, get fair blueprint-aware packages.
+  const [pbDirection, setPbDirection] = useState("acquire");
+  const [pbAnchor, setPbAnchor] = useState(null);
+  useEffect(() => setPbAnchor(null), [teamAId, teamBId]);
+
   const playerMarketMap = useMemo(
     () =>
       new Map(
@@ -651,6 +658,67 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
       return null;
     }
   }, [sideA, sideB, teamA, teamB, leagueTeams, leagueContext, playerMarketMap]);
+
+  const pbPackages = useMemo(() => {
+    if (!pbAnchor || !teamA || !teamB) return null;
+    try {
+      return buildFairPackages({
+        direction: pbDirection,
+        anchor: pbAnchor,
+        myTeam: teamA,
+        partnerTeam: teamB,
+        leagueContext,
+        tradeMarket,
+        playerMarketMap,
+        rosterPhaseMap,
+        limit: 4,
+      });
+    } catch (err) {
+      console.error("buildFairPackages failed", err);
+      return null;
+    }
+  }, [pbAnchor, pbDirection, teamA, teamB, leagueContext, tradeMarket, playerMarketMap, rosterPhaseMap]);
+
+  const loadPackage = useCallback(
+    (pkg) => {
+      // pkg.get is always [anchor]; pkg.give is the paying side's package.
+      if (pbDirection === "acquire") {
+        setSideA(pkg.give);
+        setSideB(pkg.get);
+      } else {
+        setSideA(pkg.get);
+        setSideB(pkg.give);
+      }
+    },
+    [pbDirection],
+  );
+
+  const blueprintImpact = useMemo(() => {
+    if (!sideA.length || !sideB.length || !teamA || !teamB) return null;
+    try {
+      return {
+        teamA: buildBlueprintImpact({
+          team: teamA,
+          outgoing: sideA,
+          incoming: sideB,
+          leagueContext,
+          playerMarketMap,
+          netValue: result?.teamA?.netValue ?? null,
+        }),
+        teamB: buildBlueprintImpact({
+          team: teamB,
+          outgoing: sideB,
+          incoming: sideA,
+          leagueContext,
+          playerMarketMap,
+          netValue: result?.teamB?.netValue ?? null,
+        }),
+      };
+    } catch (err) {
+      console.error("blueprintImpact failed", err);
+      return null;
+    }
+  }, [sideA, sideB, teamA, teamB, leagueContext, playerMarketMap, result]);
 
   // --- Three-way derived state ---------------------------------------------
   const triTeams = useMemo(
@@ -984,6 +1052,8 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
             </span>
           </div>
 
+          <FairnessBars result={result} blueprintImpact={blueprintImpact} teamA={teamA} teamB={teamB} />
+
           {/* Positional shift badges */}
           {(result.shiftsA?.length > 0 || result.shiftsB?.length > 0 || result.consolidationDiscount) && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
@@ -1030,6 +1100,10 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
         </div>
       )}
 
+      {blueprintImpact && (blueprintImpact.teamA || blueprintImpact.teamB) && (
+        <BlueprintImpactPanel impact={blueprintImpact} teamA={teamA} teamB={teamB} />
+      )}
+
       {(rationaleA || rationaleB) && (
         <TradeRationale teamA={teamA} teamB={teamB} rationaleA={rationaleA} rationaleB={rationaleB} />
       )}
@@ -1037,6 +1111,23 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
       {balance && <BalanceSuggestion balance={balance} />}
 
       {simulation && <PostTradeImpact simulation={simulation} />}
+
+      {teamA && teamB && (
+        <PackageArchitect
+          teamA={teamA}
+          teamB={teamB}
+          direction={pbDirection}
+          setDirection={(d) => {
+            setPbDirection(d);
+            setPbAnchor(null);
+          }}
+          anchor={pbAnchor}
+          setAnchor={setPbAnchor}
+          anchorOpts={pbDirection === "acquire" ? assetOptsB : assetOptsA}
+          packages={pbPackages}
+          onLoad={loadPackage}
+        />
+      )}
       </>
       )}
 
@@ -1511,6 +1602,435 @@ function PostTradeImpact({ simulation }) {
           <NeedSurplusDelta side={simulation.teamB} />
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Fairness bars — two readings: market value + blueprint/build fit.
+// Lean is on [-1, 1]: positive tilts toward team A (left), negative toward
+// team B (right). The fill grows from the center tick toward the favored side.
+// ---------------------------------------------------------------------------
+
+function LeanBar({ label, lean, verdictText }) {
+  const pct = Math.min(50, Math.abs(lean) * 50);
+  const favorsA = lean > 0.02;
+  const favorsB = lean < -0.02;
+  const fillColor = favorsA ? "#ffd84d" : favorsB ? "#00f5a0" : "#94a3b8";
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "64px 1fr 170px", gap: 10, alignItems: "center" }}>
+      <div style={{ fontSize: 9, color: "#808898", letterSpacing: 1.5 }}>{label}</div>
+      <div style={{ position: "relative", height: 8, background: "rgba(255,255,255,0.06)", borderRadius: 4 }}>
+        <div style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: "rgba(255,255,255,0.3)" }} />
+        {(favorsA || favorsB) && (
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              bottom: 0,
+              left: favorsA ? `${50 - pct}%` : "50%",
+              width: `${pct}%`,
+              background: fillColor,
+              borderRadius: 4,
+              opacity: 0.85,
+            }}
+          />
+        )}
+      </div>
+      <div style={{ fontSize: 10, color: fillColor, textAlign: "right" }}>{verdictText}</div>
+    </div>
+  );
+}
+
+function FairnessBars({ result, blueprintImpact, teamA, teamB }) {
+  // Value reading: team A receives sideBValue and sends sideAValue, so a
+  // positive gap favors A. Full tilt at the lopsided threshold (42% gap).
+  const maxVal = Math.max(result.sideAValue, result.sideBValue, 1);
+  const gapFrac = (result.sideBValue - result.sideAValue) / maxVal;
+  const valueLean = Math.max(-1, Math.min(1, gapFrac / 0.42));
+  const valueText =
+    Math.abs(gapFrac) <= 0.07
+      ? "even value"
+      : `favors ${gapFrac > 0 ? teamA.label : teamB.label}`;
+
+  const build = compareBuildFit(blueprintImpact?.teamA, blueprintImpact?.teamB);
+  const buildText = build
+    ? build.tilt === "even"
+      ? "fits both builds evenly"
+      : `${build.strength === "strong" ? "strongly " : ""}fits ${
+          build.tilt === "A" ? teamA.label : teamB.label
+        } (${build.deltaA >= 0 ? "+" : ""}${build.deltaA} / ${build.deltaB >= 0 ? "+" : ""}${build.deltaB})`
+    : null;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "64px 1fr 170px", gap: 10 }}>
+        <span />
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9 }}>
+          <span style={{ color: "#ffd84d" }}>◂ {teamA.label}</span>
+          <span style={{ color: "#00f5a0" }}>{teamB.label} ▸</span>
+        </div>
+        <span />
+      </div>
+      <LeanBar label="VALUE" lean={valueLean} verdictText={valueText} />
+      {build && <LeanBar label="BUILD FIT" lean={build.lean} verdictText={buildText} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Blueprint Impact — what the trade does to each team's archetype identity
+// ---------------------------------------------------------------------------
+
+const ALIGN_TAG_COLOR = { core: "#00f5a0", fit: "#94a3b8", off: "#ff6b35" };
+
+function BlueprintChip({ match, bold }) {
+  if (!match) return <span style={{ fontSize: 10, color: "#606878" }}>—</span>;
+  return (
+    <span
+      style={{
+        fontSize: 10,
+        padding: "2px 8px",
+        borderRadius: 2,
+        color: match.color || "#a0a8c0",
+        background: `${match.color || "#888"}18`,
+        border: `1px solid ${match.color || "#888"}44`,
+        letterSpacing: 1,
+        fontWeight: bold ? 700 : 400,
+      }}
+    >
+      {match.label} {match.fit}%
+    </span>
+  );
+}
+
+function BlueprintImpactCard({ impact, label, accent }) {
+  if (!impact) return null;
+  const { before, after, fitDelta, archetypeChanged, leaningToward, moveType, signalsGained, signalsLost, incomingAlignment, outgoingStarters } = impact;
+  const afterOfBefore = after.matches.find((m) => m.id === before.top.id);
+  const deltaTone = fitDelta > 0 ? "#00f5a0" : fitDelta < 0 ? "#ff6b35" : "#a0a8c0";
+
+  return (
+    <div
+      style={{
+        padding: 12,
+        background: "rgba(255,255,255,0.03)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: 3,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+        <div style={{ fontSize: 10, color: accent, letterSpacing: 1.5, fontWeight: 600 }}>
+          {label.toUpperCase()}
+        </div>
+        <span style={styles.tag(moveType.color)}>{moveType.label}</span>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+        <BlueprintChip match={before.top} />
+        <span style={{ fontSize: 11, color: "#606878" }}>→</span>
+        <BlueprintChip match={archetypeChanged ? after.top : afterOfBefore} bold={archetypeChanged} />
+        {archetypeChanged && (
+          <span style={{ fontSize: 9, color: "#ffd84d", letterSpacing: 1 }}>IDENTITY SHIFT</span>
+        )}
+        {fitDelta !== 0 && (
+          <span style={{ fontSize: 10, color: deltaTone }}>
+            {fitDelta > 0 ? `▲ ${fitDelta}` : `▼ ${Math.abs(fitDelta)}`} {before.top.label} fit
+          </span>
+        )}
+        {leaningToward && (
+          <span style={{ fontSize: 9, color: "#808898" }}>
+            leaning {leaningToward.label} {leaningToward.fit}%
+          </span>
+        )}
+      </div>
+
+      <div style={{ fontSize: 10, color: moveType.color, marginBottom: 6 }}>{moveType.detail}</div>
+
+      {(signalsGained.length > 0 || signalsLost.length > 0) && (
+        <div style={{ fontSize: 10, color: "#a0a8c0", lineHeight: 1.6, marginBottom: 6 }}>
+          {signalsGained.slice(0, 2).map((s) => (
+            <div key={s} style={{ color: "#00f5a0" }}>+ {s}</div>
+          ))}
+          {signalsLost.slice(0, 2).map((s) => (
+            <div key={s} style={{ color: "#ff6b35" }}>− {s}</div>
+          ))}
+        </div>
+      )}
+
+      {incomingAlignment.length > 0 && (
+        <div style={{ fontSize: 10, color: "#a0a8c0", lineHeight: 1.7 }}>
+          {incomingAlignment.map(({ player, tag, reason, fillsNeed, roleNote, roleTone }) => (
+            <div key={player.id} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ color: "#d1d7ea" }}>{player.name}</span>
+              <span style={styles.tag(ALIGN_TAG_COLOR[tag] || "#94a3b8")}>{tag}</span>
+              {roleNote && (
+                <span style={{ color: roleTone === "good" ? "#00f5a0" : "#ff9f6b" }}>{roleNote}</span>
+              )}
+              {reason && <span style={{ color: "#606878" }}>{reason}</span>}
+              {fillsNeed && <span style={{ color: "#00f5a0" }}>fills a {player.position} need</span>}
+              {player.dynastyValue?.tier && (
+                <span style={{ color: "#7b8cff" }}>
+                  {player.dynastyValue.tier}
+                  {player.dynastyValue.confidence ? ` · ${player.dynastyValue.confidence} conf` : ""}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {outgoingStarters?.length > 0 && (
+        <div style={{ fontSize: 10, color: "#ff9f6b", marginTop: 6 }}>
+          Sends away {outgoingStarters.length > 1 ? "starters" : "a starter"}:{" "}
+          {outgoingStarters.map((x) => `${x.player.name} (${x.role.slot})`).join(", ")}
+        </div>
+      )}
+
+      {before.isMature && (
+        <div style={{ fontSize: 9, color: "#606878", marginTop: 8, letterSpacing: 0.3 }}>
+          Established roster — archetype read is directional, not a draft plan.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BlueprintImpactPanel({ impact, teamA, teamB }) {
+  return (
+    <div
+      style={{
+        marginTop: 16,
+        padding: 16,
+        background: "rgba(255,216,77,0.04)",
+        border: "1px solid rgba(255,216,77,0.18)",
+        borderRadius: 4,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: 2.5,
+          color: "#ffd84d",
+          textTransform: "uppercase",
+          marginBottom: 12,
+          fontWeight: 600,
+        }}
+      >
+        Blueprint Impact — What This Move Means
+      </div>
+      <div className="dyn-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <BlueprintImpactCard impact={impact.teamA} label={teamA.label} accent="#ffd84d" />
+        <BlueprintImpactCard impact={impact.teamB} label={teamB.label} accent="#00f5a0" />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Package Architect — anchor one asset, get fair blueprint-aware packages
+// ---------------------------------------------------------------------------
+
+const TRADE_TYPE_COLOR = {
+  tierDown: "#ffd84d",
+  tierUp: "#ffd84d",
+  lateralPivot: "#7b8cff",
+  vetForPick: "#ff9f6b",
+  pickForVet: "#00f5a0",
+  rookieFever: "#c084fc",
+  timeArbitrage: "#c084fc",
+  twoForOne: "#64b5f6",
+  oneForTwo: "#64b5f6",
+  handcuff: "#7fff7f",
+  pickAccumulation: "#ff9f6b",
+  winNowPush: "#00f5a0",
+  youthPivot: "#ff9f6b",
+  valueSwap: "#94a3b8",
+};
+
+function PackageAssetChip({ asset, tv, notes }) {
+  const name = asset.type === "pick" ? asset.label : asset.name;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 10 }}>
+      <span style={{ color: "#d1d7ea" }}>{name}</span>
+      {tv != null && <span style={{ color: "#606878" }}>~{Math.round(tv)} pts</span>}
+      {notes.map(({ text, color }) => (
+        <span key={text} style={{ color }}>{text}</span>
+      ))}
+    </div>
+  );
+}
+
+function PackageCard({ pkg, direction, teamB, onLoad }) {
+  const color = TRADE_TYPE_COLOR[pkg.tradeType.id] || "#94a3b8";
+  // In acquire mode the package pieces flow to the PARTNER; in ship mode they
+  // flow to YOU — the fit annotations change owner accordingly.
+  const receiverIsMe = direction === "ship";
+  const who = receiverIsMe ? "your" : "their";
+  const pieceNotes = (piece) => {
+    const notes = [];
+    if (piece.asset.type !== "player") return notes;
+    if (piece.nflBackup) notes.push({ text: "NFL backup", color: "#ff9f6b" });
+    else if (piece.startsForReceiver) notes.push({ text: `starts for ${receiverIsMe ? "you" : "them"}`, color: "#00f5a0" });
+    if (piece.recvTag === "off") notes.push({ text: `off-plan for ${receiverIsMe ? "you" : "them"}`, color: "#ff9f6b" });
+    else if (piece.recvTag === "core") notes.push({ text: `${who} blueprint core`, color: "#00f5a0" });
+    if (piece.fillsNeed) notes.push({ text: `fills ${who} ${piece.asset.position} need`, color: "#00f5a0" });
+    if (piece.giveTag === "off") notes.push({ text: receiverIsMe ? "their sell candidate" : "your sell candidate", color: "#7b8cff" });
+    return notes;
+  };
+  const youSend = direction === "acquire" ? pkg.pieces : null;
+  const youGet = direction === "acquire" ? pkg.get : pkg.pieces;
+
+  return (
+    <div
+      style={{
+        padding: 12,
+        background: "rgba(255,255,255,0.03)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: 3,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <span style={styles.tag(color)}>{pkg.tradeType.label}</span>
+        <span style={styles.tag(pkg.fairness === "Fair" ? "#00f5a0" : pkg.fairness === "Slight edge" ? "#ffd84d" : "#ff9f6b")}>
+          {pkg.fairness}
+        </span>
+      </div>
+      <div style={{ fontSize: 9, color: "#808898", marginBottom: 8 }}>
+        {pkg.tradeType.meta?.objective} · best time: {pkg.tradeType.meta?.bestTime}
+      </div>
+
+      <div className="dyn-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 9, color: "#ffd84d", letterSpacing: 1.5, marginBottom: 4 }}>YOU SEND</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {(youSend || pkg.get.map((a) => ({ asset: a, tv: null }))).map((piece) => (
+              <PackageAssetChip
+                key={piece.asset.type === "pick" ? piece.asset.label : piece.asset.id}
+                asset={piece.asset}
+                tv={piece.tv}
+                notes={youSend ? pieceNotes(piece) : []}
+              />
+            ))}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 9, color: "#00f5a0", letterSpacing: 1.5, marginBottom: 4 }}>YOU GET</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {(direction === "acquire" ? pkg.get.map((a) => ({ asset: a, tv: null })) : youGet).map((piece) => (
+              <PackageAssetChip
+                key={piece.asset.type === "pick" ? piece.asset.label : piece.asset.id}
+                asset={piece.asset}
+                tv={piece.tv}
+                notes={direction === "acquire" ? [] : pieceNotes(piece)}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+        <div style={{ fontSize: 10, color: "#a0a8c0" }}>
+          Your net:{" "}
+          <span style={{ color: pkg.myNet >= 0 ? "#00f5a0" : "#ff6b35" }}>
+            {pkg.myNet >= 0 ? "+" : ""}{pkg.myNet}
+          </span>
+          {" · "}{teamB.label}:{" "}
+          <span style={{ color: pkg.partnerNet >= 0 ? "#00f5a0" : "#ff6b35" }}>
+            {pkg.partnerNet >= 0 ? "+" : ""}{pkg.partnerNet}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onLoad}
+          style={{
+            background: "rgba(0,245,160,0.08)",
+            border: "1px solid rgba(0,245,160,0.35)",
+            color: "#00f5a0",
+            fontSize: 10,
+            letterSpacing: 1,
+            padding: "4px 10px",
+            borderRadius: 3,
+            cursor: "pointer",
+          }}
+        >
+          LOAD TRADE →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PackageArchitect({ teamA, teamB, direction, setDirection, anchor, setAnchor, anchorOpts, packages, onLoad }) {
+  const anchorName = anchor ? (anchor.type === "pick" ? anchor.label : anchor.name) : null;
+  return (
+    <div
+      style={{
+        marginTop: 16,
+        padding: 16,
+        background: "rgba(0,245,160,0.03)",
+        border: "1px solid rgba(0,245,160,0.15)",
+        borderRadius: 4,
+      }}
+    >
+      <div style={{ fontSize: 10, letterSpacing: 2.5, color: "#00f5a0", textTransform: "uppercase", marginBottom: 4, fontWeight: 600 }}>
+        Package Architect — Fair Trade Builder
+      </div>
+      <div style={{ fontSize: 10, color: "#808898", marginBottom: 10 }}>
+        Anchor one asset and get fair, blueprint-aware packages — every suggestion is priced by the
+        same engine as the verdict above and labeled with its dynasty trade type.
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        {[
+          { id: "acquire", label: `TARGET ON ${teamB.label.toUpperCase()}` },
+          { id: "ship", label: `SHIP FROM ${teamA.label.toUpperCase()}` },
+        ].map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => setDirection(m.id)}
+            style={{
+              background: direction === m.id ? "rgba(0,245,160,0.12)" : "transparent",
+              border: `1px solid ${direction === m.id ? "rgba(0,245,160,0.45)" : "rgba(255,255,255,0.12)"}`,
+              color: direction === m.id ? "#00f5a0" : "#808898",
+              fontSize: 10,
+              letterSpacing: 1,
+              padding: "5px 10px",
+              borderRadius: 3,
+              cursor: "pointer",
+            }}
+          >
+            {m.label}
+          </button>
+        ))}
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <ComboBox
+            options={anchorOpts.filter((o) => !o.isHeader)}
+            onSelect={(opt) => opt.asset && setAnchor(opt.asset)}
+            placeholder={
+              anchorName ||
+              (direction === "acquire"
+                ? `Who do you want from ${teamB.label}?`
+                : `Who are you shopping from ${teamA.label}?`)
+            }
+            accent="#00f5a0"
+          />
+        </div>
+      </div>
+
+      {anchor && packages && packages.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {packages.map((pkg, i) => (
+            <PackageCard key={i} pkg={pkg} direction={direction} teamB={teamB} onLoad={() => onLoad(pkg)} />
+          ))}
+        </div>
+      )}
+      {anchor && packages && packages.length === 0 && (
+        <div style={{ fontSize: 10, color: "#808898" }}>
+          No fair package found for {anchorName} — the value gap is too wide for a 1–3 piece deal.
+        </div>
+      )}
     </div>
   );
 }

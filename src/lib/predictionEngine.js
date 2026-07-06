@@ -11,7 +11,7 @@
  *   - FantasyCalc                        → already blended upstream in scoring
  */
 
-import { POSITION_PRIORITY } from '../constants';
+import { POSITION_PRIORITY } from '../constants.js';
 
 // ---------------------------------------------------------------------------
 // Constants
