@@ -1626,52 +1626,43 @@ function PostTradeImpact({ simulation }) {
 
 // ---------------------------------------------------------------------------
 // Fairness bars — two readings: market value + blueprint/build fit.
-// Lean is on [-1, 1]: positive tilts toward team A (left), negative toward
-// team B (right). The fill grows from the center tick toward the favored side.
+// Each bar is a proportional split: team A's share (yellow, from the left)
+// against team B's (green). A 50/50 split at the center tick = perfectly
+// fair; a 73/27 split is visibly lopsided at a glance.
 // ---------------------------------------------------------------------------
 
-function LeanBar({ label, lean, verdictText }) {
-  const pct = Math.min(50, Math.abs(lean) * 50);
-  const favorsA = lean > 0.02;
-  const favorsB = lean < -0.02;
-  const fillColor = favorsA ? "#ffd84d" : favorsB ? "#00f5a0" : "#94a3b8";
+function SplitBar({ label, shareA, verdictText, textColor }) {
+  const pct = Math.max(2, Math.min(98, shareA * 100));
   return (
     <div style={{ display: "grid", gridTemplateColumns: "64px 1fr 170px", gap: 10, alignItems: "center" }}>
       <div style={{ fontSize: 9, color: "#808898", letterSpacing: 1.5 }}>{label}</div>
-      <div style={{ position: "relative", height: 8, background: "rgba(255,255,255,0.06)", borderRadius: 4 }}>
-        <div style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: "rgba(255,255,255,0.3)" }} />
-        {(favorsA || favorsB) && (
-          <div
-            style={{
-              position: "absolute",
-              top: 0,
-              bottom: 0,
-              left: favorsA ? `${50 - pct}%` : "50%",
-              width: `${pct}%`,
-              background: fillColor,
-              borderRadius: 4,
-              opacity: 0.85,
-            }}
-          />
-        )}
+      <div style={{ position: "relative", height: 10, borderRadius: 5, overflow: "hidden", background: "rgba(255,255,255,0.06)" }}>
+        <div style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: `${pct}%`, background: "#ffd84d", opacity: 0.8 }} />
+        <div style={{ position: "absolute", top: 0, bottom: 0, left: `${pct}%`, right: 0, background: "#00f5a0", opacity: 0.8 }} />
+        {/* split divider */}
+        <div style={{ position: "absolute", top: 0, bottom: 0, left: `calc(${pct}% - 1px)`, width: 2, background: "#0d0d18" }} />
+        {/* fair line — dead center */}
+        <div style={{ position: "absolute", top: -1, bottom: -1, left: "50%", width: 2, background: "rgba(255,255,255,0.85)" }} />
       </div>
-      <div style={{ fontSize: 10, color: fillColor, textAlign: "right" }}>{verdictText}</div>
+      <div style={{ fontSize: 10, color: textColor, textAlign: "right" }}>{verdictText}</div>
     </div>
   );
 }
 
 function FairnessBars({ result, blueprintImpact, teamA, teamB }) {
-  // Value reading: team A receives sideBValue and sends sideAValue, so a
-  // positive gap favors A. Full tilt at the lopsided threshold (42% gap).
-  const maxVal = Math.max(result.sideAValue, result.sideBValue, 1);
-  const gapFrac = (result.sideBValue - result.sideAValue) / maxVal;
-  const valueLean = Math.max(-1, Math.min(1, gapFrac / 0.42));
-  const valueText =
-    Math.abs(gapFrac) <= 0.07
-      ? "even value"
-      : `favors ${gapFrac > 0 ? teamA.label : teamB.label}`;
+  // Value reading: each side's share of the total value changing hands.
+  // Team A receives sideBValue, team B receives sideAValue.
+  const totalVal = result.sideAValue + result.sideBValue;
+  const valueShareA = totalVal > 0 ? result.sideBValue / totalVal : 0.5;
+  const valuePct = Math.round(valueShareA * 100);
+  const valueEven = Math.abs(valueShareA - 0.5) <= 0.035;
+  const valueText = valueEven
+    ? "even value"
+    : `${valueShareA > 0.5 ? teamA.label : teamB.label} gets ${Math.max(valuePct, 100 - valuePct)}% of the value`;
+  const valueColor = valueEven ? "#94a3b8" : valueShareA > 0.5 ? "#ffd84d" : "#00f5a0";
 
   const build = compareBuildFit(blueprintImpact?.teamA, blueprintImpact?.teamB);
+  const buildShareA = build ? 0.5 + build.lean / 2 : 0.5;
   const buildText = build
     ? build.tilt === "even"
       ? "fits both builds evenly"
@@ -1679,6 +1670,7 @@ function FairnessBars({ result, blueprintImpact, teamA, teamB }) {
           build.tilt === "A" ? teamA.label : teamB.label
         } (${build.deltaA >= 0 ? "+" : ""}${build.deltaA} / ${build.deltaB >= 0 ? "+" : ""}${build.deltaB})`
     : null;
+  const buildColor = build && build.tilt !== "even" ? (build.tilt === "A" ? "#ffd84d" : "#00f5a0") : "#94a3b8";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
@@ -1690,8 +1682,8 @@ function FairnessBars({ result, blueprintImpact, teamA, teamB }) {
         </div>
         <span />
       </div>
-      <LeanBar label="VALUE" lean={valueLean} verdictText={valueText} />
-      {build && <LeanBar label="BUILD FIT" lean={build.lean} verdictText={buildText} />}
+      <SplitBar label="VALUE" shareA={valueShareA} verdictText={valueText} textColor={valueColor} />
+      {build && <SplitBar label="BUILD FIT" shareA={buildShareA} verdictText={buildText} textColor={buildColor} />}
     </div>
   );
 }
