@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { POSITION_PRIORITY } from "../../constants";
 import { evaluateTrade, evaluateThreeWayTrade, simulateTrade, buildTradeRationale, suggestBalancingAsset, getAssetTradeValue } from "../../lib/tradeEngine";
 import { buildBlueprintImpact, compareBuildFit } from "../../lib/tradeBlueprintImpact";
-import { buildFairPackages } from "../../lib/tradePackages";
+import { buildFairPackages, suggestBalancePackages } from "../../lib/tradePackages";
 import { pickSlotLabel } from "../../lib/marketValue";
 import { rankLabel } from "../../lib/playerGrading";
 import { ConvictionChip, ConvictionLegend } from "./OverviewTab";
@@ -654,6 +654,39 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
     });
   }, [result, sideA, sideB, teamA, teamB, leagueContext, tradeMarket, playerMarketMap]);
 
+  // Multi-asset balance packages that bring the WHOLE trade into the fair
+  // band; falls back to the single-asset suggestion when none exists.
+  const balancePkgs = useMemo(() => {
+    if (!result || !sideA.length || !sideB.length || !teamA || !teamB) return null;
+    try {
+      return suggestBalancePackages({
+        sideA,
+        sideB,
+        teamA,
+        teamB,
+        leagueContext,
+        tradeMarket,
+        playerMarketMap,
+        rosterPhaseMap,
+      });
+    } catch (err) {
+      console.error("suggestBalancePackages failed", err);
+      return null;
+    }
+  }, [result, sideA, sideB, teamA, teamB, leagueContext, tradeMarket, playerMarketMap, rosterPhaseMap]);
+
+  const addBalancePackage = useCallback(
+    (pkg) => {
+      if (!balancePkgs?.addTo) return;
+      const setter = balancePkgs.addTo === "A" ? setSideA : setSideB;
+      setter((prev) => {
+        const keys = new Set(prev.map((a) => (a.type === "pick" ? a.label : a.id)));
+        return [...prev, ...pkg.assets.filter((a) => !keys.has(a.type === "pick" ? a.label : a.id))];
+      });
+    },
+    [balancePkgs],
+  );
+
   const simulation = useMemo(() => {
     if (!sideA.length || !sideB.length || !teamA || !teamB) return null;
     if (!leagueTeams?.length) return null;
@@ -1126,7 +1159,11 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
         <TradeRationale teamA={teamA} teamB={teamB} rationaleA={rationaleA} rationaleB={rationaleB} />
       )}
 
-      {balance && <BalanceSuggestion balance={balance} />}
+      {balancePkgs?.alreadyFair ? null : balancePkgs?.packages?.length ? (
+        <BalancePackagesPanel suggest={balancePkgs} onAdd={addBalancePackage} />
+      ) : (
+        balance && <BalanceSuggestion balance={balance} />
+      )}
 
       {simulation && <PostTradeImpact simulation={simulation} />}
 
@@ -1373,6 +1410,96 @@ function BalanceSuggestion({ balance }) {
             No clean single-asset balance found — consider restructuring the package.
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Multi-asset balance packages: each card is a set of add-ons that provably
+// brings the whole trade into the fair band (validated via evaluateTrade).
+function BalancePackagesPanel({ suggest, onAdd }) {
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        padding: 14,
+        background: "rgba(255,216,77,0.05)",
+        border: "1px solid rgba(255,216,77,0.20)",
+        borderRadius: 4,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: 2.5,
+          color: "#ffd84d",
+          textTransform: "uppercase",
+          marginBottom: 8,
+          fontWeight: 600,
+        }}
+      >
+        Balance the trade
+      </div>
+      <div style={{ fontSize: 11, color: "#d1d7ea", marginBottom: 10, lineHeight: 1.5 }}>
+        Value gap of <strong style={{ color: "#ffd84d" }}>{suggest.gap}</strong> favors{" "}
+        <strong style={{ color: "#fff" }}>{suggest.adderLabel}</strong> — these add-ons from{" "}
+        <strong style={{ color: "#fff" }}>{suggest.adderLabel}</strong> make it fair:
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {suggest.packages.map((pkg, i) => (
+          <div
+            key={i}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 10,
+              padding: "8px 12px",
+              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              borderRadius: 3,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 220 }}>
+              {pkg.pieces.map((piece) => {
+                const name = piece.asset.type === "pick" ? piece.asset.label : piece.asset.name;
+                return (
+                  <div key={piece.asset.type === "pick" ? piece.asset.label : piece.asset.id} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 10 }}>
+                    <span style={{ color: "#d1d7ea", fontWeight: 600 }}>+ {name}</span>
+                    <span style={{ color: "#606878" }}>~{Math.round(piece.tv)} pts</span>
+                    {piece.fillsNeed && <span style={{ color: "#00f5a0" }}>fills their {piece.asset.position} need</span>}
+                    {piece.recvTag === "core" && <span style={{ color: "#00f5a0" }}>their blueprint core</span>}
+                    {piece.giveTag === "off" && <span style={{ color: "#7b8cff" }}>sell candidate anyway</span>}
+                    {piece.nflBackup && <span style={{ color: "#ff9f6b" }}>NFL backup</span>}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={styles.tag(pkg.fairness === "Fair" ? "#00f5a0" : "#ffd84d")}>{pkg.fairness}</span>
+              <span style={{ fontSize: 9, color: "#808898" }}>
+                nets {pkg.netA >= 0 ? "+" : ""}{pkg.netA} / {pkg.netB >= 0 ? "+" : ""}{pkg.netB}
+              </span>
+              <button
+                type="button"
+                onClick={() => onAdd(pkg)}
+                style={{
+                  background: "rgba(0,245,160,0.08)",
+                  border: "1px solid rgba(0,245,160,0.35)",
+                  color: "#00f5a0",
+                  fontSize: 10,
+                  letterSpacing: 1,
+                  padding: "4px 10px",
+                  borderRadius: 3,
+                  cursor: "pointer",
+                }}
+              >
+                ADD TO TRADE →
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
