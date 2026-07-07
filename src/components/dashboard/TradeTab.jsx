@@ -119,6 +119,43 @@ function ComboBox({ options, onSelect, placeholder, accent = "#00f5a0" }) {
 }
 
 // ---------------------------------------------------------------------------
+// Collapsible section — shared chrome for the secondary verdict panels so the
+// core verdict reads at a glance and the deep-dives expand on demand.
+// ---------------------------------------------------------------------------
+
+function CollapsibleSection({ title, accent, background, borderColor, badge, open, onToggle, children }) {
+  return (
+    <div style={{ marginTop: 14, background, border: `1px solid ${borderColor}`, borderRadius: 4 }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          width: "100%",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 10,
+          background: "none",
+          border: "none",
+          padding: "12px 14px",
+          cursor: "pointer",
+          textAlign: "left",
+        }}
+      >
+        <span style={{ fontSize: 10, letterSpacing: 2.5, color: accent, textTransform: "uppercase", fontWeight: 600 }}>
+          {title}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {badge}
+          <span style={{ fontSize: 10, color: "#808898" }}>{open ? "▾" : "▸"}</span>
+        </span>
+      </button>
+      {open && <div style={{ padding: "0 14px 14px" }}>{children}</div>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Positional shift badges — shows what each team is doing at each position
 // ---------------------------------------------------------------------------
 
@@ -246,6 +283,31 @@ function AnonymizeToggle({ anonymize, onChange }) {
       }}
     >
       {anonymize ? "Names Hidden" : "Hide Names"}
+    </button>
+  );
+}
+
+function HeaderButton({ label, title, onClick, disabled }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      style={{
+        fontSize: 9,
+        letterSpacing: 1.5,
+        padding: "5px 12px",
+        cursor: disabled ? "default" : "pointer",
+        textTransform: "uppercase",
+        fontWeight: 700,
+        background: "transparent",
+        color: disabled ? "#4a5060" : "#808898",
+        border: `1px solid ${disabled ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.12)"}`,
+        borderRadius: 3,
+      }}
+    >
+      {label}
     </button>
   );
 }
@@ -429,7 +491,24 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
   // Package Architect — anchor one asset, get fair blueprint-aware packages.
   const [pbDirection, setPbDirection] = useState("acquire");
   const [pbAnchor, setPbAnchor] = useState(null);
-  useEffect(() => setPbAnchor(null), [teamAId, teamBId]);
+  // Quick-add pick whose owner is neither selected team — held for an explicit
+  // "replace which side?" choice instead of silently wiping a built side.
+  const [pendingQuickAdd, setPendingQuickAdd] = useState(null);
+  useEffect(() => { setPbAnchor(null); setPendingQuickAdd(null); }, [teamAId, teamBId]);
+
+  // Secondary verdict panels — collapsed by default so the verdict reads at
+  // a glance; open/closed lives here so it survives panels remounting.
+  const [openPanels, setOpenPanels] = useState({
+    blueprint: false,
+    rationale: false,
+    balance: false,
+    impact: false,
+    architect: false,
+  });
+  const togglePanel = useCallback(
+    (k) => setOpenPanels((p) => ({ ...p, [k]: !p[k] })),
+    [],
+  );
 
   const playerMarketMap = useMemo(
     () =>
@@ -439,6 +518,47 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
         ),
       ),
     [leagueTeams],
+  );
+
+  // Global quick-add pool — every rostered player in the league, tagged with
+  // the owning team so a pick can route to (or auto-select) the right side.
+  // Deliberately independent of the selected teams so the list isn't rebuilt
+  // on every team change.
+  const playerOwnerOptions = useMemo(
+    () =>
+      (leagueTeams || [])
+        .flatMap((t) => (t.enriched || []).map((p) => ({ p, team: t })))
+        .sort((a, b) => b.p.score - a.p.score)
+        .map(({ p, team }) => {
+          const val = getAssetTradeValue(
+            { ...p, type: "player" },
+            playerMarketMap,
+            leagueContext,
+            tradeMarket,
+          );
+          return {
+            key: `qa|${p.id}`,
+            searchText: `${p.name} ${p.position} ${team.label}`,
+            asset: { ...p, type: "player" },
+            ownerId: String(team.rosterId),
+            ownerLabel: team.label,
+            render: () => (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                <div>
+                  <span style={{ fontSize: 12, color: "#e8e8f0" }}>{p.name}</span>
+                  <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 8 }}>
+                    {p.position} · {p.age}yo
+                  </span>
+                </div>
+                <span style={{ fontSize: 10, color: "#94a3b8", flexShrink: 0 }}>
+                  ~{val} pts
+                  <span style={{ fontSize: 9, color: "#7b8cff", marginLeft: 8 }}>{team.label}</span>
+                </span>
+              </div>
+            ),
+          };
+        }),
+    [leagueTeams, playerMarketMap, leagueContext, tradeMarket],
   );
 
   // Selected-team objects carry an anonymized `label` when the toggle is on, so
@@ -470,6 +590,59 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
     const setter = side === "A" ? setSideA : setSideB;
     setter((prev) => prev.filter((_, i) => i !== index));
   }, []);
+
+  // Global quick-add routing — land the picked player on the side that owns
+  // him, auto-selecting teams as needed. Never silently wipes a built side.
+  const quickAddPlayer = useCallback(
+    (opt) => {
+      if (!opt?.asset) return;
+      const { asset, ownerId, ownerLabel } = opt;
+      if (ownerId === teamAId) { addAsset("A", asset); return; }
+      if (ownerId === teamBId) { addAsset("B", asset); return; }
+      if (!teamAId) { setTeamAId(ownerId); setSideA([asset]); return; }
+      if (!teamBId) { setTeamBId(ownerId); setSideB([asset]); return; }
+      // Both teams set and the owner is neither: replace an empty side
+      // silently (nothing is lost), otherwise ask which side to replace.
+      if (!sideB.length) { setTeamBId(ownerId); setSideB([asset]); return; }
+      if (!sideA.length) { setTeamAId(ownerId); setSideA([asset]); return; }
+      setPendingQuickAdd({ asset, ownerId, ownerLabel });
+    },
+    [teamAId, teamBId, sideA.length, sideB.length, addAsset],
+  );
+
+  const resolvePendingQuickAdd = useCallback(
+    (side) => {
+      if (!pendingQuickAdd) return;
+      const { asset, ownerId } = pendingQuickAdd;
+      if (side === "A") {
+        setTeamAId(ownerId);
+        setSideA([asset]);
+      } else {
+        setTeamBId(ownerId);
+        setSideB([asset]);
+      }
+      setPendingQuickAdd(null);
+    },
+    [pendingQuickAdd],
+  );
+
+  const swapSides = useCallback(() => {
+    setTeamAId(teamBId);
+    setTeamBId(teamAId);
+    setSideA(sideB);
+    setSideB(sideA);
+  }, [teamAId, teamBId, sideA, sideB]);
+
+  const clearTrade = useCallback(() => {
+    if (mode === "three") {
+      setTriSends([[], [], []]);
+      return;
+    }
+    setSideA([]);
+    setSideB([]);
+    setPbAnchor(null);
+    setPendingQuickAdd(null);
+  }, [mode]);
 
   // Team combobox options
   const teamOptions = useMemo(
@@ -1042,7 +1215,25 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
         <div style={{ ...styles.sectionLabel, marginBottom: 0 }}>
           Trade Calculator
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {mode === "two" && (
+            <HeaderButton
+              label="Swap Sides"
+              title="Swap Team A and Team B — assets move with their team"
+              onClick={swapSides}
+              disabled={!teamAId || !teamBId}
+            />
+          )}
+          <HeaderButton
+            label="Clear Trade"
+            title="Remove all assets from the trade — teams stay selected"
+            onClick={clearTrade}
+            disabled={
+              mode === "two"
+                ? !sideA.length && !sideB.length
+                : triSends.every((s) => !s.length)
+            }
+          />
           <AnonymizeToggle anonymize={anonymize} onChange={setAnonymize} />
           <ModeToggle mode={mode} onChange={setMode} />
         </div>
@@ -1050,6 +1241,70 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
 
       {mode === "two" && (
       <>
+      {/* Quick add — search any rostered player; the owning team auto-fills */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 10, color: "#c8cfe3", marginBottom: 4, letterSpacing: 1 }}>
+          QUICK ADD — ANY PLAYER
+        </div>
+        <ComboBox
+          options={playerOwnerOptions}
+          onSelect={quickAddPlayer}
+          placeholder="Search any player in the league..."
+          accent="#7b8cff"
+        />
+        {pendingQuickAdd && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "8px 12px",
+              background: "rgba(123,140,255,0.08)",
+              border: "1px solid rgba(123,140,255,0.25)",
+              borderRadius: 3,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              flexWrap: "wrap",
+            }}
+          >
+            <span style={{ fontSize: 10, color: "#d1d7ea" }}>
+              <strong style={{ color: "#fff" }}>{pendingQuickAdd.asset.name}</strong> is on{" "}
+              <strong style={{ color: "#7b8cff" }}>{pendingQuickAdd.ownerLabel}</strong>{" "}
+              — neither current team. Replace:
+            </span>
+            {[
+              { side: "A", label: `TEAM A (${sideA.length} assets)`, accent: "#ffd84d" },
+              { side: "B", label: `TEAM B (${sideB.length} assets)`, accent: "#00f5a0" },
+            ].map(({ side, label, accent }) => (
+              <button
+                key={side}
+                type="button"
+                onClick={() => resolvePendingQuickAdd(side)}
+                style={{
+                  fontSize: 9,
+                  letterSpacing: 1,
+                  padding: "4px 10px",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                  background: `${accent}14`,
+                  color: accent,
+                  border: `1px solid ${accent}55`,
+                  borderRadius: 3,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setPendingQuickAdd(null)}
+              style={{ background: "none", border: "none", color: "#808898", fontSize: 13, padding: 0, cursor: "pointer", lineHeight: 1 }}
+            >
+              ×
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Team selectors */}
       <div
         className="dyn-grid-2"
@@ -1152,36 +1407,97 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
       )}
 
       {blueprintImpact && (blueprintImpact.teamA || blueprintImpact.teamB) && (
-        <BlueprintImpactPanel impact={blueprintImpact} teamA={teamA} teamB={teamB} />
+        <CollapsibleSection
+          title="Blueprint Impact — What This Move Means"
+          accent="#ffd84d"
+          background="rgba(255,216,77,0.04)"
+          borderColor="rgba(255,216,77,0.18)"
+          open={openPanels.blueprint}
+          onToggle={() => togglePanel("blueprint")}
+        >
+          <BlueprintImpactPanel impact={blueprintImpact} teamA={teamA} teamB={teamB} />
+        </CollapsibleSection>
       )}
 
       {(rationaleA || rationaleB) && (
-        <TradeRationale teamA={teamA} teamB={teamB} rationaleA={rationaleA} rationaleB={rationaleB} />
+        <CollapsibleSection
+          title="Why each side might want this"
+          accent="#c0c8e0"
+          background="rgba(255,255,255,0.025)"
+          borderColor="rgba(255,255,255,0.08)"
+          open={openPanels.rationale}
+          onToggle={() => togglePanel("rationale")}
+        >
+          <TradeRationale teamA={teamA} teamB={teamB} rationaleA={rationaleA} rationaleB={rationaleB} />
+        </CollapsibleSection>
       )}
 
-      {balancePkgs?.alreadyFair ? null : balancePkgs?.packages?.length ? (
-        <BalancePackagesPanel suggest={balancePkgs} onAdd={addBalancePackage} />
-      ) : (
-        balance && <BalanceSuggestion balance={balance} />
-      )}
+      {balancePkgs?.alreadyFair ? null : (balancePkgs?.packages?.length || balance) ? (
+        <CollapsibleSection
+          title="Balance the trade"
+          accent="#ffd84d"
+          background="rgba(255,216,77,0.05)"
+          borderColor="rgba(255,216,77,0.20)"
+          badge={
+            <span style={styles.tag("#ffd84d")}>
+              gap {Math.abs(Number(balancePkgs?.gap ?? balance?.gap ?? 0))}
+            </span>
+          }
+          open={openPanels.balance}
+          onToggle={() => togglePanel("balance")}
+        >
+          {balancePkgs?.packages?.length ? (
+            <BalancePackagesPanel suggest={balancePkgs} onAdd={addBalancePackage} />
+          ) : (
+            <BalanceSuggestion balance={balance} />
+          )}
+        </CollapsibleSection>
+      ) : null}
 
-      {simulation && <PostTradeImpact simulation={simulation} />}
+      {simulation && (
+        <CollapsibleSection
+          title="What If? — Post-Trade Impact"
+          accent="#7b8cff"
+          background="rgba(123,140,255,0.04)"
+          borderColor="rgba(123,140,255,0.18)"
+          open={openPanels.impact}
+          onToggle={() => togglePanel("impact")}
+        >
+          <PostTradeImpact simulation={simulation} />
+        </CollapsibleSection>
+      )}
 
       {teamA && teamB && (
-        <PackageArchitect
-          teamA={teamA}
-          teamB={teamB}
-          direction={pbDirection}
-          setDirection={(d) => {
-            setPbDirection(d);
-            setPbAnchor(null);
-          }}
-          anchor={pbAnchor}
-          setAnchor={setPbAnchor}
-          anchorOpts={pbDirection === "acquire" ? assetOptsB : assetOptsA}
-          packages={pbPackages}
-          onLoad={loadPackage}
-        />
+        <CollapsibleSection
+          title="Package Architect — Fair Trade Builder"
+          accent="#00f5a0"
+          background="rgba(0,245,160,0.03)"
+          borderColor="rgba(0,245,160,0.15)"
+          badge={
+            pbAnchor ? (
+              <span style={styles.tag("#00f5a0")}>
+                {pbAnchor.type === "pick" ? pbAnchor.label : pbAnchor.name}
+              </span>
+            ) : null
+          }
+          open={openPanels.architect}
+          onToggle={() => togglePanel("architect")}
+        >
+          <PackageArchitect
+            teamA={teamA}
+            teamB={teamB}
+            direction={pbDirection}
+            setDirection={(d) => {
+              setPbDirection(d);
+              setPbAnchor(null);
+            }}
+            anchor={pbAnchor}
+            setAnchor={setPbAnchor}
+            anchorOpts={pbDirection === "acquire" ? assetOptsB : assetOptsA}
+            packages={pbPackages}
+            onLoad={loadPackage}
+          />
+        </CollapsibleSection>
       )}
       </>
       )}
@@ -1311,33 +1627,11 @@ function RationaleColumn({ team, rationale, accent }) {
 function TradeRationale({ teamA, teamB, rationaleA, rationaleB }) {
   return (
     <div
-      style={{
-        marginTop: 14,
-        padding: 14,
-        background: "rgba(255,255,255,0.025)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        borderRadius: 4,
-      }}
+      className="dyn-grid-2"
+      style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}
     >
-      <div
-        style={{
-          fontSize: 10,
-          letterSpacing: 2.5,
-          color: "#c0c8e0",
-          textTransform: "uppercase",
-          marginBottom: 12,
-          fontWeight: 600,
-        }}
-      >
-        Why each side might want this
-      </div>
-      <div
-        className="dyn-grid-2"
-        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}
-      >
-        <RationaleColumn team={teamA} rationale={rationaleA} accent="#ffd84d" />
-        <RationaleColumn team={teamB} rationale={rationaleB} accent="#00f5a0" />
-      </div>
+      <RationaleColumn team={teamA} rationale={rationaleA} accent="#ffd84d" />
+      <RationaleColumn team={teamB} rationale={rationaleB} accent="#00f5a0" />
     </div>
   );
 }
@@ -1348,29 +1642,8 @@ function TradeRationale({ teamA, teamB, rationaleA, rationaleB }) {
 // ---------------------------------------------------------------------------
 
 function BalanceSuggestion({ balance }) {
-  const sign = balance.gap > 0 ? "" : "";
   return (
-    <div
-      style={{
-        marginTop: 14,
-        padding: 14,
-        background: "rgba(255,216,77,0.05)",
-        border: "1px solid rgba(255,216,77,0.20)",
-        borderRadius: 4,
-      }}
-    >
-      <div
-        style={{
-          fontSize: 10,
-          letterSpacing: 2.5,
-          color: "#ffd84d",
-          textTransform: "uppercase",
-          marginBottom: 8,
-          fontWeight: 600,
-        }}
-      >
-        Balance the trade
-      </div>
+    <div>
       <div style={{ fontSize: 11, color: "#d1d7ea", marginBottom: 10, lineHeight: 1.5 }}>
         Value gap of <strong style={{ color: "#ffd84d" }}>{Math.abs(balance.gap)}</strong>{" "}
         favors <strong style={{ color: "#fff" }}>{balance.receivingTeam}</strong>.{" "}
@@ -1419,27 +1692,7 @@ function BalanceSuggestion({ balance }) {
 // brings the whole trade into the fair band (validated via evaluateTrade).
 function BalancePackagesPanel({ suggest, onAdd }) {
   return (
-    <div
-      style={{
-        marginTop: 14,
-        padding: 14,
-        background: "rgba(255,216,77,0.05)",
-        border: "1px solid rgba(255,216,77,0.20)",
-        borderRadius: 4,
-      }}
-    >
-      <div
-        style={{
-          fontSize: 10,
-          letterSpacing: 2.5,
-          color: "#ffd84d",
-          textTransform: "uppercase",
-          marginBottom: 8,
-          fontWeight: 600,
-        }}
-      >
-        Balance the trade
-      </div>
+    <div>
       <div style={{ fontSize: 11, color: "#d1d7ea", marginBottom: 10, lineHeight: 1.5 }}>
         Value gap of <strong style={{ color: "#ffd84d" }}>{suggest.gap}</strong> favors{" "}
         <strong style={{ color: "#fff" }}>{suggest.adderLabel}</strong> — these add-ons from{" "}
@@ -1698,28 +1951,7 @@ function NeedSurplusDelta({ side }) {
 
 function PostTradeImpact({ simulation }) {
   return (
-    <div
-      style={{
-        marginTop: 16,
-        padding: 16,
-        background: "rgba(123,140,255,0.04)",
-        border: "1px solid rgba(123,140,255,0.18)",
-        borderRadius: 4,
-      }}
-    >
-      <div
-        style={{
-          fontSize: 10,
-          letterSpacing: 2.5,
-          color: "#7b8cff",
-          textTransform: "uppercase",
-          marginBottom: 12,
-          fontWeight: 600,
-        }}
-      >
-        What If? — Post-Trade Impact
-      </div>
-
+    <div>
       <div
         className="dyn-grid-2"
         style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}
@@ -1935,31 +2167,9 @@ function BlueprintImpactCard({ impact, label, accent }) {
 
 function BlueprintImpactPanel({ impact, teamA, teamB }) {
   return (
-    <div
-      style={{
-        marginTop: 16,
-        padding: 16,
-        background: "rgba(255,216,77,0.04)",
-        border: "1px solid rgba(255,216,77,0.18)",
-        borderRadius: 4,
-      }}
-    >
-      <div
-        style={{
-          fontSize: 10,
-          letterSpacing: 2.5,
-          color: "#ffd84d",
-          textTransform: "uppercase",
-          marginBottom: 12,
-          fontWeight: 600,
-        }}
-      >
-        Blueprint Impact — What This Move Means
-      </div>
-      <div className="dyn-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <BlueprintImpactCard impact={impact.teamA} label={teamA.label} accent="#ffd84d" />
-        <BlueprintImpactCard impact={impact.teamB} label={teamB.label} accent="#00f5a0" />
-      </div>
+    <div className="dyn-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <BlueprintImpactCard impact={impact.teamA} label={teamA.label} accent="#ffd84d" />
+      <BlueprintImpactCard impact={impact.teamB} label={teamB.label} accent="#00f5a0" />
     </div>
   );
 }
@@ -2101,18 +2311,7 @@ function PackageCard({ pkg, direction, teamB, onLoad }) {
 function PackageArchitect({ teamA, teamB, direction, setDirection, anchor, setAnchor, anchorOpts, packages, onLoad }) {
   const anchorName = anchor ? (anchor.type === "pick" ? anchor.label : anchor.name) : null;
   return (
-    <div
-      style={{
-        marginTop: 16,
-        padding: 16,
-        background: "rgba(0,245,160,0.03)",
-        border: "1px solid rgba(0,245,160,0.15)",
-        borderRadius: 4,
-      }}
-    >
-      <div style={{ fontSize: 10, letterSpacing: 2.5, color: "#00f5a0", textTransform: "uppercase", marginBottom: 4, fontWeight: 600 }}>
-        Package Architect — Fair Trade Builder
-      </div>
+    <div>
       <div style={{ fontSize: 10, color: "#808898", marginBottom: 10 }}>
         Anchor one asset and get fair, blueprint-aware packages — every suggestion is priced by the
         same engine as the verdict above and labeled with its dynasty trade type.
