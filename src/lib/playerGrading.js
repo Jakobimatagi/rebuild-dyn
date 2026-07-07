@@ -3,8 +3,8 @@
  * Player verdict labels, room grades, archetype classification, and tags.
  * Pure functions — no side effects.
  */
-import { getKeepCount, estimatePickValue } from "./marketValue";
-import { clamp } from "./scoringEngine";
+import { getKeepCount, estimatePickValue } from "./marketValue.js";
+import { clamp } from "./scoringEngine.js";
 
 export function getVerdict(score) {
   if (score >= 72) return "buy";

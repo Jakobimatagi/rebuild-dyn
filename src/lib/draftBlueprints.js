@@ -880,6 +880,12 @@ function playerAlignment(p, blueprint, wts) {
   return { tag: "fit", reason: "Roster filler" };
 }
 
+// Public wrapper: tag any player against a blueprint without needing round weights.
+export function alignPlayerToBlueprint(player, blueprint) {
+  if (!player || !blueprint) return { tag: "fit", reason: null };
+  return playerAlignment(player, blueprint, posWeightsForRound(blueprint, 99));
+}
+
 // Does a trade-suggestion's acquire target advance the blueprint?
 function suggestionFit(target, blueprint, wts) {
   if (!target) return { fitsPlan: false, fitReason: null };

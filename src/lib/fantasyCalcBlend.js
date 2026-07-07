@@ -2,7 +2,7 @@
  * fantasyCalcBlend.js
  * Normalizes FantasyCalc market data and blends it with internal scores.
  */
-import { clamp } from "./scoringEngine";
+import { clamp } from "./scoringEngine.js";
 
 // Binary search for the percentile rank of `value` within a pre-sorted array.
 // Returns the fraction of entries strictly less than `value` (0..1).

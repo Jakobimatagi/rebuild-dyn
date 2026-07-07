@@ -3,7 +3,7 @@
  * League format context, archetype premiums, per-player market value,
  * pick value estimates, and roster-keep counts.
  */
-import { draftCapitalScore } from "./scoringEngine";
+import { draftCapitalScore } from "./scoringEngine.js";
 
 // ---------------------------------------------------------------------------
 // League rules context
