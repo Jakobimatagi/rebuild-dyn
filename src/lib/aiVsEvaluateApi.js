@@ -7,6 +7,7 @@
 // don't re-burn Gemini quota. Cache invalidates whenever ranks change.
 
 import { safeLocalStorageWrite } from "./sleeperApi.js";
+import { getAccessToken } from "./supabase.js";
 import { deriveSchool } from "./prospectScoring.js";
 
 const CACHE_PREFIX = "ai_vs_eval_v1";
@@ -121,9 +122,13 @@ export async function fetchVsEvaluation(merged, classes, { force = false } = {})
 
   const rankedList = buildVsRankedSummary(merged);
 
+  // These endpoints are admin-gated server-side; send the session token.
+  const accessToken = await getAccessToken();
+  if (!accessToken) throw new Error("Admin sign-in required for AI features.");
+
   const res = await fetch("/api/ai-vs-evaluate", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ rankedList, classes }),
   });
 

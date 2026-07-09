@@ -70,6 +70,19 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
+    build: {
+      rollupOptions: {
+        output: {
+          // Stable vendor chunks so app-code changes don't bust the cache on
+          // the big third-party deps (and vice versa).
+          manualChunks: {
+            react:    ['react', 'react-dom'],
+            supabase: ['@supabase/supabase-js'],
+            posthog:  ['posthog-js'],
+          },
+        },
+      },
+    },
     plugins: [
       react(),
       devApiHandler('/api/historical-rosters', '/api/historical-rosters.js'),

@@ -1,15 +1,18 @@
-import { StrictMode } from 'react'
+import { StrictMode, Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
-import RookieProspector from './components/RookieProspector.jsx'
-import RookieRankings from './components/RookieRankings.jsx'
-import OffensiveCoordinators from './components/OffensiveCoordinators.jsx'
-import AdminTopPlayers from './components/AdminTopPlayers.jsx'
-import AdminHotStreaks from './components/AdminHotStreaks.jsx'
-import AdminUsers from './components/AdminUsers.jsx'
 import { initAnalytics } from './lib/analytics.js'
 import { Analytics } from '@vercel/analytics/react'
+
+// Admin/standalone roots are lazy so their code never ships to regular
+// visitors — App stays eager because it's the default path.
+const RookieProspector      = lazy(() => import('./components/RookieProspector.jsx'))
+const RookieRankings        = lazy(() => import('./components/RookieRankings.jsx'))
+const OffensiveCoordinators = lazy(() => import('./components/OffensiveCoordinators.jsx'))
+const AdminTopPlayers       = lazy(() => import('./components/AdminTopPlayers.jsx'))
+const AdminHotStreaks       = lazy(() => import('./components/AdminHotStreaks.jsx'))
+const AdminUsers            = lazy(() => import('./components/AdminUsers.jsx'))
 
 initAnalytics()
 
@@ -25,7 +28,9 @@ else if (path.startsWith('/rookie-rankings'))      Root = <RookieRankings />
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    {Root}
+    <Suspense fallback={<div className="dyn-spinner" aria-label="Loading" />}>
+      {Root}
+    </Suspense>
     <Analytics />
   </StrictMode>,
 )

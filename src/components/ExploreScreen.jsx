@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { styles } from "../styles";
 import { fetchRosterAuditValues } from "../lib/rosterAuditApi";
 import { fetchFantasyCalcTrades } from "../lib/fantasyCalcApi";
-import RankingsTab from "./dashboard/RankingsTab";
-import RookieRankingsTab from "./dashboard/RookieRankingsTab";
-import PerceptionTab from "./dashboard/PerceptionTab";
-import TradeTinderTab from "./dashboard/TradeTinderTab";
+
+// Lazy like Dashboard's tabs — ExploreScreen is eagerly imported by App, so
+// static tab imports here would drag the tab chunks into the entry bundle.
+const RankingsTab       = lazy(() => import("./dashboard/RankingsTab"));
+const RookieRankingsTab = lazy(() => import("./dashboard/RookieRankingsTab"));
+const PerceptionTab     = lazy(() => import("./dashboard/PerceptionTab"));
+const TradeTinderTab    = lazy(() => import("./dashboard/TradeTinderTab"));
 
 // Community votes from the no-login Trade Jury are bucketed under this league id
 // so they stay out of any real league's perception data while still feeding the
@@ -143,6 +146,13 @@ export default function ExploreScreen({ onConnect }) {
         </div>
       </div>
 
+      <Suspense
+        fallback={
+          <div style={{ ...styles.card, textAlign: "center", padding: 40, color: "#8a91a8" }}>
+            Loading…
+          </div>
+        }
+      >
       {activeTab === "rankings" && (
         <div>
           {/* Format toggle — RosterAudit values scale by Superflex vs 1QB */}
@@ -201,6 +211,7 @@ export default function ExploreScreen({ onConnect }) {
       )}
 
       {activeTab === "signals" && <PerceptionTab global />}
+      </Suspense>
     </>
   );
 }

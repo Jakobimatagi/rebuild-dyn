@@ -1,3 +1,5 @@
+import { guardAdmin } from "./_lib/adminAuth.js";
+
 // Gemini proxy for the share-card "why is this player ranked here" blurbs.
 //
 // Powers a per-player one-sentence rationale on the Top Players and Rookie
@@ -127,6 +129,10 @@ export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
+
+  // Admin-only: these proxies spend the shared Gemini quota, so the caller
+  // must present a Supabase session with app_metadata.is_admin.
+  if (!(await guardAdmin(req, res))) return;
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {

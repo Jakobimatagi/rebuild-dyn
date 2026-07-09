@@ -26,6 +26,7 @@ import {
   fetchDraftPicks,
   fetchHistoricalStats,
   fetchLeagueTransactions,
+  fetchPlayersDb,
   fetchSleeper,
   safeLocalStorageWrite,
 } from "./lib/sleeperApi";
@@ -223,7 +224,7 @@ export default function App() {
       const coreTasks = [
         track("League managers", fetchSleeper(`/league/${league.league_id}/users`)),
         track("Rosters", fetchSleeper(`/league/${league.league_id}/rosters`)),
-        track("Player database", fetchSleeper(`/players/nfl`).catch(() => ({}))),
+        track("Player database", fetchPlayersDb().catch(() => ({}))),
         track("Traded picks", fetchSleeper(`/league/${league.league_id}/traded_picks`).catch(
           () => [],
         )),
@@ -455,7 +456,7 @@ export default function App() {
       // ----- Tier 1 (core): Sleeper player DB + recent stats, then normalize the
       // Fleaflicker league, then current-season values. Enough for first paint.
       const corePhase1 = [
-        track("Player database", fetchSleeper("/players/nfl").catch(() => ({}))),
+        track("Player database", fetchPlayersDb().catch(() => ({}))),
         track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason}`).catch(() => ({}))),
         track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason - 1}`).catch(() => ({}))),
         track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason - 2}`).catch(() => ({}))),

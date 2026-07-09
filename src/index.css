@@ -1,3 +1,9 @@
+/* Tailwind (build-time; replaces the old cdn.tailwindcss.com runtime).
+   `utilities` is injected at the END of this file so utility classes keep
+   beating the .dyn-* rules on ties, matching the CDN's inject-last order. */
+@tailwind base;
+@tailwind components;
+
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
 *,
 *::before,
@@ -259,3 +265,5 @@ input:focus {
     width: min(320px, calc(100vw - 28px)) !important;
   }
 }
+
+@tailwind utilities;

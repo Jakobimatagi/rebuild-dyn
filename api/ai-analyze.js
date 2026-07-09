@@ -1,3 +1,5 @@
+import { guardAdmin } from "./_lib/adminAuth.js";
+
 // Gemini proxy for "Analyze Team with AI" feature.
 //
 // Uses Gemini 2.0 Flash with Google Search grounding so the model can pull
@@ -92,6 +94,10 @@ export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
+
+  // Admin-only: these proxies spend the shared Gemini quota, so the caller
+  // must present a Supabase session with app_metadata.is_admin.
+  if (!(await guardAdmin(req, res))) return;
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {

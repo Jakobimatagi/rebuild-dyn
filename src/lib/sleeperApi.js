@@ -8,6 +8,22 @@ export async function fetchSleeper(path) {
   return res.json();
 }
 
+// The full NFL player DB (~10 MB) is fetched by every dashboard load path, so
+// memoize the promise for the session — too big for localStorage, but a league
+// switch or re-login shouldn't re-download it. Failures aren't cached so the
+// next load retries. Note: callers share one object (the Fleaflicker loader
+// adds synthetic entries in place; their ids don't collide with Sleeper's).
+let playersDbPromise = null;
+export function fetchPlayersDb() {
+  if (!playersDbPromise) {
+    playersDbPromise = fetchSleeper("/players/nfl").catch((err) => {
+      playersDbPromise = null;
+      throw err;
+    });
+  }
+  return playersDbPromise;
+}
+
 // Historical season stats never change after the season ends, so we cache them
 // for 7 days instead of the standard 24h used for current-season data.
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;

@@ -5,6 +5,7 @@
 // point it's invoked from.
 
 import { safeLocalStorageWrite } from "./sleeperApi.js";
+import { getAccessToken } from "./supabase.js";
 import { buildVsRankedSummary } from "./aiVsEvaluateApi.js";
 
 const CACHE_PREFIX = "ai_oracle_board_v1";
@@ -62,9 +63,13 @@ export async function fetchOracleBoardEvaluation(rows, scope, { force = false } 
   // backend prompt differs but the data going in is identical.
   const rankedList = buildVsRankedSummary(rows);
 
+  // These endpoints are admin-gated server-side; send the session token.
+  const accessToken = await getAccessToken();
+  if (!accessToken) throw new Error("Admin sign-in required for AI features.");
+
   const res = await fetch("/api/ai-oracle-board", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ rankedList, scope }),
   });
 
