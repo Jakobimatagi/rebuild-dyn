@@ -1,3 +1,5 @@
+import { guardAdmin } from "./_lib/adminAuth.js";
+
 // ORACLE analysis for the Offensive Coordinator Rankings page.
 // Receives a season's 32-team OC landscape (coordinator name, scheme tags,
 // and PPR PPG fantasy ranks for each position room) and returns a structured
@@ -38,6 +40,10 @@ export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
+
+  // Admin-only: these proxies spend the shared Gemini quota, so the caller
+  // must present a Supabase session with app_metadata.is_admin.
+  if (!(await guardAdmin(req, res))) return;
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {

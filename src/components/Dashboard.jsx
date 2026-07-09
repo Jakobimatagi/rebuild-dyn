@@ -1,29 +1,42 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { POSITION_PRIORITY } from "../constants";
 import { styles } from "../styles";
 import ProfileModal from "./ProfileModal";
 import { getAccount, onAuthChange } from "../lib/supabase";
-import AdviceTab from "./dashboard/AdviceTab";
 import GradeKeyModal from "./dashboard/GradeKeyModal";
-import LeagueTab from "./dashboard/LeagueTab";
 import OverviewTab from "./dashboard/OverviewTab";
-import RosterTab from "./dashboard/RosterTab";
 import ScoreWeightsModal from "./dashboard/ScoreWeightsModal";
-import TradeTab from "./dashboard/TradeTab";
-import TradeTinderTab from "./dashboard/TradeTinderTab";
-import PerceptionTab from "./dashboard/PerceptionTab";
-import LeagueActivityTab from "./dashboard/LeagueActivityTab";
-import DocumentationTab from "./dashboard/DocumentationTab";
-import DraftRecapTab from "./dashboard/DraftRecapTab";
-import LiveDraftTab from "./dashboard/LiveDraftTab";
-import BlueprintClassifierCard from "./dashboard/BlueprintClassifierCard";
-import BlueprintCoach from "./dashboard/BlueprintCoach";
-import MockBlueprints from "./dashboard/MockBlueprints";
-import RankingsTab from "./dashboard/RankingsTab";
-import StrategyPlannerTab from "./dashboard/StrategyPlannerTab";
-import RookieRankingsTab from "./dashboard/RookieRankingsTab";
-import ProjectionsTab from "./dashboard/ProjectionsTab";
-import PowerRankingsTab from "./dashboard/PowerRankingsTab";
+
+// Every non-default tab is lazy so its chunk only downloads when the user
+// opens it. OverviewTab stays eager — it's the landing tab and lazy-loading
+// it would just trade the bundle win for a guaranteed spinner flash.
+const AdviceTab         = lazy(() => import("./dashboard/AdviceTab"));
+const LeagueTab         = lazy(() => import("./dashboard/LeagueTab"));
+const RosterTab         = lazy(() => import("./dashboard/RosterTab"));
+const TradeTab          = lazy(() => import("./dashboard/TradeTab"));
+const TradeTinderTab    = lazy(() => import("./dashboard/TradeTinderTab"));
+const PerceptionTab     = lazy(() => import("./dashboard/PerceptionTab"));
+const LeagueActivityTab = lazy(() => import("./dashboard/LeagueActivityTab"));
+const DocumentationTab  = lazy(() => import("./dashboard/DocumentationTab"));
+const DraftRecapTab     = lazy(() => import("./dashboard/DraftRecapTab"));
+const LiveDraftTab      = lazy(() => import("./dashboard/LiveDraftTab"));
+const BlueprintClassifierCard = lazy(() => import("./dashboard/BlueprintClassifierCard"));
+const BlueprintCoach    = lazy(() => import("./dashboard/BlueprintCoach"));
+const MockBlueprints    = lazy(() => import("./dashboard/MockBlueprints"));
+const RankingsTab       = lazy(() => import("./dashboard/RankingsTab"));
+const StrategyPlannerTab = lazy(() => import("./dashboard/StrategyPlannerTab"));
+const RookieRankingsTab = lazy(() => import("./dashboard/RookieRankingsTab"));
+const ProjectionsTab    = lazy(() => import("./dashboard/ProjectionsTab"));
+const PowerRankingsTab  = lazy(() => import("./dashboard/PowerRankingsTab"));
+
+// Centered fallback while a lazy tab chunk downloads.
+function TabLoading() {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, minHeight: 220, color: "#94a3b8", fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase" }}>
+      <span className="dyn-spinner" /> Loading
+    </div>
+  );
+}
 
 const ROW1 = [
   { key: "overview",  label: "Overview" },
@@ -251,6 +264,7 @@ export default function Dashboard({
         />
       )}
 
+      <Suspense fallback={<TabLoading />}>
       {activeTab === "overview" && (
         <OverviewTab
           byPos={byPos}
@@ -459,6 +473,7 @@ export default function Dashboard({
       )}
 
       {activeTab === "docs" && <DocumentationTab />}
+      </Suspense>
     </>
   );
 }

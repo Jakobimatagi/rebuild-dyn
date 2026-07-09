@@ -5,6 +5,7 @@
 // the underlying set is unchanged.
 
 import { safeLocalStorageWrite } from "./sleeperApi.js";
+import { getAccessToken } from "./supabase.js";
 
 const CACHE_PREFIX = "ai_share_blurbs_v1";
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -70,9 +71,13 @@ export async function fetchShareBlurbs(kind, players, scope = {}, { force = fals
     }
   }
 
+  // These endpoints are admin-gated server-side; send the session token.
+  const accessToken = await getAccessToken();
+  if (!accessToken) throw new Error("Admin sign-in required for AI features.");
+
   const res = await fetch("/api/ai-share-blurbs", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ kind, players, scope }),
   });
 

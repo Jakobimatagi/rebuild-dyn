@@ -58,6 +58,13 @@ export async function getAccount() {
   return data.session?.user ?? null;
 }
 
+// Returns the current session's access token (or null). Used to authenticate
+// calls to admin-gated serverless endpoints (Authorization: Bearer <token>).
+export async function getAccessToken() {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
+}
+
 // The Sleeper username linked to an account is stored in user_metadata so a
 // returning user jumps straight to their teams. Read it off a user object.
 export function getSleeperUsername(user) {

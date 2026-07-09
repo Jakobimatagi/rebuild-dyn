@@ -16,29 +16,7 @@
 // Required server env (Vercel): SUPABASE_URL (or VITE_SUPABASE_URL),
 // SUPABASE_SERVICE_ROLE_KEY.
 
-import { createClient } from "@supabase/supabase-js";
-
-function adminClient() {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return null;
-  return createClient(url, key, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-}
-
-// Verify the request comes from a signed-in admin. Returns the caller's user.
-async function requireAdmin(admin, req) {
-  const authz = req.headers.authorization || req.headers.Authorization || "";
-  const token = String(authz).replace(/^Bearer\s+/i, "").trim();
-  if (!token) { const e = new Error("Not authenticated"); e.status = 401; throw e; }
-  const { data, error } = await admin.auth.getUser(token);
-  if (error || !data?.user) { const e = new Error("Invalid session"); e.status = 401; throw e; }
-  if (data.user.app_metadata?.is_admin !== true) {
-    const e = new Error("Admin access required"); e.status = 403; throw e;
-  }
-  return data.user;
-}
+import { adminClient, requireAdmin } from "./_lib/adminAuth.js";
 
 // Page through all users (admins are few; users are bounded for this app).
 async function listAllUsers(admin) {
