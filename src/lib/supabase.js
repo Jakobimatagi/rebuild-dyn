@@ -303,14 +303,32 @@ export async function verifySleeperCode(email, code) {
 
 // ── Prospects ─────────────────────────────────────────────────────────────────
 
+// Supabase caps every select at 1000 rows by default, and a plain .select()
+// silently truncates past that — prospect_seasons (~1.5k) and
+// historical_players (~1.1k) are already over the cap, which made freshly
+// added prospects come back with no seasons. Page through .range(), ordered
+// by primary key so pages can't overlap or skip rows.
+async function fetchAllRows(table, columns = "*", orderCols = ["id"], applyFilters) {
+  const pageSize = 1000;
+  const out = [];
+  for (let from = 0; ; from += pageSize) {
+    let q = supabase.from(table).select(columns);
+    if (applyFilters) q = applyFilters(q);
+    for (const c of orderCols) q = q.order(c, { ascending: true });
+    const { data, error } = await q.range(from, from + pageSize - 1);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return out;
+}
+
 export async function fetchAllData() {
-  const [{ data: pros, error: e1 }, { data: seas, error: e2 }, { data: anns, error: e3 }] =
-    await Promise.all([
-      supabase.from("prospects").select("*"),
-      supabase.from("prospect_seasons").select("*"),
-      supabase.from("prospect_annotations").select("*"),
-    ]);
-  if (e1 || e2 || e3) throw e1 || e2 || e3;
+  const [pros, seas, anns] = await Promise.all([
+    fetchAllRows("prospects"),
+    fetchAllRows("prospect_seasons"),
+    fetchAllRows("prospect_annotations", "*", ["prospect_id"]),
+  ]);
 
   const seasonsByProspect = {};
   (seas || []).forEach((s) => {
@@ -393,7 +411,8 @@ export async function upsertProspect(prospect) {
   if (e1) throw e1;
 
   // Replace seasons: delete existing then bulk insert
-  await supabase.from("prospect_seasons").delete().eq("prospect_id", prospect.id);
+  const { error: eDel } = await supabase.from("prospect_seasons").delete().eq("prospect_id", prospect.id);
+  if (eDel) throw eDel;
 
   const seasonRows = prospect.seasons
     .filter((s) => s.season_year)
@@ -463,12 +482,7 @@ export async function getExperts() {
 }
 
 export async function fetchExpertRankings() {
-  const { data, error } = await supabase
-    .from("expert_rankings")
-    .select("*")
-    .order("rank_order", { ascending: true });
-  if (error) throw error;
-  return data || [];
+  return fetchAllRows("expert_rankings", "*", ["rank_order", "user_id", "prospect_id"]);
 }
 
 export async function upsertExpertRanking(userId, prospectId, rankOrder, tier = "", notes = "") {
@@ -510,11 +524,10 @@ export async function fetchHistoricalPlayers() {
   if (_historicalCache) return _historicalCache;
   if (_historicalPromise) return _historicalPromise;
   _historicalPromise = (async () => {
-    const { data, error } = await supabase
-      .from("historical_players")
-      .select("name, position, draft_year, draft_capital, draft_round, draft_pick, forty_time, ras, ten_plus_ppg_seasons, avg_top_finish, metrics");
-    if (error) throw error;
-    _historicalCache = data || [];
+    _historicalCache = await fetchAllRows(
+      "historical_players",
+      "name, position, draft_year, draft_capital, draft_round, draft_pick, forty_time, ras, ten_plus_ppg_seasons, avg_top_finish, metrics",
+    );
     return _historicalCache;
   })();
   return _historicalPromise;
@@ -523,11 +536,11 @@ export async function fetchHistoricalPlayers() {
 // ── Public rankings page data ─────────────────────────────────────────────────
 // Fetches everything needed without requiring auth
 export async function fetchPublicRankingsData() {
-  const [{ data: pros }, { data: seas }, { data: anns }, { data: rankings }, experts, historical] = await Promise.all([
-    supabase.from("prospects").select("id, name, position, projected_draft_year, draft_capital, comparable_player, athletic"),
-    supabase.from("prospect_seasons").select("*"),
-    supabase.from("prospect_annotations").select("*"),
-    supabase.from("expert_rankings").select("*").order("rank_order", { ascending: true }),
+  const [pros, seas, anns, rankings, experts, historical] = await Promise.all([
+    fetchAllRows("prospects", "id, name, position, projected_draft_year, draft_capital, comparable_player, athletic"),
+    fetchAllRows("prospect_seasons"),
+    fetchAllRows("prospect_annotations", "*", ["prospect_id"]),
+    fetchAllRows("expert_rankings", "*", ["rank_order", "user_id", "prospect_id"]),
     getExperts(),
     fetchHistoricalPlayers().catch(() => []),
   ]);
@@ -595,13 +608,13 @@ export async function fetchTradeValueSnapshots(sleeperIds = []) {
   const rows = [];
   for (let i = 0; i < ids.length; i += CHUNK) {
     const slice = ids.slice(i, i + CHUNK);
-    const { data, error } = await supabase
-      .from("value_snapshots")
-      .select("snap_date, sleeper_id, value")
-      .eq("source", "fc")
-      .in("sleeper_id", slice);
-    if (error) throw error;
-    if (data) rows.push(...data);
+    const data = await fetchAllRows(
+      "value_snapshots",
+      "snap_date, sleeper_id, value",
+      ["snap_date", "sleeper_id"],
+      (q) => q.eq("source", "fc").in("sleeper_id", slice),
+    );
+    rows.push(...data);
   }
 
   const byDatePlayer = new Map();

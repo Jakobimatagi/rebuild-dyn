@@ -12,6 +12,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["vite", "--port", "5175", "--strictPort"],
       "port": 5175
+    },
+    {
+      "name": "vite-dev-alt2",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "5176", "--strictPort"],
+      "port": 5176
     }
   ]
 }
