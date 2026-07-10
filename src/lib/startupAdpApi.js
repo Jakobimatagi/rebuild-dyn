@@ -47,8 +47,8 @@ export async function fetchStartupAdp(leagueContext) {
   try {
     // A format holds one row per ranked player (>1000 once populated), so page
     // past the select cap, ordered by the primary key within the format.
-    const data = await fetchAllRows("startup_adp", "sleeper_id, value, adp_rank", (q) =>
-      q.eq("format", format).order("sleeper_id"),
+    const data = await fetchAllRows("startup_adp", "sleeper_id, value, adp_rank", ["sleeper_id"], (q) =>
+      q.eq("format", format),
     );
     safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), rows: data }));
     return indexAdp(data);

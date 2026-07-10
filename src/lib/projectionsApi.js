@@ -21,10 +21,10 @@ const CACHE_VERSION = 2;
 // Season-wide pulls exceed the 1000-row select cap, so page through .range()
 // ordered by the primary key (week, player_id, model_version) for stable pages.
 function fetchProjectionRows(season, columns, week = null) {
-  return fetchAllRows("player_projections", columns, (q) => {
+  return fetchAllRows("player_projections", columns, ["week", "player_id", "model_version"], (q) => {
     q = q.eq("season", season);
     if (week != null) q = q.eq("week", week);
-    return q.order("week").order("player_id").order("model_version");
+    return q;
   });
 }
 
