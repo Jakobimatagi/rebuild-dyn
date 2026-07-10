@@ -1,9 +1,15 @@
+import { lazy, Suspense, useEffect, useState } from "react";
 import { ARCHETYPE_DESC, ARCHETYPE_META } from "../../constants";
 import { getColor, getVerdict } from "../../lib/analysis";
 import { AGE_CURVES_FALLBACK } from "../../lib/scoringEngine";
 import { SCHEMES } from "../../lib/ocSchemes";
+import { isAdmin } from "../../lib/supabase";
 import { useModalBehavior } from "../../lib/useModalBehavior";
 import { styles } from "../../styles";
+
+// Admin-only PNG exporter. Lazy so html-to-image and the share card stay out
+// of the tab chunks for regular users.
+const DeepDiveShareModal = lazy(() => import("./DeepDiveShareModal.jsx"));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1012,6 +1018,16 @@ function PredictionSection({ prediction, dynastyValue, history }) {
 export default function PlayerDeepDiveModal({ player, scoringWeights, ageCurves, onClose }) {
   const modalRef = useModalBehavior(onClose);
 
+  // Admins get a "Share PNG" exporter (content-creation tool, same as the
+  // rookie / OC share cards). Everyone else never sees the button.
+  const [admin, setAdmin] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  useEffect(() => {
+    let on = true;
+    isAdmin().then((v) => { if (on) setAdmin(v); }).catch(() => {});
+    return () => { on = false; };
+  }, []);
+
   if (!player) return null;
 
   const {
@@ -1086,6 +1102,37 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, ageCurves,
         >
           ✕
         </button>
+
+        {/* Admin: export this deep dive as a shareable PNG */}
+        {admin && (
+          <button
+            onClick={() => setShareOpen(true)}
+            title="Export this deep dive as a PNG share card"
+            style={{
+              position: "absolute",
+              top: 16,
+              right: 48,
+              background: "rgba(0,245,160,0.08)",
+              border: "1px solid rgba(0,245,160,0.35)",
+              borderRadius: 4,
+              color: "#00f5a0",
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              cursor: "pointer",
+              lineHeight: 1,
+              padding: "6px 10px",
+            }}
+          >
+            📤 SHARE PNG
+          </button>
+        )}
+
+        {shareOpen && (
+          <Suspense fallback={null}>
+            <DeepDiveShareModal player={player} onClose={() => setShareOpen(false)} />
+          </Suspense>
+        )}
 
         {/* ── Player header ── */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: 16, marginBottom: 24 }}>
