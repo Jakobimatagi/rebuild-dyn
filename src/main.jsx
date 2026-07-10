@@ -13,6 +13,7 @@ const OffensiveCoordinators = lazy(() => import('./components/OffensiveCoordinat
 const AdminTopPlayers       = lazy(() => import('./components/AdminTopPlayers.jsx'))
 const AdminHotStreaks       = lazy(() => import('./components/AdminHotStreaks.jsx'))
 const AdminUsers            = lazy(() => import('./components/AdminUsers.jsx'))
+const AdminDeepDiveCards    = lazy(() => import('./components/AdminDeepDiveCards.jsx'))
 
 initAnalytics()
 
@@ -24,6 +25,7 @@ else if (path.startsWith('/admin/oc-rankings'))   Root = <OffensiveCoordinators 
 else if (path.startsWith('/admin/top-players'))   Root = <AdminTopPlayers />
 else if (path.startsWith('/admin/hot-streaks'))   Root = <AdminHotStreaks />
 else if (path.startsWith('/admin/users'))         Root = <AdminUsers />
+else if (path.startsWith('/admin/deep-dive-cards')) Root = <AdminDeepDiveCards />
 else if (path.startsWith('/rookie-rankings'))      Root = <RookieRankings />
 
 createRoot(document.getElementById('root')).render(

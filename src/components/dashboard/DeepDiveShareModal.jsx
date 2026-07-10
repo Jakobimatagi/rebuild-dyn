@@ -28,7 +28,7 @@ const COMPONENT_META = [
   { key: "situ", label: "Situation", color: "#c084fc" },
 ];
 
-function slugify(name) {
+export function slugify(name) {
   return String(name || "player").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
@@ -115,7 +115,7 @@ export default function DeepDiveShareModal({ player, onClose }) {
   );
 }
 
-function DeepDiveShareCard({ innerRef, player }) {
+export function DeepDiveShareCard({ innerRef, player }) {
   const {
     name, position, team, age, yearsExp,
     draftTier, draftSlot, draftYear,
