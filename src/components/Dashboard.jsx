@@ -28,6 +28,7 @@ const StrategyPlannerTab = lazy(() => import("./dashboard/StrategyPlannerTab"));
 const RookieRankingsTab = lazy(() => import("./dashboard/RookieRankingsTab"));
 const ProjectionsTab    = lazy(() => import("./dashboard/ProjectionsTab"));
 const PowerRankingsTab  = lazy(() => import("./dashboard/PowerRankingsTab"));
+const WaiverTab         = lazy(() => import("./dashboard/WaiverTab"));
 
 // Centered fallback while a lazy tab chunk downloads.
 function TabLoading() {
@@ -51,6 +52,7 @@ const ROW1 = [
 ];
 
 const ROW2 = [
+  { key: "waiver",    label: "Waivers" },
   { key: "power",     label: "Power" },
   { key: "rankings",  label: "Rankings" },
   { key: "rookies",   label: "Rookies" },
@@ -393,6 +395,24 @@ export default function Dashboard({
       )}
       {activeTab === "strategy" && (strategyPlannerEnabled || strategyUnlocked) && (
         <StrategyPlannerTab analysis={analysis} selectedLeague={selectedLeague} />
+      )}
+
+      {activeTab === "waiver" && (
+        <WaiverTab
+          waiver={analysis.waiver}
+          needs={needs}
+          surplusPositions={surplusPositions}
+          leagueContext={leagueContext}
+          leagueId={selectedLeague?.league_id}
+          // Sleeper stores a waiver_budget (default 100) on every league, but
+          // it's only live money when waiver_type is 2 (FAAB). Types 0/1 are
+          // priority-based — pass 0 so the tab gives verdicts without $ bids.
+          faabBudget={
+            Number(selectedLeague?.settings?.waiver_type) === 2
+              ? Number(selectedLeague?.settings?.waiver_budget) || 0
+              : 0
+          }
+        />
       )}
 
       {activeTab === "power" && (

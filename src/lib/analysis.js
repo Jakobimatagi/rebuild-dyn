@@ -80,6 +80,46 @@ function buildBestAvailablePool(valueBySleeperId, players, limit = 400) {
   return out.slice(0, limit);
 }
 
+/**
+ * Positions eligible for the waiver board: skill spots always; K/DEF/IDP only
+ * when the league actually rosters them (no kickers on a no-K waiver board).
+ * Shared by buildWaiverPool and WaiverTab's trending-only candidate filter so
+ * both paths obey the same league rules.
+ */
+function waiverAllowedPositions(rosterPositions) {
+  const slots = new Set(rosterPositions || []);
+  const allowed = new Set(["QB", "RB", "WR", "TE"]);
+  if (slots.has("K")) allowed.add("K");
+  if (slots.has("DEF")) allowed.add("DEF");
+  if (["DL", "LB", "DB", "IDP_FLEX"].some((s) => slots.has(s))) {
+    ["DL", "LB", "DB"].forEach((p) => allowed.add(p));
+  }
+  return allowed;
+}
+
+/**
+ * Value-ranked free agents for the Waivers tab: same join as the live-draft
+ * board, but players on any league roster are excluded and positions are
+ * restricted to what the league rosters (waiverAllowedPositions).
+ */
+function buildWaiverPool(valueBySleeperId, players, rosteredIdSet, allowed, limit = 300) {
+  const out = [];
+  for (const [playerId, value] of Object.entries(valueBySleeperId)) {
+    if (rosteredIdSet.has(playerId)) continue;
+    const p = players?.[playerId];
+    if (!p || p.active === false) continue;
+    const position = (p.fantasy_positions?.[0] || p.position || "").toUpperCase();
+    if (!allowed.has(position)) continue;
+    const name =
+      p.full_name ||
+      `${p.first_name || ""} ${p.last_name || ""}`.trim() ||
+      `Player ${playerId}`;
+    out.push({ playerId, name, position, team: p.team || "", value });
+  }
+  out.sort((a, b) => b.value - a.value);
+  return out.slice(0, limit);
+}
+
 // Light draftable pool for the standalone Mock Blueprints tab — always available
 // (not gated on a live draft). Shape matches what the blueprint engine expects
 // (id, position, age, liveValue), enriched just enough to mock a startup draft.
@@ -408,23 +448,18 @@ export function buildRosterAnalysis(
     }))
     .filter(Boolean);
 
-  // Live-draft value lookup + best-available pool (only built when a draft is in
-  // progress, so we don't pay for it on the normal dashboard path).
-  const liveValueBySleeperId = liveDraft
-    ? buildValueBySleeperId(
-        fantasyCalcContext.bySleeperId,
-        rosterAuditContext.bySleeperId,
-      )
-    : {};
+  // Combined FC→RA value lookup shared by the live-draft board, the mock pool,
+  // and the always-on waiver pool.
+  const combinedValueBySleeperId = buildValueBySleeperId(
+    fantasyCalcContext.bySleeperId,
+    rosterAuditContext.bySleeperId,
+  );
   const bestAvailablePool = liveDraft
-    ? buildBestAvailablePool(liveValueBySleeperId, players)
+    ? buildBestAvailablePool(combinedValueBySleeperId, players)
     : [];
   // Always-available draftable pool for the Mock Blueprints tab (no live draft
   // needed). Uses the same FC→RA value precedence as the live board.
-  const mockDraftPool = buildMockPool(
-    buildValueBySleeperId(fantasyCalcContext.bySleeperId, rosterAuditContext.bySleeperId),
-    players,
-  );
+  const mockDraftPool = buildMockPool(combinedValueBySleeperId, players);
   // Full deep-dive enrichment for the undrafted pool, so the "This or That"
   // compare view can show the same model (fused dynasty value, trajectory,
   // score math, contract) the roster tabs show. Undrafted players have no
@@ -461,6 +496,48 @@ export function buildRosterAnalysis(
   const livePpgBySleeperId = liveDraft
     ? buildPpgBySleeperId(stats24, stats23, leagueContext.ppr)
     : {};
+
+  // ── Waiver pool ────────────────────────────────────────────────────────────
+  // Free agents = full player DB minus every rostered player. Always built
+  // (unlike the live-draft board) because the Waivers tab needs it every load.
+  // Enriched through the same synthetic-roster pass as the This-or-That pool so
+  // the board scores on the identical fused dynasty value the roster tabs show.
+  // Live signals (weekly projections, streaks, trending adds) are fetched by
+  // WaiverTab itself; only the slow-moving value model is computed here.
+  const rosteredIdSet = new Set(
+    sourceRosters.flatMap((roster) => roster.players || []),
+  );
+  const waiverAllowed = waiverAllowedPositions(league.roster_positions);
+  const waiverPool = buildWaiverPool(
+    combinedValueBySleeperId,
+    players,
+    rosteredIdSet,
+    waiverAllowed,
+  );
+  const waiverEnriched = Object.fromEntries(
+    buildRosterSnapshot(
+      { roster_id: -2, players: waiverPool.map((p) => p.playerId) },
+      players,
+      league,
+      tradedPicks,
+      stats24,
+      stats23,
+      stats22,
+      benchmarks,
+      scoringWeights,
+      rosterLabelById,
+      leagueContext,
+      fantasyCalcContext,
+      futureSeasons,
+      lastSeasonYear,
+      predictionContext,
+      rosterAuditContext,
+      ocOutlookContext,
+      completedDraftSeasons,
+      projPctileMap,
+      contractMap,
+    ).enriched.map((p) => [String(p.id), p]),
+  );
 
   return {
     ...myTeam,
@@ -513,7 +590,7 @@ export function buildRosterAnalysis(
           draft: liveDraft,
           initialPicks: liveDraftPicks,
           rosterPositions: league.roster_positions || [],
-          valueBySleeperId: liveValueBySleeperId,
+          valueBySleeperId: combinedValueBySleeperId,
           ppgBySleeperId: livePpgBySleeperId,
           bestAvailablePool,
           // Full deep-dive model for the undrafted pool (This or That compare).
@@ -548,6 +625,19 @@ export function buildRosterAnalysis(
       targetSeason: ocTargetSeason,
       enabled: !!ocOutlookContext,
       byTeam: ocOutlookContext || {},
+    },
+    // Free-agent pool for the Waivers tab. `players` is a reference to the
+    // shared Sleeper DB (no copy) so the tab can resolve trending-only players
+    // that fall outside the value-ranked pool. rosteredIds lets the tab
+    // re-filter after a fresh roster poll (players claimed since this build).
+    waiver: {
+      pool: waiverPool,
+      enriched: waiverEnriched,
+      rosteredIds: [...rosteredIdSet],
+      // League-legal board positions — the tab's trending-only candidate
+      // filter must obey the same rules as the pool (no K/DEF in no-K leagues).
+      allowedPositions: [...waiverAllowed],
+      players,
     },
   };
 }
