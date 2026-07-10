@@ -3,7 +3,7 @@
 // RLS); the cron writes with the service-role key. See
 // docs/migrations/startup_adp_schema.sql.
 
-import { supabase } from "./supabase.js";
+import { fetchAllRows } from "./supabase.js";
 import { safeLocalStorageWrite } from "./sleeperApi.js";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -45,11 +45,11 @@ export async function fetchStartupAdp(leagueContext) {
     // ignore cache issues
   }
   try {
-    const { data, error } = await supabase
-      .from("startup_adp")
-      .select("sleeper_id, value, adp_rank")
-      .eq("format", format);
-    if (error || !Array.isArray(data)) return new Map();
+    // A format holds one row per ranked player (>1000 once populated), so page
+    // past the select cap, ordered by the primary key within the format.
+    const data = await fetchAllRows("startup_adp", "sleeper_id, value, adp_rank", (q) =>
+      q.eq("format", format).order("sleeper_id"),
+    );
     safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), rows: data }));
     return indexAdp(data);
   } catch {

@@ -301,6 +301,26 @@ export async function verifySleeperCode(email, code) {
   return sleeper;
 }
 
+// ── Paged reads ───────────────────────────────────────────────────────────────
+
+// PostgREST caps a select at 1000 rows, so any read that can exceed that must
+// page with .range(). `applyFilters` receives the query builder to add
+// .eq()/.order() clauses — include a stable .order() (ideally the primary key)
+// so rows don't shift between pages.
+export async function fetchAllRows(table, columns, applyFilters) {
+  const pageSize = 1000;
+  const out = [];
+  for (let from = 0; ; from += pageSize) {
+    let q = supabase.from(table).select(columns).range(from, from + pageSize - 1);
+    if (applyFilters) q = applyFilters(q);
+    const { data, error } = await q;
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return out;
+}
+
 // ── Prospects ─────────────────────────────────────────────────────────────────
 
 export async function fetchAllData() {
