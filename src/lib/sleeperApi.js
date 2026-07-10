@@ -124,6 +124,33 @@ export async function fetchDraftTradedPicks(draftId) {
   return fetchSleeper(`/draft/${draftId}/traded_picks`).catch(() => []);
 }
 
+// Platform-wide add/drop velocity — the fastest public signal that a player's
+// situation changed (starter injury, breakout game). Counts are across all of
+// Sleeper, so magnitude is unbounded; callers normalize (see waiverEngine).
+// Cached 1h: trending moves fast enough that the usual 24h would go stale.
+const ONE_HOUR_MS = 60 * 60 * 1000;
+export async function fetchTrendingPlayers(type = "add", lookbackHours = 48, limit = 200) {
+  const cacheKey = `sleeper_trending_${type}_${lookbackHours}`;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const { timestamp, data } = JSON.parse(cached);
+      if (Date.now() - timestamp < ONE_HOUR_MS) return data;
+    }
+  } catch {
+    // ignore cache read issues
+  }
+
+  const data = await fetchSleeper(
+    `/players/nfl/trending/${type}?lookback_hours=${lookbackHours}&limit=${limit}`,
+  ).catch(() => []);
+  // Don't cache failures — the next load should retry.
+  if (Array.isArray(data) && data.length > 0) {
+    safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), data }));
+  }
+  return Array.isArray(data) ? data : [];
+}
+
 async function fetchLeagueTransactionsForSeason(leagueId, maxWeek = 18) {
   const weeks = Array.from({ length: maxWeek }, (_, index) => index + 1);
   const responses = await Promise.all(
