@@ -3,7 +3,7 @@
 // these rows (anon SELECT under RLS); the pipeline writes them server-side with
 // the service-role key. See docs/migrations/player_projections_schema.sql.
 
-import { supabase } from "./supabase.js";
+import { fetchAllRows } from "./supabase.js";
 import { fetchSleeper, safeLocalStorageWrite } from "./sleeperApi.js";
 import { projectionPercentiles } from "./dynastyValue.js";
 
@@ -12,6 +12,21 @@ import { projectionPercentiles } from "./dynastyValue.js";
 export { optimalLineup, winProbability } from "./lineupMath.js";
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
+
+// Bumped when the fetch logic changes in a way that invalidates cached rows.
+// v2: reads are paged past PostgREST's 1000-row cap — v1 caches may hold a
+// silently truncated season (the table is ~16k rows/season).
+const CACHE_VERSION = 2;
+
+// Season-wide pulls exceed the 1000-row select cap, so page through .range()
+// ordered by the primary key (week, player_id, model_version) for stable pages.
+function fetchProjectionRows(season, columns, week = null) {
+  return fetchAllRows("player_projections", columns, (q) => {
+    q = q.eq("season", season);
+    if (week != null) q = q.eq("week", week);
+    return q.order("week").order("player_id").order("model_version");
+  });
+}
 
 /** Current NFL season/week. During the offseason `week` is 0. */
 export async function fetchNflState() {
@@ -43,23 +58,25 @@ export async function fetchProjections(season, week) {
   try {
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
-      const { timestamp, rows } = JSON.parse(cached);
-      if (Date.now() - timestamp < ONE_HOUR_MS) return indexRows(rows, season, week);
+      const { v, timestamp, rows } = JSON.parse(cached);
+      if (v === CACHE_VERSION && Date.now() - timestamp < ONE_HOUR_MS) {
+        return indexRows(rows, season, week);
+      }
     }
   } catch {
     // ignore cache read issues
   }
 
   try {
-    const { data, error } = await supabase
-      .from("player_projections")
-      .select(
-        "player_id, position, name, team, opponent, proj_ppr, proj_half, proj_std, floor, ceiling, components",
-      )
-      .eq("season", season)
-      .eq("week", week);
-    if (error) throw error;
-    safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), rows: data || [] }));
+    const data = await fetchProjectionRows(
+      season,
+      "player_id, position, name, team, opponent, proj_ppr, proj_half, proj_std, floor, ceiling, components",
+      week,
+    );
+    safeLocalStorageWrite(
+      cacheKey,
+      JSON.stringify({ v: CACHE_VERSION, timestamp: Date.now(), rows: data }),
+    );
     return indexRows(data, season, week);
   } catch {
     // Table not migrated yet, network error, etc. — treat as "no projections".
@@ -85,7 +102,9 @@ export async function fetchSeasonProjectionAverages(season) {
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       const parsed = JSON.parse(cached);
-      if (Date.now() - parsed.timestamp < ONE_HOUR_MS) rows = parsed.rows;
+      if (parsed.v === CACHE_VERSION && Date.now() - parsed.timestamp < ONE_HOUR_MS) {
+        rows = parsed.rows;
+      }
     }
   } catch {
     // ignore cache read issues
@@ -93,13 +112,11 @@ export async function fetchSeasonProjectionAverages(season) {
 
   if (!rows) {
     try {
-      const { data, error } = await supabase
-        .from("player_projections")
-        .select("player_id, position, proj_ppr, floor, ceiling")
-        .eq("season", season);
-      if (error) throw error;
-      rows = data || [];
-      safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), rows }));
+      rows = await fetchProjectionRows(season, "player_id, position, proj_ppr, floor, ceiling");
+      safeLocalStorageWrite(
+        cacheKey,
+        JSON.stringify({ v: CACHE_VERSION, timestamp: Date.now(), rows }),
+      );
     } catch {
       return { byPlayerId: new Map(), count: 0, unavailable: true };
     }
@@ -147,8 +164,8 @@ export async function fetchSeasonProjectedPpg(season, ppr = 1) {
   try {
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
-      const { timestamp, rows: cachedRows } = JSON.parse(cached);
-      if (Date.now() - timestamp < ONE_HOUR_MS) rows = cachedRows;
+      const { v, timestamp, rows: cachedRows } = JSON.parse(cached);
+      if (v === CACHE_VERSION && Date.now() - timestamp < ONE_HOUR_MS) rows = cachedRows;
     }
   } catch {
     // ignore cache read issues
@@ -156,13 +173,11 @@ export async function fetchSeasonProjectedPpg(season, ppr = 1) {
 
   if (!rows) {
     try {
-      const { data, error } = await supabase
-        .from("player_projections")
-        .select(`player_id, ${col}`)
-        .eq("season", season);
-      if (error) throw error;
-      rows = data || [];
-      safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), rows }));
+      rows = await fetchProjectionRows(season, `player_id, ${col}`);
+      safeLocalStorageWrite(
+        cacheKey,
+        JSON.stringify({ v: CACHE_VERSION, timestamp: Date.now(), rows }),
+      );
     } catch {
       return new Map();
     }
@@ -200,23 +215,21 @@ export async function fetchSeasonPaceProjPercentiles(season) {
   try {
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
-      const { timestamp, rows } = JSON.parse(cached);
-      if (Date.now() - timestamp < ONE_HOUR_MS) return projectionPercentiles(rows);
+      const { v, timestamp, rows } = JSON.parse(cached);
+      if (v === CACHE_VERSION && Date.now() - timestamp < ONE_HOUR_MS) {
+        return projectionPercentiles(rows);
+      }
     }
   } catch {
     // ignore cache read issues
   }
 
   try {
-    const { data, error } = await supabase
-      .from("player_projections")
-      .select("player_id, position, proj_ppr")
-      .eq("season", season);
-    if (error) throw error;
+    const data = await fetchProjectionRows(season, "player_id, position, proj_ppr");
 
     // Average proj_ppr across the season's published weeks → one pace row/player.
     const acc = new Map(); // player_id → { position, sum, n }
-    for (const r of data || []) {
+    for (const r of data) {
       if (r.proj_ppr == null) continue;
       const id = String(r.player_id);
       const cur = acc.get(id) || { position: r.position, sum: 0, n: 0 };
@@ -229,7 +242,10 @@ export async function fetchSeasonPaceProjPercentiles(season) {
       position: v.position,
       proj_ppr: v.n > 0 ? v.sum / v.n : null,
     }));
-    safeLocalStorageWrite(cacheKey, JSON.stringify({ timestamp: Date.now(), rows }));
+    safeLocalStorageWrite(
+      cacheKey,
+      JSON.stringify({ v: CACHE_VERSION, timestamp: Date.now(), rows }),
+    );
     return projectionPercentiles(rows);
   } catch {
     return new Map();
