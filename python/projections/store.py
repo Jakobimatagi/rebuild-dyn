@@ -149,6 +149,12 @@ _SCHEME_COLS = [
     "success_rate", "cpoe", "scramble_rate", "head_coach",
 ]
 _COACH_COLS = ["season", "team", "head_coach", "plays", "is_primary"]
+_DEF_SCHEME_COLS = [
+    "season", "team", "plays", "epa_play_allowed", "pass_epa_allowed",
+    "rush_epa_allowed", "success_rate_allowed", "cpoe_allowed",
+    "pass_rate_faced", "proe_faced", "adot_faced", "deep_rate_allowed",
+    "sack_rate", "int_rate", "qb_hit_rate", "head_coach",
+]
 _UTIL_COLS = [
     "season", "team", "player_id", "sleeper_id", "name", "targets", "receptions",
     "rec_air_yards", "carries", "rz_targets", "rz_carries", "target_share",
@@ -165,6 +171,10 @@ _CONTRACT_COLS = [
 
 def publish_scheme(df: pd.DataFrame) -> int:
     return _upsert_df("team_scheme_seasons", df, "season,team", _SCHEME_COLS)
+
+
+def publish_defense_scheme(df: pd.DataFrame) -> int:
+    return _upsert_df("defense_scheme_seasons", df, "season,team", _DEF_SCHEME_COLS)
 
 
 def publish_contracts(df: pd.DataFrame) -> int:

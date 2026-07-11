@@ -1,12 +1,15 @@
 #!/usr/bin/env node
-// ── OC database CSV importer ─────────────────────────────────────────────────
+// ── OC / DC database CSV importer ────────────────────────────────────────────
 //
-// Merges a CSV of offensive coordinators into src/lib/ocData.js. Use this to
-// add a new season's column or correct names without hand-editing the file.
+// Merges a CSV of offensive coordinators into src/lib/ocData.js — or, with
+// --dc, defensive coordinators into src/lib/dcData.js (same format, same
+// rules). Use this to add a new season's column or correct names without
+// hand-editing the file.
 //
 // Usage:
 //   node scripts/import-ocs.mjs <path/to/data.csv>
-//   cat data.csv | node scripts/import-ocs.mjs --stdin
+//   node scripts/import-ocs.mjs --dc <path/to/dc.csv>
+//   cat data.csv | node scripts/import-ocs.mjs [--dc] --stdin
 //
 // CSV format (header row + one row per team):
 //
@@ -32,6 +35,13 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OC_DATA_PATH = path.resolve(__dirname, "../src/lib/ocData.js");
+const DC_DATA_PATH = path.resolve(__dirname, "../src/lib/dcData.js");
+
+// --dc switches the target dataset; everything else is identical.
+const IS_DC = process.argv.includes("--dc");
+const TARGET = IS_DC
+  ? { path: DC_DATA_PATH, constName: "DC_DATA", label: "DC" }
+  : { path: OC_DATA_PATH, constName: "OC_DATA", label: "OC" };
 
 // ── CSV parsing ──────────────────────────────────────────────────────────────
 function parseCsv(text) {
@@ -79,11 +89,13 @@ function splitRow(line) {
   return out;
 }
 
-// ── Merge into existing OC_DATA ──────────────────────────────────────────────
+// ── Merge into the existing dataset ──────────────────────────────────────────
 async function loadExisting() {
-  const mod = await import(OC_DATA_PATH);
-  const validTeams = new Set(mod.NFL_TEAMS.map((t) => t.abbr));
-  return { existing: mod.OC_DATA || {}, validTeams };
+  // The canonical team list always comes from ocData.js.
+  const ocMod = await import(OC_DATA_PATH);
+  const validTeams = new Set(ocMod.NFL_TEAMS.map((t) => t.abbr));
+  const mod = TARGET.path === OC_DATA_PATH ? ocMod : await import(TARGET.path);
+  return { existing: mod[TARGET.constName] || {}, validTeams };
 }
 
 function normalizeName(raw) {
@@ -129,22 +141,23 @@ function formatYearBlock(year, byTeam, abbrs) {
   return lines.join("\n");
 }
 
-function formatOcData(merged, abbrs) {
+function formatDataConst(merged, abbrs) {
   const years = Object.keys(merged).map(Number).sort((a, b) => b - a);
   const blocks = years.map((y) => formatYearBlock(y, merged[y], abbrs));
-  return `export const OC_DATA = {\n${blocks.join("\n")}\n};`;
+  return `export const ${TARGET.constName} = {\n${blocks.join("\n")}\n};`;
 }
 
-function rewriteOcData(formattedConst) {
-  const src = fs.readFileSync(OC_DATA_PATH, "utf8");
-  const re  = /export const OC_DATA = \{[\s\S]*?\n\};/;
-  if (!re.test(src)) throw new Error("Could not locate OC_DATA constant in ocData.js");
-  fs.writeFileSync(OC_DATA_PATH, src.replace(re, formattedConst), "utf8");
+function rewriteDataConst(formattedConst) {
+  const src = fs.readFileSync(TARGET.path, "utf8");
+  // \n? so the freshly-seeded one-line `= {};` form matches too.
+  const re  = new RegExp(`export const ${TARGET.constName} = \\{[\\s\\S]*?\\n?\\};`);
+  if (!re.test(src)) throw new Error(`Could not locate ${TARGET.constName} constant in ${path.basename(TARGET.path)}`);
+  fs.writeFileSync(TARGET.path, src.replace(re, formattedConst), "utf8");
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 async function readInput() {
-  const argv = process.argv.slice(2);
+  const argv = process.argv.slice(2).filter((a) => a !== "--dc");
   if (argv.includes("--stdin") || argv.length === 0) {
     return await new Promise((resolve, reject) => {
       let buf = "";
@@ -168,11 +181,11 @@ async function main() {
   const { merged, skipped } = mergeData(existing, csv, validTeams);
 
   const abbrs = [...validTeams].sort();
-  const out   = formatOcData(merged, abbrs);
-  rewriteOcData(out);
+  const out   = formatDataConst(merged, abbrs);
+  rewriteDataConst(out);
 
   const updates = csv.rows.length * csv.yearCols.length;
-  console.error(`✓ updated ${csv.rows.length} teams across years: ${csv.yearCols.join(", ")}`);
+  console.error(`✓ [${TARGET.label}] updated ${csv.rows.length} teams across years: ${csv.yearCols.join(", ")}`);
   console.error(`  (${updates} cell-slots considered; empty cells skipped)`);
   if (skipped.length) console.error(`  skipped unknown team abbrs: ${skipped.join(", ")}`);
 }

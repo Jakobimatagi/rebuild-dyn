@@ -231,6 +231,47 @@ def cmd_publish_oc(args):
     print("\nDone.")
 
 
+def cmd_dc_check(args):
+    """Self-test the defensive pbp aggregation: build DC-Blueprint fingerprints
+    for a couple seasons and print spot-checks that should match the eye test."""
+    from .defense_scheme import defense_scheme_seasons
+
+    seasons = [args.season - 1, args.season]
+    print(f"defensive fingerprints — seasons {seasons[0]}-{seasons[-1]}\n")
+    df = defense_scheme_seasons(seasons)
+    if df.empty:
+        print("No defensive rows produced — check upstream availability.")
+        return
+    cur = df[df["season"] == args.season].copy()
+    print(f"{len(df)} team-season rows  |  {len(cur)} defenses in {args.season}\n")
+
+    def top(col, label, n=5, asc=False):
+        s = cur.sort_values(col, ascending=asc).head(n)
+        print(f"-- {label} ({args.season}) --")
+        for _, r in s.iterrows():
+            print(f"   {r['team']:>3}  {col}={r[col]}  coach={r['head_coach']}")
+        print()
+
+    top("epa_play_allowed", "Worst EPA/play allowed (softest defenses)")
+    top("epa_play_allowed", "Best EPA/play allowed (stingiest defenses)", asc=True)
+    top("sack_rate", "Highest sack rate per dropback")
+    top("proe_faced", "Biggest pass funnels (offenses throw over expected)")
+
+
+def cmd_publish_dc(args):
+    """Build defensive fingerprints from pbp for [start, end] and upsert to
+    Supabase (service-role key). The DC-Blueprint twin of publish-oc."""
+    from .defense_scheme import defense_scheme_seasons
+    from .store import publish_defense_scheme
+
+    end = args.end or int(sl.get_state().get("season") or 0) or args.start
+    seasons = list(range(args.start, end + 1))
+    print(f"Building DC history for {args.start}-{end} ({len(seasons)} seasons)…")
+    print("\ndefensive fingerprints (downloads play-by-play; cached after first run)…")
+    publish_defense_scheme(defense_scheme_seasons(seasons))
+    print("\nDone.")
+
+
 def cmd_contracts_check(args):
     """Self-test the OTC contracts layer with no DB: build the active-player table and
     print row count, Sleeper-link coverage, and the top deals by AAV (should be the
@@ -375,6 +416,15 @@ def main(argv=None):
     oc.add_argument("--start", type=int, default=2016, help="first season (pbp goes back to 1999)")
     oc.add_argument("--end", type=int, default=None, help="last season (defaults to the current NFL season)")
     oc.set_defaults(func=cmd_publish_oc)
+
+    dc = sub.add_parser("dc-check", help="self-test the defensive pbp aggregation (DC Blueprint)")
+    dc.add_argument("--season", type=int, default=2024, help="target season (also pulls the prior for context)")
+    dc.set_defaults(func=cmd_dc_check)
+
+    dp = sub.add_parser("publish-dc", help="build + publish defensive scheme history to Supabase")
+    dp.add_argument("--start", type=int, default=2016, help="first season (pbp goes back to 1999)")
+    dp.add_argument("--end", type=int, default=None, help="last season (defaults to the current NFL season)")
+    dp.set_defaults(func=cmd_publish_dc)
 
     cc = sub.add_parser("contracts-check", help="self-test the OTC contracts data layer (no DB)")
     cc.add_argument("--league-year", type=int, default=None,

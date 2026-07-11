@@ -30,6 +30,10 @@ const key = (group, pos) => `${group}|${pos}`;
  * `seasonWeights` get weight 0 (dropped); omit `seasonWeights` to weight all
  * rows equally.
  *
+ * `groupSeasonFactors` — optional Map("GROUP|season" → factor) multiplying the
+ * season weight for one group only (e.g. halve a defense's old seasons after a
+ * DC change: see dcBlueprint.coordinatorContinuityFactors). Missing keys = 1.
+ *
  * Returns {
  *   multipliers: Map("GROUP|POS" → { mult, weightedPpg, leagueAvg, games, weight }),
  *   leagueAvgByPos: Map(pos → weighted league per-game average),
@@ -42,16 +46,22 @@ export function buildMultipliers(rows, {
   seasonWeights = null,
   priorK = DEFAULT_PRIOR_K,
   clamp = DEFAULT_CLAMP,
+  groupSeasonFactors = null,
 } = {}) {
   const empty = { multipliers: new Map(), leagueAvgByPos: new Map(), groups: [] };
   if (!rows || rows.length === 0) return empty;
+
+  const weightOf = (group, season) => {
+    const base = seasonWeights ? (seasonWeights[season] ?? 0) : 1;
+    const factor = groupSeasonFactors?.get(`${group}|${season}`) ?? 1;
+    return base * factor;
+  };
 
   // One observation per (season, week, opponent, pos): total pts that week.
   const obs = new Map(); // "season|week|group|pos" → { group, pos, season, sum }
   for (const r of rows) {
     if (!r || !r.opponent || !r.pos || r.pts == null) continue;
-    const w = seasonWeights ? (seasonWeights[r.season] ?? 0) : 1;
-    if (w <= 0) continue;
+    if (weightOf(r.opponent, r.season) <= 0) continue;
     const k = `${r.season}|${r.week}|${r.opponent}|${r.pos}`;
     const cur = obs.get(k) || { group: r.opponent, pos: r.pos, season: r.season, sum: 0 };
     cur.sum += Number(r.pts) || 0;
@@ -63,7 +73,7 @@ export function buildMultipliers(rows, {
   const byGroupPos = new Map(); // key → { group, pos, wSum, wxSum, games }
   const league = new Map();     // pos → { wSum, wxSum }
   for (const o of obs.values()) {
-    const w = seasonWeights ? (seasonWeights[o.season] ?? 0) : 1;
+    const w = weightOf(o.group, o.season);
     const k = key(o.group, o.pos);
     const g = byGroupPos.get(k) || { group: o.group, pos: o.pos, wSum: 0, wxSum: 0, games: 0 };
     g.wSum += w;

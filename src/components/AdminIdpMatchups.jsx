@@ -17,6 +17,10 @@ import {
   getOutcomeRate,
   outcomeVerdict,
 } from "../lib/matchupOutcomes.js";
+import { coordinatorFor, coordinatorContinuityFactors } from "../lib/dcBlueprint.js";
+import { DC_DATA } from "../lib/dcData.js";
+import { OC_DATA } from "../lib/ocData.js";
+import { fetchDefenseSchemeSeasons, defenseFingerprintFor } from "../lib/dcHistoryApi.js";
 
 const POS_COLORS = {
   QB: "bg-rose-500/15 text-rose-300 border-rose-500/30",
@@ -234,10 +238,15 @@ function RankingsTab({ rows, loading, error, seasons, season, setSeason }) {
 function MultiplierGrid({ engine }) {
   const [direction, setDirection] = useState("offense"); // offense | idp
   const [sort, setSort] = useState({ key: "overall", dir: -1 });
+  const anchorSeason = engine.seasons[0];
 
   const { result, positions, groupLabel, verb } = direction === "offense"
     ? { result: engine.dirA, positions: OFF_POSITIONS, groupLabel: "Defense", verb: "allows" }
     : { result: engine.dirB, positions: DEF_SIDE_POSITIONS, groupLabel: "Vs offense", verb: "yields" };
+
+  // DC name for defenses, OC name for offenses — whichever side the group is.
+  const coordName = (group) =>
+    coordinatorFor(direction === "offense" ? DC_DATA : OC_DATA, anchorSeason, group);
 
   const rows = useMemo(() => {
     const list = result.groups.map((group) => {
@@ -288,7 +297,12 @@ function MultiplierGrid({ engine }) {
           <tbody>
             {rows.map((r) => (
               <tr key={r.group} className="border-t border-white/5 hover:bg-slate-900/40">
-                <td className="px-3 py-1.5 font-semibold text-slate-200">{r.group}</td>
+                <td className="px-3 py-1.5">
+                  <div className="font-semibold text-slate-200">{r.group}</div>
+                  {coordName(r.group) && (
+                    <div className="text-[10px] text-slate-500">{direction === "offense" ? "DC" : "OC"} {coordName(r.group)}</div>
+                  )}
+                </td>
                 {positions.map((pos) => (
                   <td key={pos} className="px-2 py-1.5 text-center font-mono text-xs text-slate-100"
                     style={multCellStyle(r.cells[pos]?.mult)}
@@ -305,7 +319,7 @@ function MultiplierGrid({ engine }) {
         </table>
       </div>
       <p className="text-[10px] text-slate-600 mt-2">
-        Recency-weighted over {engine.seasons.join(" / ")} (weights 1.0 / 0.6 / 0.3) · Bayesian-shrunk toward league average by 4 pseudo-games · clamped to 0.75–1.30. Hover a cell for the underlying sample.
+        Recency-weighted over {engine.seasons.join(" / ")} (weights 1.0 / 0.6 / 0.3) · Bayesian-shrunk toward league average by 4 pseudo-games · clamped to 0.75–1.30 · where dcData.js/ocData.js know a team's coordinator, seasons under a different one count at 0.35× weight. Hover a cell for the underlying sample.
       </p>
     </div>
   );
@@ -522,10 +536,41 @@ function ProbBar({ rate }) {
   );
 }
 
-function OffenseVsDefenseTab({ engine, playersDb }) {
+// Compact chips describing the defense's scheme fingerprint (from the
+// defense_scheme_seasons table, when published) — the "why" behind the odds.
+function DcFingerprint({ fp, dcName }) {
+  if (!fp && !dcName) return null;
+  const chip = (label, value) => value != null && (
+    <span key={label} className="rounded-md border border-white/10 bg-slate-900/60 px-1.5 py-0.5 text-[11px] text-slate-300">
+      <span className="text-slate-500">{label}</span> <span className="font-mono">{value}</span>
+    </span>
+  );
+  const pct = (v, digits = 1) => (v == null ? null : `${(v * 100).toFixed(digits)}%`);
+  const funnel = fp?.proe_faced == null ? null
+    : `${fp.proe_faced > 0 ? "+" : ""}${Number(fp.proe_faced).toFixed(1)} (${fp.proe_faced > 1 ? "pass funnel" : fp.proe_faced < -1 ? "run funnel" : "neutral"})`;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+      {dcName && (
+        <span className="rounded-md border border-lime-400/30 bg-lime-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-lime-300">
+          DC {dcName}
+        </span>
+      )}
+      {fp && chip("EPA/play allowed", Number(fp.epa_play_allowed ?? NaN).toFixed(3))}
+      {fp && chip("sack rate", pct(fp.sack_rate))}
+      {fp && chip("deep allowed", pct(fp.deep_rate_allowed, 0))}
+      {fp && chip("PROE faced", funnel)}
+      {fp && <span className="text-[10px] text-slate-600">({fp.season} pbp)</span>}
+    </div>
+  );
+}
+
+function OffenseVsDefenseTab({ engine, playersDb, dcScheme }) {
   const teams = engine.dirA.groups;
   const [offense, setOffense] = useState(teams[0] || "");
   const [defense, setDefense] = useState(teams[1] || "");
+  const anchorSeason = engine.seasons[0];
+  const dcName = coordinatorFor(DC_DATA, anchorSeason, defense);
+  const fingerprint = defenseFingerprintFor(dcScheme, defense, anchorSeason);
 
   const profiles = useMemo(() => buildPlayerProfiles(engine.offRows), [engine]);
   const rates = useMemo(
@@ -583,6 +628,7 @@ function OffenseVsDefenseTab({ engine, playersDb }) {
             ? `Across ${overallRate.games} recency-weighted player-games vs ${defense}, offenses hit ceiling ${Math.round(overallRate.ceiling * 100)}% / average ${Math.round(overallRate.average * 100)}% / floor ${Math.round(overallRate.floor * 100)}% (league base ~25/50/25).`
             : `No graded games vs ${defense} yet.`}
         </div>
+        <DcFingerprint fp={fingerprint} dcName={dcName} />
 
         <div className="mt-3 space-y-1.5">
           {posRows.map(({ pos, rate, verdict, mult }) => (
@@ -769,6 +815,7 @@ export default function AdminIdpMatchups() {
   const [tab, setTab] = useState("rankings");
   const [nflState, setNflState] = useState(null);
   const [playersDb, setPlayersDb] = useState(null);
+  const [dcScheme, setDcScheme] = useState([]); // defense_scheme_seasons rows (best-effort)
 
   // Rankings (per-season, loaded on demand)
   const [rankSeason, setRankSeason] = useState(null);
@@ -840,6 +887,9 @@ export default function AdminIdpMatchups() {
     fetchPlayersDb()
       .then((db) => { if (!cancelled) setPlayersDb(db); })
       .catch((err) => console.error("Failed to load players DB:", err));
+    // DC-Blueprint fingerprints — resolves to [] until the table is published.
+    fetchDefenseSchemeSeasons()
+      .then((rows) => { if (!cancelled) setDcScheme(rows); });
     return () => { cancelled = true; };
   }, [unlocked]);
 
@@ -902,8 +952,18 @@ export default function AdminIdpMatchups() {
           }
         }
         const seasonWeights = defaultSeasonWeights(anchorSeason);
-        const dirA = buildMultipliers(offRows, { seasonWeights });
-        const dirB = buildMultipliers(idpRows, { seasonWeights });
+        // Coordinator continuity: a defense's pre-DC-change seasons (and an
+        // offense's pre-OC-change seasons in the IDP direction) count less.
+        // Empty datasets produce no overrides, so this is a no-op until
+        // dcData.js / ocData.js cover the seasons in play.
+        const dirA = buildMultipliers(offRows, {
+          seasonWeights,
+          groupSeasonFactors: coordinatorContinuityFactors(DC_DATA, anchorSeason),
+        });
+        const dirB = buildMultipliers(idpRows, {
+          seasonWeights,
+          groupSeasonFactors: coordinatorContinuityFactors(OC_DATA, anchorSeason),
+        });
         if (!cancelled) setEngine({ offRows, idpRows, dirA, dirB, seasons });
       } catch (err) {
         if (!cancelled) setEngineError(err.message || "Failed to load weekly data.");
@@ -1015,7 +1075,7 @@ export default function AdminIdpMatchups() {
         )}
 
         {tab === "defense" && engineReady && <MultiplierGrid engine={engine} />}
-        {tab === "ovd" && engineReady && <OffenseVsDefenseTab engine={engine} playersDb={playersDb} />}
+        {tab === "ovd" && engineReady && <OffenseVsDefenseTab engine={engine} playersDb={playersDb} dcScheme={dcScheme} />}
         {tab === "predictions" && engineReady && (
           <PredictionsTab engine={engine} playersDb={playersDb}
             predSeason={predSeason} predWeek={predWeek} setPredWeek={setPredWeek} />

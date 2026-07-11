@@ -96,6 +96,30 @@ test("seasons missing from seasonWeights contribute nothing", () => {
   assert.equal(getMultiplier(res, "DEN", "WR"), 1.0);
 });
 
+test("groupSeasonFactors down-weight one group's season without touching others", () => {
+  // DEN was soft in 2024 (60/gm) and stingy in 2025 (10/gm); MIA flat 30.
+  const rows = [];
+  for (let week = 1; week <= 6; week++) {
+    rows.push(r(2024, week, "DEN", 60));
+    rows.push(r(2025, week, "DEN", 10));
+    rows.push(r(2024, week, "MIA", 30));
+    rows.push(r(2025, week, "MIA", 30));
+  }
+  const weights = { 2024: 1, 2025: 1 };
+  const plain = buildMultipliers(rows, { seasonWeights: weights });
+  const nerfed = buildMultipliers(rows, {
+    seasonWeights: weights,
+    groupSeasonFactors: new Map([["DEN|2024", 0]]),
+  });
+  // With 2024 zeroed for DEN, only its stingy 2025 counts → lower multiplier.
+  assert.ok(
+    getMultiplier(nerfed, "DEN", "WR") < getMultiplier(plain, "DEN", "WR"),
+    "DEN should look tougher once its pre-DC-change season is dropped",
+  );
+  // MIA is untouched by DEN's override.
+  assert.equal(getMatchupEntry(nerfed, "MIA", "WR").weightedPpg, 30);
+});
+
 test("works in the IDP direction (grouping IDP rows by opposing offense)", () => {
   const rows = [];
   for (let week = 1; week <= 6; week++) {
