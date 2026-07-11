@@ -17,6 +17,7 @@ function blurbFingerprint(kind, scope, players) {
     if (kind === "top-players") return `${p.id}:${p.finalScore}`;
     if (kind === "oc-usage") return `${p.id}:${p.metric ?? ""}`;
     if (kind === "hot-cold") return `${p.id}:${p.last4 ?? ""}:${p.streak ?? ""}`;
+    if (kind === "deep-dive-article") return `${p.id}:${p.score}:${p.dynastyValue ?? ""}`;
     return `${p.id}:${p.grade}`;
   });
   const seed = `${kind}|${scope?.year ?? ""}|${scope?.season ?? ""}|${scope?.board ?? ""}|${scope?.card ?? ""}|${scope?.position ?? ""}|${parts.join(",")}`;
@@ -40,6 +41,46 @@ function readCache(key) {
   } catch {
     return null;
   }
+}
+
+// Shared POST to the admin-gated insight proxy. All kinds go through the same
+// endpoint; callers validate the kind-specific result shape themselves.
+async function postInsights(body) {
+  // These endpoints are admin-gated server-side; send the session token.
+  const accessToken = await getAccessToken();
+  if (!accessToken) throw new Error("Admin sign-in required for AI features.");
+
+  const res = await fetch("/api/ai-share-blurbs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(body),
+  });
+
+  if (res.status === 429) {
+    throw new Error("Daily AI insight limit reached. Try again tomorrow.");
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch { /* not json */ }
+    const upstreamMsg =
+      parsed?.detail?.error?.message ||
+      parsed?.detail?.error ||
+      parsed?.error ||
+      text?.slice(0, 200);
+    if (res.status === 404) {
+      throw new Error(
+        `Insight request 404 — ${upstreamMsg || "endpoint not found. Has /api/ai-share-blurbs been deployed yet?"}`,
+      );
+    }
+    throw new Error(
+      upstreamMsg
+        ? `Insight request failed (${res.status}): ${upstreamMsg}`
+        : `Insight request failed (${res.status})`,
+    );
+  }
+
+  return res.json();
 }
 
 // ---------------------------------------------------------------------------
@@ -71,41 +112,7 @@ export async function fetchShareBlurbs(kind, players, scope = {}, { force = fals
     }
   }
 
-  // These endpoints are admin-gated server-side; send the session token.
-  const accessToken = await getAccessToken();
-  if (!accessToken) throw new Error("Admin sign-in required for AI features.");
-
-  const res = await fetch("/api/ai-share-blurbs", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify({ kind, players, scope }),
-  });
-
-  if (res.status === 429) {
-    throw new Error("Daily AI insight limit reached. Try again tomorrow.");
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let parsed = null;
-    try { parsed = JSON.parse(text); } catch { /* not json */ }
-    const upstreamMsg =
-      parsed?.detail?.error?.message ||
-      parsed?.detail?.error ||
-      parsed?.error ||
-      text?.slice(0, 200);
-    if (res.status === 404) {
-      throw new Error(
-        `Insight request 404 — ${upstreamMsg || "endpoint not found. Has /api/ai-share-blurbs been deployed yet?"}`,
-      );
-    }
-    throw new Error(
-      upstreamMsg
-        ? `Insight request failed (${res.status}): ${upstreamMsg}`
-        : `Insight request failed (${res.status})`,
-    );
-  }
-
-  const data = await res.json();
+  const data = await postInsights({ kind, players, scope });
   if (!data?.result || (!data.result.blurbs && !data.result.synopsis)) {
     throw new Error("Empty result from insight model");
   }
@@ -212,6 +219,105 @@ export function buildOcBlurbInput(subject) {
     if (subject[f] != null) out[f] = subject[f];
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// fetchDeepDiveArticles — per-player article skeletons (headline, hook, key
+// points, verdict) for the admin Deep Dive Cards page. Same endpoint and
+// admin gate as the blurbs; result shape is `articles` instead of `blurbs`.
+//
+// Returns: { articlesById: Map<id, article>, cached, generatedAt }
+// ---------------------------------------------------------------------------
+export async function fetchDeepDiveArticles(players, scope = {}, { force = false } = {}) {
+  if (!Array.isArray(players) || players.length === 0) {
+    return { articlesById: new Map(), cached: false, generatedAt: null };
+  }
+
+  const fp = blurbFingerprint("deep-dive-article", scope, players);
+  const key = cacheKey(fp);
+
+  if (!force) {
+    const cached = readCache(key);
+    if (cached && Array.isArray(cached.result?.articles)) {
+      return {
+        articlesById: new Map(cached.result.articles.map((a) => [String(a.id), a])),
+        cached: true,
+        generatedAt: cached.timestamp,
+      };
+    }
+  }
+
+  const data = await postInsights({ kind: "deep-dive-article", players, scope });
+  if (!Array.isArray(data?.result?.articles) || data.result.articles.length === 0) {
+    throw new Error("Empty result from insight model");
+  }
+
+  const stamped = { result: data.result, timestamp: Date.now() };
+  safeLocalStorageWrite(key, JSON.stringify(stamped));
+
+  return {
+    articlesById: new Map(data.result.articles.map((a) => [String(a.id), a])),
+    cached: false,
+    generatedAt: stamped.timestamp,
+  };
+}
+
+// Compact article-notes input from an enriched deep-dive player (the object
+// PlayerDeepDiveModal / DeepDiveShareCard render). Mirrors the card: composite
+// score + components, 3-season percentile history, market vs model values,
+// fused dynasty value, trajectory/outlook, comps, and the model's insights.
+export function buildDeepDiveArticleInput(player) {
+  const p = player;
+  return {
+    id: String(p.id),
+    name: p.name,
+    position: p.position,
+    team: p.team,
+    age: p.age ?? null,
+    yearsExp: p.yearsExp ?? null,
+    injuryStatus: p.injuryStatus || null,
+    draftYear: p.draftYear ?? null,
+    draftTier: p.draftTier ?? null,
+    draftSlot: p.draftSlot ?? null,
+    score: p.score,
+    verdict: p.verdict ?? null,
+    components: p.components || null,
+    archetype: p.archetype || null,
+    tags: (p.tags || []).slice(0, 4),
+    confidence: p.confidence ?? null,
+    ppg: p.ppg != null ? Number(p.ppg) : null,
+    lastSeasonYear: p.lastSeasonYear ?? null,
+    pctileLast: p.pctileLast ?? null,
+    pctilePrev: p.pctilePrev ?? null,
+    pctileOlder: p.pctileOlder ?? null,
+    peakPctile: p.peakPctile ?? null,
+    marketValue: p.marketValue != null ? Math.round(p.marketValue) : null,
+    fcValue: p.fantasyCalcValue != null ? Math.round(p.fantasyCalcValue) : null,
+    fcRank: p.fantasyCalcRank ?? null,
+    dynastyValue: p.dynastyValue?.value ?? null,
+    dvTier: p.dynastyValue?.tier ?? null,
+    dvModel: p.dynastyValue?.model ?? null,
+    trajectory: p.prediction?.trajectory?.label ?? null,
+    outlook: p.prediction?.dynastyOutlook?.label ?? null,
+    breakoutProb: p.prediction?.breakoutProb ?? null,
+    bustRisk: p.prediction?.bustRisk ?? null,
+    projections: (p.prediction?.projections || []).map((pr) => ({
+      yearsAhead: pr.yearsAhead,
+      age: pr.age,
+      score: pr.score,
+    })),
+    comps: (p.prediction?.comps || []).slice(0, 4).map((c) => ({
+      name: c.name,
+      year: c.year,
+      age: c.age,
+      similarity: c.similarity,
+      future1: c.future1 ?? null,
+      future2: c.future2 ?? null,
+      future3: c.future3 ?? null,
+      bucket: c.outcomeBucket || "typical",
+    })),
+    insights: (p.prediction?.keyInsights || []).slice(0, 4),
+  };
 }
 
 // Compact beat-the-projection summary for the Hot & Cold share cards. `player`

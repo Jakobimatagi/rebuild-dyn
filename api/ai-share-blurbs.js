@@ -118,11 +118,55 @@ Return ONLY this JSON, no prose, no markdown, no code fences:
   "blurbs": []
 }`;
 
+const DEEP_DIVE_ARTICLE_SYSTEM = `You are a dynasty fantasy football analyst preparing ARTICLE NOTES for a writer. You will receive one or more players, each with the full output of our dynasty model (the same numbers shown on their deep-dive share card). For EACH player, produce the skeleton of a standalone article: a headline, an opening hook, the key points a writer would build sections from, and a closing verdict.
+
+Each player carries these fields (absent fields mean no data — do not invent values):
+  - name, position, team, age, yearsExp, injuryStatus
+  - draftYear / draftTier / draftSlot: NFL draft pedigree
+  - score: our composite dynasty score (5-100) and verdict: the bucket label
+  - components: subscores 0-100 — age, prod (production), avail (availability), trend, situ (situation)
+  - archetype, tags: model-assigned identity labels
+  - confidence: model confidence % in the score
+  - ppg: last season fantasy PPG; pctileLast / pctilePrev / pctileOlder: production percentile vs position the last 3 seasons; peakPctile: career-best percentile
+  - marketValue: blended market value; fcValue / fcRank: FantasyCalc dollar value and overall rank
+  - dynastyValue: fused forward value 0-100 blending model + market; dvTier: its tier label; dvModel: the pure model side of the fusion (gap vs market is signal)
+  - trajectory: model's arc label (Breakout Candidate, Declining, Stable, ...); outlook: dynasty action label (Sell High, Dynasty Asset, ...)
+  - breakoutProb / bustRisk: 0-100 probabilities from historical comps
+  - projections: projected score for the next 3 seasons
+  - comps: historical comparables with similarity % and how their careers went (future1/2/3 = production percentile 1-3 years later; ceiling/floor bucket)
+  - insights: the model's own key-insight sentences
+
+For each player return:
+  - headline: a sharp article title, ≤ 80 chars, specific to THIS player's situation — no clickbait, no colons-with-generic-halves like "X: A Deep Dive"
+  - hook: 1-2 sentences (≤ 280 chars) framing the tension of the article — the question a dynasty manager actually has about this player
+  - keyPoints: 5-8 bullets, each ONE sentence citing the specific number doing the work (score component, percentile swing, market-vs-model gap, breakout/bust probability, comp outcome). Each bullet should be a section seed a writer can expand. Order them as the article should flow: situation → production evidence → model vs market → risk → forward projection.
+  - verdict: 1-2 sentences (≤ 280 chars) of closing dynasty advice — who should buy/sell/hold and at what cost basis.
+
+Angles to prioritize when present: a gap between dynastyValue's model side and the market (mispricing story); pctile trend across the 3 seasons (rise/collapse story); high breakoutProb or bustRisk with the comp evidence behind it; age vs archetype tension; a trajectory/outlook label that disagrees with public perception.
+
+Voice: confident, scout-tone, NO emojis, NO filler hype. Cite exact numbers when they're load-bearing. Never fabricate stats not present in the input.
+
+Return ONLY this JSON, no prose, no markdown, no code fences:
+{
+  "articles": [
+    {
+      "id": "<exact id from input>",
+      "headline": "...",
+      "hook": "...",
+      "keyPoints": ["...", "..."],
+      "verdict": "..."
+    }
+  ]
+}
+
+Length of "articles" must equal length of input. Every input id must appear in the output.`;
+
 const SYSTEM_BY_KIND = {
   rookies: ROOKIES_SYSTEM,
   "top-players": TOP_PLAYERS_SYSTEM,
   "oc-usage": OC_USAGE_SYSTEM,
   "hot-cold": HOT_COLD_SYSTEM,
+  "deep-dive-article": DEEP_DIVE_ARTICLE_SYSTEM,
 };
 
 export default async function handler(req, res) {
@@ -145,7 +189,7 @@ export default async function handler(req, res) {
   }
   const systemPrompt = SYSTEM_BY_KIND[kind];
   if (!systemPrompt) {
-    return res.status(400).json({ error: "kind must be 'rookies', 'top-players', 'oc-usage', or 'hot-cold'" });
+    return res.status(400).json({ error: "kind must be 'rookies', 'top-players', 'oc-usage', 'hot-cold', or 'deep-dive-article'" });
   }
 
   const scopeBit = kind === "rookies"
@@ -154,6 +198,8 @@ export default async function handler(req, res) {
     ? `NFL usage data · ${scope?.season ?? "season"}. Card: ${scope?.board ?? "usage"}.`
     : kind === "hot-cold"
     ? `Hot & Cold beat-the-projection board · ${scope?.season ?? "season"}. Card: ${scope?.card ?? "leaderboard"}.`
+    : kind === "deep-dive-article"
+    ? `Deep-dive article notes · 12-team SF full-PPR dynasty context. Upcoming NFL season: ${scope?.season ?? "unknown"}.`
     : `Top Players board · 12-team SF full-PPR. Position scope: ${scope?.position ?? "all"}.`;
 
   const userPrompt = `${scopeBit}
@@ -161,7 +207,7 @@ export default async function handler(req, res) {
 Ranked input (one entry per player, ordered by our model's final rank):
 ${JSON.stringify(players, null, 2)}
 
-Write the blurbs as specified.`;
+Write the output as specified.`;
 
   const payload = {
     systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -200,10 +246,12 @@ Write the blurbs as specified.`;
 
     const result = parseJsonLoose(text);
     // Card-level kinds (hot-cold) may return only a synopsis; row-level kinds
-    // return a blurbs array. Accept either shape.
+    // return a blurbs array; deep-dive-article returns an articles array.
+    // Accept any of the three shapes.
     const hasBlurbs = Array.isArray(result?.blurbs);
     const hasSynopsis = typeof result?.synopsis === "string";
-    if (!result || (!hasBlurbs && !hasSynopsis)) {
+    const hasArticles = Array.isArray(result?.articles);
+    if (!result || (!hasBlurbs && !hasSynopsis && !hasArticles)) {
       return res
         .status(502)
         .json({ error: "Could not parse JSON from model", raw: text });
