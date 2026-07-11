@@ -44,13 +44,15 @@ function meta(row) {
 
 /**
  * Merged projected + actual rows for one (season, week), keyed by player_id.
- * Returns a Map: player_id → { player_id, position, name, team, week, proj, actual }.
+ * Returns a Map: player_id → { player_id, position, name, team, opponent, week, proj, actual }.
  * Cached in localStorage for 30 days (past weeks never change).
  */
 export async function fetchWeeklyScores(season, week) {
   if (!season || !week) return new Map();
 
-  const cacheKey = `dyn_wk_scores_${season}_${week}`;
+  // v2: rows now carry `opponent` — older cached rows lack it, so the key is
+  // versioned to force a refetch rather than serving opponent-less data.
+  const cacheKey = `dyn_wk_scores_v2_${season}_${week}`;
   try {
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
@@ -72,17 +74,24 @@ export async function fetchWeeklyScores(season, week) {
   const merged = new Map();
   for (const row of projRows || []) {
     const id = String(row.player_id);
-    merged.set(id, { player_id: id, week, ...meta(row), proj: pts(row), actual: null });
+    merged.set(id, {
+      player_id: id, week, ...meta(row),
+      opponent: row.opponent ?? null,
+      proj: pts(row), actual: null,
+    });
   }
   for (const row of statRows || []) {
     const id = String(row.player_id);
-    const cur = merged.get(id) || { player_id: id, week, ...meta(row), proj: null, actual: null };
+    const cur = merged.get(id) || {
+      player_id: id, week, ...meta(row), opponent: null, proj: null, actual: null,
+    };
     cur.actual = pts(row);
     // stats carry the freshest team/metadata; fill any gaps from projections
     const m = meta(row);
     cur.position = cur.position || m.position;
     cur.name = cur.name || m.name;
     cur.team = m.team || cur.team;
+    cur.opponent = row.opponent ?? cur.opponent;
     merged.set(id, cur);
   }
 
