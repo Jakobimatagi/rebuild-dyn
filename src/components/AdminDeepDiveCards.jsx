@@ -17,6 +17,7 @@ import { buildOcOutlookContext } from "../lib/ocAdjustment.js";
 import { loadOcOverrides } from "../lib/ocData.js";
 import { buildRosterSnapshot } from "../lib/rosterBuilder.js";
 import { useModalBehavior } from "../lib/useModalBehavior.js";
+import { fetchDeepDiveArticles, buildDeepDiveArticleInput } from "../lib/aiShareBlurbsApi.js";
 import { DeepDiveShareCard, slugify } from "./dashboard/DeepDiveShareModal.jsx";
 
 // Admin content-creation page (/admin/deep-dive-cards): search any player —
@@ -133,6 +134,9 @@ export default function AdminDeepDiveCards() {
   const [showShare, setShowShare] = useState(false);
   const [tiktok, setTiktok] = useState(false);
   const [downloading, setDownloading] = useState(null); // player id, or "all"
+  const [articles, setArticles] = useState(() => new Map()); // player id → article skeleton
+  const [articlesLoading, setArticlesLoading] = useState(false);
+  const [articlesError, setArticlesError] = useState("");
   const shareRefs = useRef({});
 
   useEffect(() => {
@@ -488,6 +492,36 @@ export default function AdminDeepDiveCards() {
     }
   }
 
+  // AI article notes — one skeleton (headline, hook, key points, verdict) per
+  // queued player, generated in chunks of 6 so a full 40-player queue doesn't
+  // blow the model's output budget in one request. Chunk results are cached by
+  // player-set fingerprint in the lib, so a re-open with the same queue is free.
+  const ARTICLE_CHUNK = 6;
+
+  async function generateArticles({ force = false } = {}) {
+    if (!enriched.length || articlesLoading) return;
+    setArticlesLoading(true);
+    setArticlesError("");
+    try {
+      const inputs = enriched.map(buildDeepDiveArticleInput);
+      const scope = { season: ctx.lastSeason + 1 };
+      const next = new Map(force ? [] : articles);
+      for (let i = 0; i < inputs.length; i += ARTICLE_CHUNK) {
+        const chunk = inputs.slice(i, i + ARTICLE_CHUNK);
+        const pending = force ? chunk : chunk.filter((p) => !next.has(p.id));
+        if (!pending.length) continue;
+        const { articlesById } = await fetchDeepDiveArticles(pending, scope, { force });
+        for (const [id, article] of articlesById) next.set(id, article);
+        setArticles(new Map(next)); // progressive render as chunks land
+      }
+    } catch (err) {
+      console.error("Article notes failed:", err);
+      setArticlesError(String(err.message || err));
+    } finally {
+      setArticlesLoading(false);
+    }
+  }
+
   async function downloadAll() {
     setDownloading("all");
     for (const [, teamPlayers] of byTeam) {
@@ -726,6 +760,10 @@ export default function AdminDeepDiveCards() {
           tiktok={tiktok}
           setTiktok={setTiktok}
           downloading={downloading}
+          articles={articles}
+          articlesLoading={articlesLoading}
+          articlesError={articlesError}
+          onGenerateArticles={generateArticles}
           onDownloadOne={downloadOne}
           onDownloadAll={downloadAll}
           onClose={() => setShowShare(false)}
@@ -737,10 +775,15 @@ export default function AdminDeepDiveCards() {
 
 function CardsShareModal({
   byTeam, shareRefs, tiktok, setTiktok, downloading,
+  articles, articlesLoading, articlesError, onGenerateArticles,
   onDownloadOne, onDownloadAll, onClose,
 }) {
   const modalRef = useModalBehavior(onClose);
   const total = byTeam.reduce((acc, [, ps]) => acc + ps.length, 0);
+  const articleCount = byTeam.reduce(
+    (acc, [, ps]) => acc + ps.filter((p) => articles?.has(String(p.id))).length,
+    0,
+  );
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm flex flex-col" onClick={onClose}>
@@ -758,6 +801,24 @@ function CardsShareModal({
             Deep dive cards · {total} player{total !== 1 ? "s" : ""} · {byTeam.length} team{byTeam.length !== 1 ? "s" : ""}
           </span>
           <div className="ml-auto flex items-center gap-2">
+            {articlesError && (
+              <span className="text-[10px] text-rose-300 max-w-[240px] truncate" title={articlesError}>
+                {articlesError}
+              </span>
+            )}
+            {!articlesError && articleCount > 0 && !articlesLoading && (
+              <span className="text-[10px] text-slate-400">notes ✓ {articleCount}/{total}</span>
+            )}
+            <button onClick={() => onGenerateArticles({ force: articleCount >= total })}
+              disabled={articlesLoading || !total}
+              title="AI article skeleton per player — headline, hook, key points, verdict — from the card's model numbers"
+              className="text-xs font-semibold px-3 py-1.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20 disabled:opacity-40">
+              {articlesLoading
+                ? `Writing notes… ${articleCount}/${total}`
+                : articleCount >= total && total > 0
+                ? "Regenerate article notes"
+                : "✍ Generate article notes"}
+            </button>
             <button onClick={() => setTiktok((v) => !v)}
               title="Export as 1080×1920 vertical cards sized for TikTok / Reels / Shorts"
               className={`text-xs font-semibold px-3 py-1.5 rounded border ${
@@ -800,6 +861,7 @@ function CardsShareModal({
                       player={player}
                     />
                   </TikTokFrame>
+                  <ArticleNotesPanel player={player} article={articles?.get(String(player.id))} />
                 </div>
               ))}
             </div>
@@ -809,6 +871,78 @@ function CardsShareModal({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Assemble the copy-paste Markdown draft for one player's article notes.
+function articleMarkdown(player, article) {
+  const lines = [
+    `# ${article.headline || player.name}`,
+    "",
+    article.hook || "",
+    "",
+    "## Key Points",
+    "",
+    ...(article.keyPoints || []).map((pt) => `- ${pt}`),
+    "",
+    "## Verdict",
+    "",
+    article.verdict || "",
+  ];
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+}
+
+// AI article skeleton under each share card: headline, hook, key points, and
+// verdict, with a one-click Markdown copy so a card's story drops straight
+// into a draft. Renders nothing until notes have been generated.
+function ArticleNotesPanel({ player, article }) {
+  const [copied, setCopied] = useState(false);
+  if (!article) return null;
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(articleMarkdown(player, article));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error("Clipboard write failed:", err);
+    }
+  }
+
+  return (
+    <div className="w-[1080px] max-w-full rounded-lg border border-amber-400/25 bg-slate-900/70 p-4">
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-amber-300/80 font-bold mb-1">
+            Article notes · AI
+          </div>
+          <div className="text-base font-bold text-slate-100">{article.headline}</div>
+        </div>
+        <button onClick={copy}
+          className="text-xs font-semibold px-3 py-1 rounded border border-white/15 bg-slate-800/70 text-slate-200 hover:bg-slate-700 shrink-0">
+          {copied ? "✓ Copied" : "Copy Markdown"}
+        </button>
+      </div>
+      {article.hook && (
+        <p className="text-sm text-slate-300 italic leading-snug mb-3">{article.hook}</p>
+      )}
+      {(article.keyPoints || []).length > 0 && (
+        <ul className="space-y-1.5 mb-3">
+          {article.keyPoints.map((pt, i) => (
+            <li key={i} className="text-sm text-slate-200 leading-snug flex gap-2">
+              <span className="text-amber-300/70 shrink-0">·</span>
+              <span>{pt}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {article.verdict && (
+        <div className="text-sm text-slate-100 border-t border-white/10 pt-2">
+          <span className="text-[10px] uppercase tracking-widest text-slate-500 mr-2">Verdict</span>
+          {article.verdict}
+        </div>
+      )}
     </div>
   );
 }
