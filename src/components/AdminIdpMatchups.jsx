@@ -11,6 +11,12 @@ import {
   getMatchupEntry,
   defaultSeasonWeights,
 } from "../lib/defenseMatchups.js";
+import {
+  buildPlayerProfiles,
+  buildOutcomeRates,
+  getOutcomeRate,
+  outcomeVerdict,
+} from "../lib/matchupOutcomes.js";
 
 const POS_COLORS = {
   QB: "bg-rose-500/15 text-rose-300 border-rose-500/30",
@@ -478,6 +484,167 @@ function PredictionsTab({ engine, playersDb, predSeason, predWeek, setPredWeek }
   );
 }
 
+// ── Tab: Offense vs Defense (ceiling / average / floor odds) ─────────────────
+
+const VERDICT_STYLES = {
+  ceiling: "bg-emerald-500/15 text-emerald-300 border-emerald-400/40",
+  average: "bg-slate-500/15 text-slate-300 border-white/15",
+  floor: "bg-rose-500/15 text-rose-300 border-rose-400/40",
+};
+const VERDICT_LABELS = { ceiling: "Ceiling lean", average: "Average", floor: "Floor risk" };
+
+function VerdictBadge({ verdict, lift }) {
+  return (
+    <span className={`text-xs font-bold px-2 py-0.5 rounded border ${VERDICT_STYLES[verdict]}`}>
+      {VERDICT_LABELS[verdict]}{verdict !== "average" && lift ? ` +${Math.round(lift * 100)}%` : ""}
+    </span>
+  );
+}
+
+function ProbBar({ rate }) {
+  if (!rate) return <span className="text-xs text-slate-600">no sample</span>;
+  const seg = (p, color) => (
+    <div className="h-full" style={{ width: `${(p * 100).toFixed(1)}%`, backgroundColor: color }} />
+  );
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex h-2.5 w-40 rounded-full overflow-hidden bg-slate-800">
+        {seg(rate.ceiling, "rgba(16,185,129,0.9)")}
+        {seg(rate.average, "rgba(100,116,139,0.6)")}
+        {seg(rate.floor, "rgba(244,63,94,0.9)")}
+      </div>
+      <span className="text-[11px] font-mono text-slate-400 whitespace-nowrap">
+        <span className="text-emerald-300">{Math.round(rate.ceiling * 100)}</span>
+        {" / "}{Math.round(rate.average * 100)}{" / "}
+        <span className="text-rose-300">{Math.round(rate.floor * 100)}</span>
+      </span>
+    </div>
+  );
+}
+
+function OffenseVsDefenseTab({ engine, playersDb }) {
+  const teams = engine.dirA.groups;
+  const [offense, setOffense] = useState(teams[0] || "");
+  const [defense, setDefense] = useState(teams[1] || "");
+
+  const profiles = useMemo(() => buildPlayerProfiles(engine.offRows), [engine]);
+  const rates = useMemo(
+    () => buildOutcomeRates(engine.offRows, profiles, { seasonWeights: defaultSeasonWeights(engine.seasons[0]) }),
+    [engine, profiles],
+  );
+
+  const overallRate = getOutcomeRate(rates, defense, "ALL");
+  const overall = outcomeVerdict(overallRate, rates.base.get("ALL"));
+
+  const posRows = OFF_POSITIONS.map((pos) => {
+    const rate = getOutcomeRate(rates, defense, pos);
+    return { pos, rate, verdict: outcomeVerdict(rate, rates.base.get(pos)), mult: getMultiplier(engine.dirA, defense, pos) };
+  });
+
+  const players = useMemo(() => {
+    const list = [];
+    for (const p of profiles.values()) {
+      if (!OFF_POSITIONS.includes(p.pos)) continue;
+      if (playersDb?.[p.player_id]?.team !== offense) continue;
+      list.push(p);
+    }
+    return list.sort((a, b) => b.avg - a.avg).slice(0, 14);
+  }, [profiles, playersDb, offense]);
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <select value={offense} onChange={(e) => setOffense(e.target.value)}
+          className="bg-slate-900 border border-white/10 rounded-md px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-emerald-400">
+          {teams.map((t) => <option key={t} value={t}>{t} offense</option>)}
+        </select>
+        <span className="text-xs text-slate-500">vs</span>
+        <select value={defense} onChange={(e) => setDefense(e.target.value)}
+          className="bg-slate-900 border border-white/10 rounded-md px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-emerald-400">
+          {teams.map((t) => <option key={t} value={t}>{t} defense</option>)}
+        </select>
+        <button onClick={() => { setOffense(defense); setDefense(offense); }}
+          className="px-3 py-1.5 rounded-md text-xs font-semibold border border-white/10 text-slate-400 hover:text-slate-200 bg-slate-900/40">
+          ⇄ Swap
+        </button>
+        <span className="text-xs text-slate-500 ml-auto">
+          Games classified vs each player's own range (floor ≤ his p25, ceiling ≥ his p75)
+        </span>
+      </div>
+
+      <div className="rounded-xl border border-white/10 bg-slate-900/40 p-4 mb-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="text-sm font-bold text-slate-200">{offense} offense vs {defense} defense</div>
+          <VerdictBadge verdict={overall.verdict} lift={overall.lift} />
+          <div className="ml-auto"><ProbBar rate={overallRate} /></div>
+        </div>
+        <div className="text-[11px] text-slate-500 mt-1.5">
+          {overallRate
+            ? `Across ${overallRate.games} recency-weighted player-games vs ${defense}, offenses hit ceiling ${Math.round(overallRate.ceiling * 100)}% / average ${Math.round(overallRate.average * 100)}% / floor ${Math.round(overallRate.floor * 100)}% (league base ~25/50/25).`
+            : `No graded games vs ${defense} yet.`}
+        </div>
+
+        <div className="mt-3 space-y-1.5">
+          {posRows.map(({ pos, rate, verdict, mult }) => (
+            <div key={pos} className="flex flex-wrap items-center gap-3">
+              <span className="w-9"><PosPill pos={pos} /></span>
+              <span className="w-28"><VerdictBadge verdict={verdict.verdict} lift={verdict.lift} /></span>
+              <MultChip pos="×" mult={mult} title={entryTitle(getMatchupEntry(engine.dirA, defense, pos), "allows")} />
+              <div className="ml-auto"><ProbBar rate={rate} /></div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-white/10 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-900/70 text-left">
+            <tr>
+              {["Player", "GP", "Floor", "Avg", "Ceiling", "Matchup", "Adj Avg", "Ceiling% / Floor%"].map((h, i) => (
+                <th key={h} className={`px-2 py-2 text-[10px] uppercase tracking-wider text-slate-500 ${i > 0 ? "text-right" : ""}`}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {players.map((p) => {
+              const mult = getMultiplier(engine.dirA, defense, p.pos);
+              const rate = getOutcomeRate(rates, defense, p.pos);
+              return (
+                <tr key={p.player_id} className="border-t border-white/5 hover:bg-slate-900/40">
+                  <td className="px-2 py-1.5">
+                    <div className="flex items-center gap-2">
+                      <PlayerAvatar id={p.player_id} pos={p.pos} name={p.name} />
+                      <div>
+                        <div className="font-medium text-slate-200 leading-tight">{p.name}</div>
+                        <div className="mt-0.5"><PosPill pos={p.pos} /></div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-2 py-1.5 text-right text-slate-500">{p.games}</td>
+                  <td className="px-2 py-1.5 text-right text-rose-300/80 font-mono">{p.floor.toFixed(1)}</td>
+                  <td className="px-2 py-1.5 text-right text-slate-200 font-mono">{p.avg.toFixed(1)}</td>
+                  <td className="px-2 py-1.5 text-right text-emerald-300/80 font-mono">{p.ceiling.toFixed(1)}</td>
+                  <td className="px-2 py-1.5 text-right font-mono text-xs" style={multCellStyle(mult)}>{fmtMult(mult)}</td>
+                  <td className="px-2 py-1.5 text-right font-semibold text-slate-100 font-mono">{(p.avg * mult).toFixed(1)}</td>
+                  <td className="px-2 py-1.5 text-right font-mono text-xs text-slate-400">
+                    {rate ? <><span className="text-emerald-300">{Math.round(rate.ceiling * 100)}%</span> / <span className="text-rose-300">{Math.round(rate.floor * 100)}%</span></> : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+            {players.length === 0 && (
+              <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-500 text-sm">No profiled players currently on {offense} (need ≥6 scored games).</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[10px] text-slate-600 mt-2">
+        Floor/Avg/Ceiling are each player's own p25 / mean / p75 single-game PPR over {engine.seasons.join(" / ")}. Matchup odds are the defense's recency-weighted rate of forcing floor games / allowing ceiling games at the position, shrunk toward the ~25/50/25 league base by 20 pseudo-games. Adj Avg = player average × defense-vs-position multiplier.
+      </p>
+    </div>
+  );
+}
+
 // ── Tab: History (how offense actually produced vs a defense) ────────────────
 
 function HistoryTab({ engine }) {
@@ -580,6 +747,7 @@ function HistoryTab({ engine }) {
 const TABS = [
   ["rankings", "IDP Rankings"],
   ["defense", "Defense vs Position"],
+  ["ovd", "Offense vs Defense"],
   ["predictions", "Week Predictions"],
   ["history", "History"],
 ];
@@ -847,6 +1015,7 @@ export default function AdminIdpMatchups() {
         )}
 
         {tab === "defense" && engineReady && <MultiplierGrid engine={engine} />}
+        {tab === "ovd" && engineReady && <OffenseVsDefenseTab engine={engine} playersDb={playersDb} />}
         {tab === "predictions" && engineReady && (
           <PredictionsTab engine={engine} playersDb={playersDb}
             predSeason={predSeason} predWeek={predWeek} setPredWeek={setPredWeek} />
