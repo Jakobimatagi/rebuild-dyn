@@ -33,7 +33,12 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Cache key prefixes that are safe to evict when storage is full.
 // Listed oldest-first as an eviction priority hint.
-const EVICTABLE_PREFIXES = ["sleeper_stats_deep_", "sleeper_stats_"];
+const EVICTABLE_PREFIXES = [
+  "sleeper_stats_deep_",
+  "sleeper_stats_",
+  "dyn_idp_wk_",
+  "dyn_wk_scores_",
+];
 
 /**
  * Write to localStorage, falling back to evicting the oldest stats cache

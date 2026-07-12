@@ -92,6 +92,8 @@ python -m projections publish --season 2025 --week auto        # write to Supaba
 python -m projections nflverse-check --season 2024             # self-test the nflverse connection
 python -m projections scheme-check --season 2023               # self-test pbp scheme + coach aggregation
 python -m projections publish-oc --start 2016                  # build + publish OC history to Supabase
+python -m projections dc-check --season 2024                   # self-test defensive pbp aggregation
+python -m projections publish-dc --start 2016                  # build + publish DC history to Supabase
 pytest                                                          # unit tests
 ```
 
@@ -134,6 +136,18 @@ Publish with `python -m projections publish-oc --start 2016` (pbp is heavy; wide
 the range for deeper history). Validated by `scheme-check`: 2023 PROE/EPA/coaches
 match the eye test (SF best EPA, KC=Reid), and 2005 utilization surfaces Steve
 Smith's league-leading target share.
+
+## DC Blueprint from play-by-play (`defense_scheme.py`)
+
+The same pbp flipped to `defteam`: one defensive-identity row per (season, team)
+in **defense_scheme_seasons** (`docs/migrations/dc_history_schema.sql`) — EPA/play
+and success rate allowed, CPOE allowed, pass-rate/PROE *faced* (the run/pass
+funnel signal), aDOT faced, deep rate allowed, sack/INT/QB-hit rate per dropback,
+plus the defense's head coach. Read by the admin IDP Matchup Lab
+(`/admin/idp-matchups`) to explain its defense-vs-position multipliers; DC names
+themselves are curated in `src/lib/dcData.js` (`npm run import:ocs -- --dc`) and
+drive coordinator-continuity weighting there. Publish with
+`python -m projections publish-dc --start 2016`; sanity-check with `dc-check`.
 
 `publish` needs `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` in `python/.env`
 (copy `python/.env.example`). The schema lives in `docs/sql/projections.sql`.
