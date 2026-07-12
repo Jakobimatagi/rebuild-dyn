@@ -37,10 +37,14 @@ export async function fetchDefenseSchemeSeasons() {
         + "deep_rate_allowed, sack_rate, int_rate, qb_hit_rate, head_coach",
       ["season", "team"],
     );
-    try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), rows }));
-    } catch {
-      // quota / private mode — non-fatal
+    // Don't cache emptiness: the table may be published at any moment, and a
+    // cached [] would hide it for a day.
+    if (rows && rows.length > 0) {
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), rows }));
+      } catch {
+        // quota / private mode — non-fatal
+      }
     }
     return rows || [];
   } catch {
