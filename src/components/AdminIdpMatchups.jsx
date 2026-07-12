@@ -320,6 +320,9 @@ function MultiplierGrid({ engine }) {
       </div>
       <p className="text-[10px] text-slate-600 mt-2">
         Recency-weighted over {engine.seasons.join(" / ")} (weights 1.0 / 0.6 / 0.3) · Bayesian-shrunk toward league average by 4 pseudo-games · clamped to 0.75–1.30 · where dcData.js/ocData.js know a team's coordinator, seasons under a different one count at 0.35× weight. Hover a cell for the underlying sample.
+        {direction === "offense" && Object.keys(DC_DATA).length === 0 && (
+          <span className="text-amber-500/80"> DC names not imported yet (npm run import:ocs -- --dc) — continuity weighting is inactive.</span>
+        )}
       </p>
     </div>
   );
@@ -629,6 +632,22 @@ function OffenseVsDefenseTab({ engine, playersDb, dcScheme }) {
             : `No graded games vs ${defense} yet.`}
         </div>
         <DcFingerprint fp={fingerprint} dcName={dcName} />
+        {(!fingerprint || !dcName) && (
+          <div className="mt-2 rounded-lg border border-dashed border-white/15 bg-slate-950/40 px-3 py-2 text-[11px] text-slate-500">
+            <span className="font-semibold text-slate-400">DC Blueprint {!fingerprint && !dcName ? "not active yet" : "partially active"}.</span>{" "}
+            {!fingerprint && (
+              dcScheme.length === 0
+                ? <>Scheme chips need the fingerprint table: run <code className="text-slate-300">docs/migrations/dc_history_schema.sql</code> in the Supabase SQL editor, then <code className="text-slate-300">python -m projections publish-dc --start 2016</code>.</>
+                : <>No published fingerprint for {defense} yet.</>
+            )}
+            {!fingerprint && !dcName && " "}
+            {!dcName && (
+              Object.keys(DC_DATA).length === 0
+                ? <>DC names + continuity weighting need <code className="text-slate-300">npm run import:ocs -- --dc dc.csv</code> (same CSV format as OCs).</>
+                : <>No DC listed for {defense} in {anchorSeason} — extend the dcData.js import.</>
+            )}
+          </div>
+        )}
 
         <div className="mt-3 space-y-1.5">
           {posRows.map(({ pos, rate, verdict, mult }) => (
