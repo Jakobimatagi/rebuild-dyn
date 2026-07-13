@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { adminSignIn, restoreAdmin, signOutAccount } from "../lib/supabase.js";
+import { adminSignIn, restoreAdmin, signOutAccount, fetchDcEntries, fetchOcEntries } from "../lib/supabase.js";
 import { fetchPlayersDb, fetchHistoricalStats } from "../lib/sleeperApi.js";
 import { fetchNflState } from "../lib/projectionsApi.js";
 import { fetchSeasonWeeklyScores } from "../lib/weeklyScoringApi.js";
@@ -18,8 +18,8 @@ import {
   outcomeVerdict,
 } from "../lib/matchupOutcomes.js";
 import { coordinatorFor, coordinatorContinuityFactors } from "../lib/dcBlueprint.js";
-import { DC_DATA } from "../lib/dcData.js";
-import { OC_DATA } from "../lib/ocData.js";
+import { mergeDcData } from "../lib/dcData.js";
+import { mergeOcData } from "../lib/ocData.js";
 import { fetchDefenseSchemeSeasons, defenseFingerprintFor } from "../lib/dcHistoryApi.js";
 
 const POS_COLORS = {
@@ -235,7 +235,7 @@ function RankingsTab({ rows, loading, error, seasons, season, setSeason }) {
 
 // ── Tab: Defense vs Position (multiplier grid) ───────────────────────────────
 
-function MultiplierGrid({ engine }) {
+function MultiplierGrid({ engine, dcData, ocData }) {
   const [direction, setDirection] = useState("offense"); // offense | idp
   const [sort, setSort] = useState({ key: "overall", dir: -1 });
   const anchorSeason = engine.seasons[0];
@@ -246,7 +246,7 @@ function MultiplierGrid({ engine }) {
 
   // DC name for defenses, OC name for offenses — whichever side the group is.
   const coordName = (group) =>
-    coordinatorFor(direction === "offense" ? DC_DATA : OC_DATA, anchorSeason, group);
+    coordinatorFor(direction === "offense" ? dcData : ocData, anchorSeason, group);
 
   const rows = useMemo(() => {
     const list = result.groups.map((group) => {
@@ -319,9 +319,9 @@ function MultiplierGrid({ engine }) {
         </table>
       </div>
       <p className="text-[10px] text-slate-600 mt-2">
-        Recency-weighted over {engine.seasons.join(" / ")} (weights 1.0 / 0.6 / 0.3) · Bayesian-shrunk toward league average by 4 pseudo-games · clamped to 0.75–1.30 · where dcData.js/ocData.js know a team's coordinator, seasons under a different one count at 0.35× weight. Hover a cell for the underlying sample.
-        {direction === "offense" && Object.keys(DC_DATA).length === 0 && (
-          <span className="text-amber-500/80"> DC names not imported yet (npm run import:ocs -- --dc) — continuity weighting is inactive.</span>
+        Recency-weighted over {engine.seasons.join(" / ")} (weights 1.0 / 0.6 / 0.3) · Bayesian-shrunk toward league average by 4 pseudo-games · clamped to 0.75–1.30 · where the DC/OC datasets know a team's coordinator, seasons under a different one count at 0.35× weight. Hover a cell for the underlying sample.
+        {direction === "offense" && Object.keys(dcData).length === 0 && (
+          <span className="text-amber-500/80"> No DC names yet — add them in <a href="/admin/dc-rankings" className="underline hover:text-amber-300">DC Rankings</a> to activate continuity weighting.</span>
         )}
       </p>
     </div>
@@ -567,12 +567,12 @@ function DcFingerprint({ fp, dcName }) {
   );
 }
 
-function OffenseVsDefenseTab({ engine, playersDb, dcScheme }) {
+function OffenseVsDefenseTab({ engine, playersDb, dcScheme, dcData }) {
   const teams = engine.dirA.groups;
   const [offense, setOffense] = useState(teams[0] || "");
   const [defense, setDefense] = useState(teams[1] || "");
   const anchorSeason = engine.seasons[0];
-  const dcName = coordinatorFor(DC_DATA, anchorSeason, defense);
+  const dcName = coordinatorFor(dcData, anchorSeason, defense);
   const fingerprint = defenseFingerprintFor(dcScheme, defense, anchorSeason);
 
   const profiles = useMemo(() => buildPlayerProfiles(engine.offRows), [engine]);
@@ -642,9 +642,9 @@ function OffenseVsDefenseTab({ engine, playersDb, dcScheme }) {
             )}
             {!fingerprint && !dcName && " "}
             {!dcName && (
-              Object.keys(DC_DATA).length === 0
-                ? <>DC names + continuity weighting need <code className="text-slate-300">npm run import:ocs -- --dc dc.csv</code> (same CSV format as OCs).</>
-                : <>No DC listed for {defense} in {anchorSeason} — extend the dcData.js import.</>
+              Object.keys(dcData).length === 0
+                ? <>DC names + continuity weighting: add coordinators in <a href="/admin/dc-rankings" className="text-slate-300 underline">DC Rankings</a> (or <code className="text-slate-300">npm run import:ocs -- --dc dc.csv</code>).</>
+                : <>No DC listed for {defense} in {anchorSeason} — add it in <a href="/admin/dc-rankings" className="text-slate-300 underline">DC Rankings</a>.</>
             )}
           </div>
         )}
@@ -836,6 +836,14 @@ export default function AdminIdpMatchups() {
   const [playersDb, setPlayersDb] = useState(null);
   const [dcScheme, setDcScheme] = useState([]); // defense_scheme_seasons rows (best-effort)
 
+  // Coordinator maps: static seed merged with the Supabase entries the
+  // /admin/dc-rankings and /admin/oc-rankings editors maintain. The engine
+  // awaits the same promises so continuity weighting sees the DB names too.
+  const [dcData, setDcData] = useState(() => mergeDcData({}));
+  const [ocData, setOcData] = useState(() => mergeOcData({}));
+  const dcDataPromise = useRef(null);
+  const ocDataPromise = useRef(null);
+
   // Rankings (per-season, loaded on demand)
   const [rankSeason, setRankSeason] = useState(null);
   const [rankingsBySeason, setRankingsBySeason] = useState({});
@@ -909,6 +917,12 @@ export default function AdminIdpMatchups() {
     // DC-Blueprint fingerprints — resolves to [] until the table is published.
     fetchDefenseSchemeSeasons()
       .then((rows) => { if (!cancelled) setDcScheme(rows); });
+    // Coordinator entries — resolve to the static seed if the tables are
+    // missing or the fetch fails.
+    dcDataPromise.current = fetchDcEntries().then(mergeDcData).catch(() => mergeDcData({}));
+    ocDataPromise.current = fetchOcEntries().then(mergeOcData).catch(() => mergeOcData({}));
+    dcDataPromise.current.then((d) => { if (!cancelled) setDcData(d); });
+    ocDataPromise.current.then((d) => { if (!cancelled) setOcData(d); });
     return () => { cancelled = true; };
   }, [unlocked]);
 
@@ -973,15 +987,19 @@ export default function AdminIdpMatchups() {
         const seasonWeights = defaultSeasonWeights(anchorSeason);
         // Coordinator continuity: a defense's pre-DC-change seasons (and an
         // offense's pre-OC-change seasons in the IDP direction) count less.
-        // Empty datasets produce no overrides, so this is a no-op until
-        // dcData.js / ocData.js cover the seasons in play.
+        // Empty datasets produce no overrides, so this is a no-op until the
+        // DC/OC editors (or seed files) cover the seasons in play.
+        const [dcMerged, ocMerged] = await Promise.all([
+          dcDataPromise.current ?? mergeDcData({}),
+          ocDataPromise.current ?? mergeOcData({}),
+        ]);
         const dirA = buildMultipliers(offRows, {
           seasonWeights,
-          groupSeasonFactors: coordinatorContinuityFactors(DC_DATA, anchorSeason),
+          groupSeasonFactors: coordinatorContinuityFactors(dcMerged, anchorSeason),
         });
         const dirB = buildMultipliers(idpRows, {
           seasonWeights,
-          groupSeasonFactors: coordinatorContinuityFactors(OC_DATA, anchorSeason),
+          groupSeasonFactors: coordinatorContinuityFactors(ocMerged, anchorSeason),
         });
         if (!cancelled) setEngine({ offRows, idpRows, dirA, dirB, seasons });
       } catch (err) {
@@ -1038,6 +1056,7 @@ export default function AdminIdpMatchups() {
               <a href="/admin/hot-streaks" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">Hot & Cold</a>
               <a href="/admin/rookie-prospector" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">Rookies</a>
               <a href="/admin/oc-rankings" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">OC Rankings</a>
+              <a href="/admin/dc-rankings" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">DC Rankings</a>
               <a href="/admin/deep-dive-cards" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">Deep Dive Cards</a>
               <a href="/admin/users" className="text-xs font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 hover:border-white/30 px-3 py-1.5 rounded-md transition-colors">Admins</a>
             </div>
@@ -1093,8 +1112,8 @@ export default function AdminIdpMatchups() {
           <div className="rounded-xl border border-rose-400/40 bg-rose-500/10 p-4 text-sm text-rose-200 mb-4">{engineError}</div>
         )}
 
-        {tab === "defense" && engineReady && <MultiplierGrid engine={engine} />}
-        {tab === "ovd" && engineReady && <OffenseVsDefenseTab engine={engine} playersDb={playersDb} dcScheme={dcScheme} />}
+        {tab === "defense" && engineReady && <MultiplierGrid engine={engine} dcData={dcData} ocData={ocData} />}
+        {tab === "ovd" && engineReady && <OffenseVsDefenseTab engine={engine} playersDb={playersDb} dcScheme={dcScheme} dcData={dcData} />}
         {tab === "predictions" && engineReady && (
           <PredictionsTab engine={engine} playersDb={playersDb}
             predSeason={predSeason} predWeek={predWeek} setPredWeek={setPredWeek} />

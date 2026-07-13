@@ -24,3 +24,68 @@
 // weight reduced in the defense-vs-position multipliers. Until a team has
 // entries here, its weighting stays neutral — the feature degrades gracefully.
 export const DC_DATA = {};
+
+// ── Override layer (Supabase-backed, localStorage cache) ─────────────────────
+// The DC twin of ocData.js's override layer: the /admin/dc-rankings editor
+// reads dc_entries from Supabase on unlock, keeps an in-memory copy, and
+// writes back on every change. localStorage keeps the page usable offline /
+// before the first fetch resolves.
+
+const OVERRIDES_KEY = "dc_overrides_v1";
+
+export function loadDcOverrides() {
+  try {
+    const raw = localStorage.getItem(OVERRIDES_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistOverridesLocally(overrides) {
+  try { localStorage.setItem(OVERRIDES_KEY, JSON.stringify(overrides)); }
+  catch (e) { console.error("Failed to persist DC overrides locally:", e); }
+}
+
+/**
+ * Pure helper — returns the next overrides object after applying one change.
+ * Also writes to localStorage for offline resilience.
+ * The caller is responsible for persisting to Supabase via upsertDcEntry.
+ */
+export function setDcOverride(overrides, year, team, entry) {
+  const next = { ...overrides };
+  if (!next[year]) next[year] = {};
+  next[year] = { ...next[year] };
+  if (entry === null) delete next[year][team];
+  else next[year][team] = entry;
+  if (Object.keys(next[year]).length === 0) delete next[year];
+  persistOverridesLocally(next);
+  return next;
+}
+
+/**
+ * Add a new year column. The caller triggers initDcYear in Supabase separately.
+ */
+export function addDcYear(overrides, year) {
+  const next = { ...overrides };
+  if (!next[year]) next[year] = {};
+  persistOverridesLocally(next);
+  return next;
+}
+
+/**
+ * Merge the static DC_DATA seed with overrides (from Supabase or localStorage).
+ * Overrides win for any year+team they specify.
+ */
+export function mergeDcData(overrides) {
+  const merged = {};
+  for (const [year, byTeam] of Object.entries(DC_DATA)) {
+    merged[year] = { ...byTeam };
+  }
+  for (const [year, byTeam] of Object.entries(overrides || {})) {
+    merged[year] = { ...(merged[year] || {}), ...byTeam };
+  }
+  return merged;
+}

@@ -141,6 +141,7 @@ export default function AdminUsers() {
             <span className="text-emerald-400 uppercase tracking-widest mr-2">Admin</span>
             <a href="/admin/rookie-prospector" className="font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 px-3 py-1.5 rounded-md">Rookies</a>
             <a href="/admin/oc-rankings" className="font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 px-3 py-1.5 rounded-md">OC Rankings</a>
+            <a href="/admin/dc-rankings" className="font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 px-3 py-1.5 rounded-md">DC Rankings</a>
             <a href="/admin/top-players" className="font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 px-3 py-1.5 rounded-md">Top Players</a>
             <a href="/admin/hot-streaks" className="font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 px-3 py-1.5 rounded-md">Hot &amp; Cold</a>
             <a href="/admin/deep-dive-cards" className="font-medium text-slate-200 hover:text-white border border-white/15 bg-slate-800/70 hover:bg-slate-700 px-3 py-1.5 rounded-md">Deep Dive Cards</a>
