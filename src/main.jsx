@@ -10,6 +10,7 @@ import { Analytics } from '@vercel/analytics/react'
 const RookieProspector      = lazy(() => import('./components/RookieProspector.jsx'))
 const RookieRankings        = lazy(() => import('./components/RookieRankings.jsx'))
 const OffensiveCoordinators = lazy(() => import('./components/OffensiveCoordinators.jsx'))
+const DefensiveCoordinators = lazy(() => import('./components/AdminDefensiveCoordinators.jsx'))
 const AdminTopPlayers       = lazy(() => import('./components/AdminTopPlayers.jsx'))
 const AdminHotStreaks       = lazy(() => import('./components/AdminHotStreaks.jsx'))
 const AdminUsers            = lazy(() => import('./components/AdminUsers.jsx'))
@@ -23,6 +24,7 @@ const path = window.location.pathname
 let Root = <App />
 if (path.startsWith('/admin/rookie-prospector')) Root = <RookieProspector />
 else if (path.startsWith('/admin/oc-rankings'))   Root = <OffensiveCoordinators />
+else if (path.startsWith('/admin/dc-rankings'))   Root = <DefensiveCoordinators />
 else if (path.startsWith('/admin/top-players'))   Root = <AdminTopPlayers />
 else if (path.startsWith('/admin/hot-streaks'))   Root = <AdminHotStreaks />
 else if (path.startsWith('/admin/users'))         Root = <AdminUsers />
