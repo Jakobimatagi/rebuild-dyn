@@ -1,8 +1,12 @@
--- Seed dc_entries with defensive coordinators for 2016-2025 (all 32 teams).
--- Generated from src/lib/dcData.js DC_DATA — keep the two in sync by
--- regenerating this file rather than editing rows by hand.
+-- Seed dc_entries with defensive coordinators for 2016-2025 (all 32 teams),
+-- including playcaller = 'HC' (plus a note) for the seasons where the head
+-- coach called the defense, and partial/note metadata for mid-season changes.
+-- The '__init__' rows are the year-marker sentinels the editor expects (same
+-- trick as initDcYear in src/lib/supabase.js).
+--
 -- Requires docs/migrations/dc_entries_schema.sql. Paste into the Supabase
--- SQL editor. Idempotent: re-running updates existing rows in place.
+-- SQL editor. Idempotent: re-running updates existing rows in place; later
+-- edits from /admin/dc-rankings won't be clobbered unless you re-run this.
 
 insert into dc_entries (season, team, name, partial, playcaller, note) values
   (2016, '__init__', '', false, null, null),
