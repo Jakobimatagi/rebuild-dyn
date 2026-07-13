@@ -52,6 +52,26 @@ function DefenseSchemeCell({ fp, season }) {
   );
 }
 
+// Career defensive profile for a coach name — DC stints from the entries data
+// merged with every pbp season where they're listed as head coach, so clicking
+// an HC (or a DC who became one) shows their whole defensive track record.
+function buildCoachProfile(name, allDcs, schemeRows) {
+  const key = (name || "").trim().toLowerCase();
+  if (!key) return null;
+  const dc = allDcs.find((d) => d.name.toLowerCase() === key);
+  const byKey = new Map();
+  for (const s of dc?.stints || []) byKey.set(`${s.year}-${s.team}`, { ...s });
+  for (const r of schemeRows) {
+    if ((r.head_coach || "").trim().toLowerCase() !== key) continue;
+    const k = `${Number(r.season)}-${r.team}`;
+    const existing = byKey.get(k);
+    if (existing) existing.headCoach = true;
+    else byKey.set(k, { year: Number(r.season), team: r.team, headCoach: true });
+  }
+  const stints = [...byKey.values()].sort((a, b) => b.year - a.year || a.team.localeCompare(b.team));
+  return stints.length > 0 ? { name: dc?.name || name.trim(), stints } : null;
+}
+
 export default function AdminDefensiveCoordinators() {
   const [unlocked, setUnlocked]       = useState(false);
   const [initLoading, setInitLoading] = useState(true);
@@ -86,6 +106,7 @@ export default function AdminDefensiveCoordinators() {
   const [tab, setTab]       = useState("teams"); // teams | coordinators | editor
   const [search, setSearch] = useState("");
   const [division, setDivision] = useState("All");
+  const [coachModal, setCoachModal] = useState(null); // { name, stints } from buildCoachProfile
 
   // ── Session restore ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -296,8 +317,20 @@ export default function AdminDefensiveCoordinators() {
               dcs={dcsBySeason}
               schemeRows={schemeRows}
               season={activeSeason}
+              onCoachClick={(name) => {
+                const profile = buildCoachProfile(name, allDcs, schemeRows);
+                if (profile) setCoachModal(profile);
+              }}
             />
           </>
+        )}
+
+        {coachModal && (
+          <DcFingerprintModal
+            coach={coachModal}
+            schemeRows={schemeRows}
+            onClose={() => setCoachModal(null)}
+          />
         )}
 
         {tab === "coordinators" && (
@@ -329,7 +362,7 @@ export default function AdminDefensiveCoordinators() {
 }
 
 // ── Teams table ──────────────────────────────────────────────────────────────
-function DcTeamsTable({ teams, dcs, schemeRows, season }) {
+function DcTeamsTable({ teams, dcs, schemeRows, season, onCoachClick }) {
   const rows = useMemo(() => {
     return teams.map((t) => ({
       ...t,
@@ -377,7 +410,11 @@ function DcTeamsTable({ teams, dcs, schemeRows, season }) {
                 <td className="py-2 px-3">
                   {row.dc?.name ? (
                     <div>
-                      <span className="text-slate-200">{row.dc.name}</span>
+                      <button
+                        onClick={() => onCoachClick(row.dc.name)}
+                        className="text-slate-200 hover:text-emerald-300 hover:underline text-left transition-colors">
+                        {row.dc.name}
+                      </button>
                       <div className="mt-0.5 flex items-center gap-1 flex-wrap">
                         {row.dc.playcaller === "HC" && (
                           <span className="text-[9px] uppercase text-sky-400 bg-sky-500/10 border border-sky-400/30 px-1.5 py-0.5 rounded">HC runs D</span>
@@ -392,7 +429,17 @@ function DcTeamsTable({ teams, dcs, schemeRows, season }) {
                     <span className="text-slate-600 text-xs">—</span>
                   )}
                 </td>
-                <td className="py-2 px-3 text-xs text-slate-400">{row.fp?.head_coach || <span className="text-slate-700">—</span>}</td>
+                <td className="py-2 px-3 text-xs">
+                  {row.fp?.head_coach ? (
+                    <button
+                      onClick={() => onCoachClick(row.fp.head_coach)}
+                      className="text-slate-400 hover:text-emerald-300 hover:underline text-left transition-colors">
+                      {row.fp.head_coach}
+                    </button>
+                  ) : (
+                    <span className="text-slate-700">—</span>
+                  )}
+                </td>
                 <td className="py-2 px-3"><DefenseSchemeCell fp={row.fp} season={season} /></td>
               </tr>
             ))}
@@ -403,6 +450,69 @@ function DcTeamsTable({ teams, dcs, schemeRows, season }) {
             )}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// ── DC Fingerprint Modal ─────────────────────────────────────────────────────
+// Full-screen overlay showing a coach's defensive career — the DC twin of the
+// OC page's OcHistoryModal. Opened by clicking a coordinator or head-coach
+// name in the Teams table; each stint renders its pbp defensive fingerprint.
+function DcFingerprintModal({ coach, schemeRows, onClose }) {
+  // Lock body scroll while modal is open; close on Escape key
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function onKey(e) { if (e.key === "Escape") onClose(); }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={onClose}>
+      <div
+        className="relative w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl border border-white/10 bg-slate-950 shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}>
+        {/* Close button — absolute top-right */}
+        <button onClick={onClose}
+          className="absolute top-3 right-3 z-10 w-8 h-8 flex items-center justify-center rounded-full text-slate-400 hover:text-slate-100 hover:bg-white/10 transition-colors text-base">
+          ✕
+        </button>
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-white/10 shrink-0 pr-12">
+          <div className="text-[10px] uppercase tracking-widest text-emerald-400 mb-0.5">DC Fingerprint</div>
+          <h2 className="text-xl font-bold text-slate-100">{coach.name}</h2>
+          <div className="text-xs text-slate-500 mt-0.5">
+            {coach.stints.map((s) => `${s.year} ${s.team}`).join(" · ")}
+          </div>
+        </div>
+        {/* Body — scrollable stint list, newest first */}
+        <div className="overflow-y-auto flex-1 divide-y divide-white/5">
+          {coach.stints.map((s) => {
+            const fp = defenseFingerprintFor(schemeRows, s.team, s.year);
+            const teamName = TEAM_NAME_BY_ABBR[s.team] || s.team;
+            return (
+              <div key={`${s.year}-${s.team}`} className="px-6 py-3">
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  <span className="text-sm font-semibold text-slate-100">{s.year} · {teamName}</span>
+                  {s.headCoach && !s.name && (
+                    <span className="text-[10px] uppercase text-violet-300 bg-violet-500/10 border border-violet-400/30 px-1.5 py-0.5 rounded">Head Coach</span>
+                  )}
+                  {s.partial && <span className="text-[10px] uppercase text-amber-400 bg-amber-500/10 border border-amber-400/30 px-1.5 py-0.5 rounded">partial</span>}
+                  {s.playcaller === "HC" && <span className="text-[10px] uppercase text-sky-400 bg-sky-500/10 border border-sky-400/30 px-1.5 py-0.5 rounded">HC runs D</span>}
+                </div>
+                {s.note && <div className="text-[10px] text-slate-500 mb-2 italic">{s.note}</div>}
+                <DefenseSchemeCell fp={fp} season={s.year} />
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
