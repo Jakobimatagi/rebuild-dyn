@@ -10,67 +10,16 @@ import {
 import { NFL_TEAMS, DIVISIONS, ocSeasons, uniqueOcs, overridesToCsv } from "../lib/ocData.js";
 import { loadDcOverrides, setDcOverride, addDcYear, mergeDcData } from "../lib/dcData.js";
 import { fetchDefenseSchemeSeasons, defenseFingerprintFor } from "../lib/dcHistoryApi.js";
+import { buildCoachProfile, careerDefenseSummary, fmtMetric, ordinal } from "../lib/dcFingerprint.js";
+import {
+  DefenseSchemeCell,
+  DefenseRankBadge,
+  StintFingerprint,
+  CareerTrendChart,
+} from "./DcFingerprintVisuals.jsx";
+import DcShareModal from "./DcShareModal.jsx";
 
 const TEAM_NAME_BY_ABBR = Object.fromEntries(NFL_TEAMS.map((t) => [t.abbr, t.name]));
-
-// Compact defensive-identity fingerprint from nflverse play-by-play
-// (defense_scheme_seasons). EPA/play allowed: lower = stingier defense.
-// PROE faced: + = offenses pass on this defense more than expected (pass
-// funnel), − = run funnel. Sack/INT rates are per dropback.
-function DefenseSchemeCell({ fp, season }) {
-  if (!fp) return <span className="text-slate-700 text-xs">—</span>;
-  const num = (v) => (v == null || Number.isNaN(Number(v)) ? null : Number(v));
-  const epa = num(fp.epa_play_allowed);
-  const sack = num(fp.sack_rate);
-  const intRate = num(fp.int_rate);
-  const proe = num(fp.proe_faced);
-  const deep = num(fp.deep_rate_allowed);
-  const chip = (label, val, cls = "text-slate-300") =>
-    val == null ? null : (
-      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800/70 border border-white/10">
-        <span className="text-slate-500">{label}</span> <span className={cls}>{val}</span>
-      </span>
-    );
-  const signed = (v, d = 1) => (v > 0 ? "+" : "") + v.toFixed(d);
-  const pct = (v, d = 1) => `${(v * 100).toFixed(d)}%`;
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap gap-1">
-        {/* Negative EPA allowed = good defense, so the color sense is flipped vs the OC page. */}
-        {chip("EPA", epa == null ? null : signed(epa, 3), epa <= 0 ? "text-emerald-300" : "text-rose-300")}
-        {chip("Sack", sack == null ? null : pct(sack))}
-        {chip("INT", intRate == null ? null : pct(intRate))}
-      </div>
-      <div className="flex flex-wrap gap-1">
-        {chip("PROE faced", proe == null ? null : signed(proe), proe >= 1 ? "text-sky-300" : proe <= -1 ? "text-amber-300" : "text-slate-300")}
-        {chip("Deep", deep == null ? null : pct(deep, 0))}
-        {fp.season != null && Number(fp.season) !== Number(season) && (
-          <span className="text-[10px] px-1.5 py-0.5 text-slate-600">({fp.season} pbp)</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Career defensive profile for a coach name — DC stints from the entries data
-// merged with every pbp season where they're listed as head coach, so clicking
-// an HC (or a DC who became one) shows their whole defensive track record.
-function buildCoachProfile(name, allDcs, schemeRows) {
-  const key = (name || "").trim().toLowerCase();
-  if (!key) return null;
-  const dc = allDcs.find((d) => d.name.toLowerCase() === key);
-  const byKey = new Map();
-  for (const s of dc?.stints || []) byKey.set(`${s.year}-${s.team}`, { ...s });
-  for (const r of schemeRows) {
-    if ((r.head_coach || "").trim().toLowerCase() !== key) continue;
-    const k = `${Number(r.season)}-${r.team}`;
-    const existing = byKey.get(k);
-    if (existing) existing.headCoach = true;
-    else byKey.set(k, { year: Number(r.season), team: r.team, headCoach: true });
-  }
-  const stints = [...byKey.values()].sort((a, b) => b.year - a.year || a.team.localeCompare(b.team));
-  return stints.length > 0 ? { name: dc?.name || name.trim(), stints } : null;
-}
 
 export default function AdminDefensiveCoordinators() {
   const [unlocked, setUnlocked]       = useState(false);
@@ -107,6 +56,7 @@ export default function AdminDefensiveCoordinators() {
   const [search, setSearch] = useState("");
   const [division, setDivision] = useState("All");
   const [coachModal, setCoachModal] = useState(null); // { name, stints } from buildCoachProfile
+  const [shareCoach, setShareCoach] = useState(null); // coach name | "" (picker default) — null = closed
 
   // ── Session restore ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -284,6 +234,12 @@ export default function AdminDefensiveCoordinators() {
             <span className="text-xs text-slate-500 ml-auto">
               {schemeRows.length > 0 ? "pbp fingerprints ready" : "no pbp fingerprints published"}
             </span>
+            <button onClick={() => setShareCoach("")}
+              disabled={schemeRows.length === 0}
+              title="Build a downloadable DC fingerprint share card"
+              className="px-3 py-1.5 rounded-md text-xs font-semibold border border-sky-400/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 disabled:opacity-30 disabled:cursor-not-allowed">
+              📸 Share cards
+            </button>
           </div>
         )}
         {tab === "coordinators" && (
@@ -294,6 +250,12 @@ export default function AdminDefensiveCoordinators() {
             <span className="text-xs text-slate-500 ml-auto">
               {allDcs.length} coordinators across {ocSeasons(effectiveDcData).length} seasons
             </span>
+            <button onClick={() => setShareCoach("")}
+              disabled={schemeRows.length === 0}
+              title="Build a downloadable DC fingerprint share card"
+              className="px-3 py-1.5 rounded-md text-xs font-semibold border border-sky-400/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 disabled:opacity-30 disabled:cursor-not-allowed">
+              📸 Share cards
+            </button>
           </div>
         )}
 
@@ -329,7 +291,17 @@ export default function AdminDefensiveCoordinators() {
           <DcFingerprintModal
             coach={coachModal}
             schemeRows={schemeRows}
+            onShare={(name) => { setCoachModal(null); setShareCoach(name); }}
             onClose={() => setCoachModal(null)}
+          />
+        )}
+
+        {shareCoach != null && (
+          <DcShareModal
+            allDcs={allDcs}
+            schemeRows={schemeRows}
+            initialCoach={shareCoach || undefined}
+            onClose={() => setShareCoach(null)}
           />
         )}
 
@@ -440,7 +412,7 @@ function DcTeamsTable({ teams, dcs, schemeRows, season, onCoachClick }) {
                     <span className="text-slate-700">—</span>
                   )}
                 </td>
-                <td className="py-2 px-3"><DefenseSchemeCell fp={row.fp} season={season} /></td>
+                <td className="py-2 px-3"><DefenseSchemeCell rows={schemeRows} fp={row.fp} season={season} /></td>
               </tr>
             ))}
             {sortedRows.length === 0 && (
@@ -458,8 +430,10 @@ function DcTeamsTable({ teams, dcs, schemeRows, season, onCoachClick }) {
 // ── DC Fingerprint Modal ─────────────────────────────────────────────────────
 // Full-screen overlay showing a coach's defensive career — the DC twin of the
 // OC page's OcHistoryModal. Opened by clicking a coordinator or head-coach
-// name in the Teams table; each stint renders its pbp defensive fingerprint.
-function DcFingerprintModal({ coach, schemeRows, onClose }) {
+// name in the Teams table. The header rolls the career up (KPI chips + a
+// season-by-season defense-percentile trend); each stint below renders the
+// full grouped fingerprint with league percentile bars and ranks.
+function DcFingerprintModal({ coach, schemeRows, onShare, onClose }) {
   // Lock body scroll while modal is open; close on Escape key
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -472,25 +446,61 @@ function DcFingerprintModal({ coach, schemeRows, onClose }) {
     };
   }, [onClose]);
 
+  const summary = useMemo(
+    () => careerDefenseSummary(coach.stints, schemeRows),
+    [coach, schemeRows],
+  );
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
       onClick={onClose}>
       <div
-        className="relative w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl border border-white/10 bg-slate-950 shadow-2xl overflow-hidden"
+        className="relative w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-white/10 bg-slate-950 shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}>
         {/* Close button — absolute top-right */}
         <button onClick={onClose}
           className="absolute top-3 right-3 z-10 w-8 h-8 flex items-center justify-center rounded-full text-slate-400 hover:text-slate-100 hover:bg-white/10 transition-colors text-base">
           ✕
         </button>
-        {/* Header */}
+        {/* Header — career rollup */}
         <div className="px-6 py-4 border-b border-white/10 shrink-0 pr-12">
-          <div className="text-[10px] uppercase tracking-widest text-emerald-400 mb-0.5">DC Fingerprint</div>
-          <h2 className="text-xl font-bold text-slate-100">{coach.name}</h2>
+          <div className="flex items-center gap-3">
+            <div className="text-[10px] uppercase tracking-widest text-emerald-400">DC Fingerprint</div>
+            <button
+              onClick={() => onShare(coach.name)}
+              title="Build a downloadable share card for this coach"
+              className="text-[10px] font-semibold px-2 py-0.5 rounded border border-sky-400/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20">
+              📸 Share card
+            </button>
+          </div>
+          <h2 className="text-xl font-bold text-slate-100 mt-0.5">{coach.name}</h2>
           <div className="text-xs text-slate-500 mt-0.5">
             {coach.stints.map((s) => `${s.year} ${s.team}`).join(" · ")}
           </div>
+          {summary && (
+            <div className="mt-3 flex items-end justify-between gap-4 flex-wrap">
+              <div className="flex flex-wrap gap-1.5 text-[10px]">
+                {summary.best && (
+                  <span className="px-2 py-1 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-300">
+                    Best D: #{summary.best.rank.rank} · {summary.best.year} {summary.best.team}
+                  </span>
+                )}
+                <span className="px-2 py-1 rounded border border-white/10 bg-slate-800/70 text-slate-300">
+                  Career EPA/play {fmtMetric("epa_play_allowed", summary.avgEpa)}
+                </span>
+                {summary.avgPct != null && (
+                  <span className="px-2 py-1 rounded border border-white/10 bg-slate-800/70 text-slate-300">
+                    Avg {ordinal(Math.round(summary.avgPct * 100))} pctile
+                  </span>
+                )}
+                <span className="px-2 py-1 rounded border border-white/10 bg-slate-800/70 text-slate-300">
+                  {summary.top10} top-10 {summary.top10 === 1 ? "defense" : "defenses"}
+                </span>
+              </div>
+              {summary.points.length > 1 && <CareerTrendChart points={summary.points} size="sm" />}
+            </div>
+          )}
         </div>
         {/* Body — scrollable stint list, newest first */}
         <div className="overflow-y-auto flex-1 divide-y divide-white/5">
@@ -498,9 +508,12 @@ function DcFingerprintModal({ coach, schemeRows, onClose }) {
             const fp = defenseFingerprintFor(schemeRows, s.team, s.year);
             const teamName = TEAM_NAME_BY_ABBR[s.team] || s.team;
             return (
-              <div key={`${s.year}-${s.team}`} className="px-6 py-3">
-                <div className="flex items-center gap-2 flex-wrap mb-2">
+              <div key={`${s.year}-${s.team}`} className="px-6 py-3.5">
+                <div className="flex items-center gap-2 flex-wrap mb-2.5">
                   <span className="text-sm font-semibold text-slate-100">{s.year} · {teamName}</span>
+                  {fp && Number(fp.season) === Number(s.year) && (
+                    <DefenseRankBadge rows={schemeRows} fp={fp} />
+                  )}
                   {s.headCoach && !s.name && (
                     <span className="text-[10px] uppercase text-violet-300 bg-violet-500/10 border border-violet-400/30 px-1.5 py-0.5 rounded">Head Coach</span>
                   )}
@@ -508,7 +521,7 @@ function DcFingerprintModal({ coach, schemeRows, onClose }) {
                   {s.playcaller === "HC" && <span className="text-[10px] uppercase text-sky-400 bg-sky-500/10 border border-sky-400/30 px-1.5 py-0.5 rounded">HC runs D</span>}
                 </div>
                 {s.note && <div className="text-[10px] text-slate-500 mb-2 italic">{s.note}</div>}
-                <DefenseSchemeCell fp={fp} season={s.year} />
+                <StintFingerprint rows={schemeRows} fp={fp} season={s.year} size="sm" />
               </div>
             );
           })}
@@ -548,11 +561,14 @@ function DcCoordinatorsList({ dcs, schemeRows }) {
                     <div key={`${s.year}-${s.team}`} className="px-5 py-3 border-b border-white/5 last:border-b-0">
                       <div className="flex items-center gap-2 flex-wrap mb-2">
                         <span className="text-sm font-semibold text-slate-100">{s.year} · {teamName}</span>
+                        {fp && Number(fp.season) === Number(s.year) && (
+                          <DefenseRankBadge rows={schemeRows} fp={fp} />
+                        )}
                         {s.partial && <span className="text-[10px] uppercase text-amber-400 bg-amber-500/10 border border-amber-400/30 px-1.5 py-0.5 rounded">partial</span>}
                         {s.playcaller === "HC" && <span className="text-[10px] uppercase text-sky-400 bg-sky-500/10 border border-sky-400/30 px-1.5 py-0.5 rounded">HC runs D</span>}
                       </div>
                       {s.note && <div className="text-[10px] text-slate-500 mb-2 italic">{s.note}</div>}
-                      <DefenseSchemeCell fp={fp} season={s.year} />
+                      <StintFingerprint rows={schemeRows} fp={fp} season={s.year} size="sm" />
                     </div>
                   );
                 })}

@@ -17,6 +17,7 @@ function blurbFingerprint(kind, scope, players) {
     if (kind === "top-players") return `${p.id}:${p.finalScore}`;
     if (kind === "oc-usage") return `${p.id}:${p.metric ?? ""}`;
     if (kind === "hot-cold") return `${p.id}:${p.last4 ?? ""}:${p.streak ?? ""}`;
+    if (kind === "dc-fingerprint") return `${p.id}:${p.avgEpaAllowed ?? ""}:${p.seasons ?? ""}`;
     if (kind === "deep-dive-article") return `${p.id}:${p.score}:${p.dynastyValue ?? ""}`;
     return `${p.id}:${p.grade}`;
   });
@@ -317,6 +318,36 @@ export function buildDeepDiveArticleInput(player) {
       bucket: c.outcomeBucket || "typical",
     })),
     insights: (p.prediction?.keyInsights || []).slice(0, 4),
+  };
+}
+
+// Compact career summary for the DC fingerprint share card. `profile` comes
+// from buildCoachProfile and `summary` from careerDefenseSummary (both in
+// dcFingerprint.js) — one subject per card, carrying the per-season track
+// record so the model can cite the load-bearing season.
+export function buildDcBlurbInput(profile, summary) {
+  const round = (v, d = 3) =>
+    v == null || !Number.isFinite(v) ? null : Number(v.toFixed(d));
+  return {
+    id: `dc:${profile.name}`,
+    name: profile.name,
+    seasons: summary.seasons,
+    avgEpaAllowed: round(summary.avgEpa),
+    avgDefensePctile: round(summary.avgPct, 2),
+    bestRank: summary.best?.rank?.rank ?? null,
+    bestSeason: summary.best ? `${summary.best.year} ${summary.best.team}` : null,
+    top10Defenses: summary.top10,
+    stints: summary.points.map((p) => ({
+      year: p.year,
+      team: p.team,
+      epaAllowed: round(p.fp.epa_play_allowed),
+      defenseRank: p.rank?.rank ?? null,
+      of: p.rank?.of ?? null,
+      sackRate: round(p.fp.sack_rate),
+      intRate: round(p.fp.int_rate),
+      proeFaced: round(p.fp.proe_faced, 1),
+      deepRateAllowed: round(p.fp.deep_rate_allowed),
+    })),
   };
 }
 
