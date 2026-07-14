@@ -161,12 +161,39 @@ Return ONLY this JSON, no prose, no markdown, no code fences:
 
 Length of "articles" must equal length of input. Every input id must appear in the output.`;
 
+const DC_FINGERPRINT_SYSTEM = `You are an NFL defensive analyst writing for a dynasty/IDP fantasy football audience on Twitter. You will receive ONE defensive coordinator (or head coach who runs the defense) with their career defensive track record from nflverse play-by-play. Write ONE sentence (max 140 characters) that captures this coach's defensive identity — the signature that follows them from team to team.
+
+The subject carries:
+  - name, seasons: seasons with play-by-play data
+  - avgEpaAllowed: career EPA/play allowed, play-weighted (lower = stingier; league range roughly -0.10 to +0.10)
+  - avgDefensePctile: mean league percentile of their defenses by EPA/play allowed (0-1; 0.5 = league average)
+  - bestRank / bestSeason: their best defense's league rank and which season/team it was
+  - top10Defenses: how many of their defenses finished top-10 by EPA/play allowed
+  - stints: per season — team, epaAllowed, defenseRank (1 = best of "of" teams), sackRate / intRate (per dropback), proeFaced (pass-rate-over-expected offenses show vs them: positive = offenses pass more than expected = pass funnel, negative = run funnel), deepRateAllowed (share of passes 20+ air yards)
+
+Look for the through-line across stints: consistent top-10 finishes, an elite pressure profile (sackRate ~8%+ is elite), a persistent funnel (offenses always run at them, or always forced to pass), a defense that travels with the coach, or a one-year wonder. Cite the concrete number or rank doing the work.
+
+Voice: confident, scout-tone, NO emojis, NO filler hype. Reference exact numbers/ranks when they're load-bearing.
+
+Also write ONE ready-to-post tweet (the "tweet" field) captioning this coach's fingerprint card for a fantasy audience (IDP and matchup-exploiting managers). Open with a hook, build the take from the strongest number or streak in the career, and keep it ≤ 270 characters. At most one or two hashtags, NO emojis.
+
+Return ONLY this JSON, no prose, no markdown, no code fences:
+{
+  "tweet": "ready-to-post caption, ≤ 270 characters",
+  "blurbs": [
+    { "id": "<exact id from input>", "blurb": "one sentence under 140 chars" }
+  ]
+}
+
+Every input id must appear in the output. Each blurb ≤ 140 characters. The "tweet" must be ≤ 270 characters.`;
+
 const SYSTEM_BY_KIND = {
   rookies: ROOKIES_SYSTEM,
   "top-players": TOP_PLAYERS_SYSTEM,
   "oc-usage": OC_USAGE_SYSTEM,
   "hot-cold": HOT_COLD_SYSTEM,
   "deep-dive-article": DEEP_DIVE_ARTICLE_SYSTEM,
+  "dc-fingerprint": DC_FINGERPRINT_SYSTEM,
 };
 
 export default async function handler(req, res) {
@@ -189,7 +216,7 @@ export default async function handler(req, res) {
   }
   const systemPrompt = SYSTEM_BY_KIND[kind];
   if (!systemPrompt) {
-    return res.status(400).json({ error: "kind must be 'rookies', 'top-players', 'oc-usage', 'hot-cold', or 'deep-dive-article'" });
+    return res.status(400).json({ error: "kind must be 'rookies', 'top-players', 'oc-usage', 'hot-cold', 'deep-dive-article', or 'dc-fingerprint'" });
   }
 
   const scopeBit = kind === "rookies"
@@ -200,6 +227,8 @@ export default async function handler(req, res) {
     ? `Hot & Cold beat-the-projection board · ${scope?.season ?? "season"}. Card: ${scope?.card ?? "leaderboard"}.`
     : kind === "deep-dive-article"
     ? `Deep-dive article notes · 12-team SF full-PPR dynasty context. Upcoming NFL season: ${scope?.season ?? "unknown"}.`
+    : kind === "dc-fingerprint"
+    ? `Defensive coordinator fingerprint card · ${scope?.board ?? "coach"} · nflverse play-by-play, regular season only.`
     : `Top Players board · 12-team SF full-PPR. Position scope: ${scope?.position ?? "all"}.`;
 
   const userPrompt = `${scopeBit}
