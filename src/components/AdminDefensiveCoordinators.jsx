@@ -5,10 +5,11 @@ import {
   signOutAccount,
   fetchDcEntries,
   upsertDcEntry,
+  bulkUpsertDcEntries,
   initDcYear,
 } from "../lib/supabase.js";
 import { NFL_TEAMS, DIVISIONS, ocSeasons, uniqueOcs, overridesToCsv } from "../lib/ocData.js";
-import { loadDcOverrides, setDcOverride, addDcYear, mergeDcData } from "../lib/dcData.js";
+import { loadDcOverrides, setDcOverride, addDcYear, mergeDcData, carryForwardEntries } from "../lib/dcData.js";
 import { fetchDefenseSchemeSeasons, defenseFingerprintFor } from "../lib/dcHistoryApi.js";
 import { buildCoachProfile, careerDefenseSummary, fmtMetric, ordinal } from "../lib/dcFingerprint.js";
 import {
@@ -113,6 +114,33 @@ export default function AdminDefensiveCoordinators() {
       );
     });
   }, [search, division, dcsBySeason, schemeRows, activeSeason]);
+
+  // Advance Season: copy the newest season that has named coaches into the
+  // following year. Because `from` is the newest named season, the target
+  // year never has names of its own yet — advancing twice in a row moves on
+  // to the year after, it can't clobber anything.
+  const advance = useMemo(() => {
+    const named = Object.keys(effectiveDcData).map(Number)
+      .filter((y) => Number.isFinite(y) && Object.keys(carryForwardEntries(effectiveDcData[y])).length > 0)
+      .sort((a, b) => b - a);
+    return named.length > 0 ? { from: named[0], to: named[0] + 1 } : null;
+  }, [effectiveDcData]);
+
+  function handleAdvanceSeason() {
+    if (!advance) return null;
+    const entries = carryForwardEntries(effectiveDcData[advance.from]);
+    let updated = addDcYear(overrides, advance.to);
+    for (const [team, entry] of Object.entries(entries)) {
+      updated = setDcOverride(updated, advance.to, team, entry);
+    }
+    setOverrides(updated);
+    setSeason(advance.to);
+    initDcYear(advance.to).catch(() => {});
+    bulkUpsertDcEntries(advance.to, entries).catch((err) =>
+      setDbSyncError("Failed to save the advanced season to DB: " + (err.message || err)),
+    );
+    return advance.to;
+  }
 
   async function handleUnlock(e) {
     e.preventDefault();
@@ -315,6 +343,8 @@ export default function AdminDefensiveCoordinators() {
             effectiveDcData={effectiveDcData}
             overrides={overrides}
             nameSuggestions={dcNameSuggestions}
+            advance={advance}
+            onAdvanceSeason={handleAdvanceSeason}
             onSetOverride={(year, team, entry) => {
               setOverrides(setDcOverride(overrides, year, team, entry));
               upsertDcEntry(year, team, entry).catch((err) =>
@@ -587,7 +617,7 @@ function DcCoordinatorsList({ dcs, schemeRows }) {
 }
 
 // ── Editor ───────────────────────────────────────────────────────────────────
-function DcEditor({ seasons, effectiveDcData, overrides, nameSuggestions, onSetOverride, onAddYear }) {
+function DcEditor({ seasons, effectiveDcData, overrides, nameSuggestions, advance, onAdvanceSeason, onSetOverride, onAddYear }) {
   const [year, setYear] = useState(seasons[0]);
   const [newYearInput, setNewYearInput] = useState("");
   const [copied, setCopied] = useState(false);
@@ -647,6 +677,14 @@ function DcEditor({ seasons, effectiveDcData, overrides, nameSuggestions, onSetO
               + Add Year
             </button>
           </form>
+          {advance && (
+            <button
+              onClick={() => { const y = onAdvanceSeason(); if (y) setYear(y); }}
+              title={`Copy the ${advance.from} coaching staff into ${advance.to} — names and HC-runs-D carry over (partial/note flags don't), then edit whatever changed`}
+              className="px-3 py-1.5 rounded-md text-xs font-semibold border border-violet-400/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20">
+              ⏭ Advance season → {advance.to}
+            </button>
+          )}
           <button onClick={handleExport}
             disabled={!hasAnyOverrides}
             className="ml-auto px-3 py-1.5 rounded-md text-xs font-semibold border border-sky-400/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 disabled:opacity-30 disabled:cursor-not-allowed">

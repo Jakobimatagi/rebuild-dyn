@@ -726,6 +726,29 @@ export async function upsertDcEntry(season, team, entry) {
 }
 
 /**
+ * Upsert a whole season of DC entries in one request — used by the editor's
+ * Advance Season button, which copies ~32 rows at once. Entries without a
+ * name are skipped (upsertDcEntry handles single-row deletes).
+ */
+export async function bulkUpsertDcEntries(season, entriesByTeam) {
+  const rows = Object.entries(entriesByTeam || {})
+    .filter(([, e]) => e?.name?.trim())
+    .map(([team, e]) => ({
+      season,
+      team,
+      name:       e.name.trim(),
+      partial:    e.partial    || false,
+      playcaller: e.playcaller || null,
+      note:       e.note       || null,
+    }));
+  if (rows.length === 0) return;
+  const { error } = await supabase
+    .from("dc_entries")
+    .upsert(rows, { onConflict: "season,team" });
+  if (error) throw error;
+}
+
+/**
  * Ensure a season exists in the DB (used when adding a new year in the editor).
  * Same sentinel-row trick as initOcYear.
  */

@@ -76,6 +76,24 @@ export function addDcYear(overrides, year) {
 }
 
 /**
+ * Copy one season's coaching staff forward for the editor's Advance Season
+ * button. Names and the structural HC-runs-D flag carry over; the
+ * season-specific flags (partial, note) do not — a mid-season firing last
+ * year says nothing about next year. Skips the DB's __init__ year-marker
+ * sentinel and unnamed entries. Returns { [teamAbbr]: entry }.
+ */
+export function carryForwardEntries(seasonData) {
+  const out = {};
+  for (const [team, e] of Object.entries(seasonData || {})) {
+    if (team === "__init__" || !e?.name?.trim()) continue;
+    const copy = { name: e.name.trim() };
+    if (e.playcaller) copy.playcaller = e.playcaller;
+    out[team] = copy;
+  }
+  return out;
+}
+
+/**
  * Merge the static DC_DATA seed with overrides (from Supabase or localStorage).
  * Overrides win for any year+team they specify.
  */
