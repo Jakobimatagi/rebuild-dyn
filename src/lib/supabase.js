@@ -680,6 +680,64 @@ export async function upsertOcEntry(season, team, entry) {
   if (error) throw error;
 }
 
+// ── DC Entries ────────────────────────────────────────────────────────────────
+// Read/write the `dc_entries` table — the DC twin of oc_entries, same shape:
+//   { season, team, name, partial?, playcaller?, note? }
+// Reads return a nested object { [season]: { [team]: entry } } matching DC_DATA.
+
+export async function fetchDcEntries() {
+  const { data, error } = await supabase
+    .from("dc_entries")
+    .select("season, team, name, partial, playcaller, note");
+  if (error) throw error;
+  const result = {};
+  for (const row of data || []) {
+    if (!result[row.season]) result[row.season] = {};
+    const entry = { name: row.name };
+    if (row.partial)   entry.partial   = true;
+    if (row.playcaller) entry.playcaller = row.playcaller;
+    if (row.note)      entry.note      = row.note;
+    result[row.season][row.team] = entry;
+  }
+  return result;
+}
+
+/**
+ * Upsert a single team-season entry. Pass `null` as `entry` to delete the row.
+ */
+export async function upsertDcEntry(season, team, entry) {
+  if (!entry || !entry.name?.trim()) {
+    const { error } = await supabase
+      .from("dc_entries")
+      .delete()
+      .eq("season", season)
+      .eq("team", team);
+    if (error) throw error;
+    return;
+  }
+  const { error } = await supabase.from("dc_entries").upsert({
+    season,
+    team,
+    name:       entry.name.trim(),
+    partial:    entry.partial    || false,
+    playcaller: entry.playcaller || null,
+    note:       entry.note       || null,
+  }, { onConflict: "season,team" });
+  if (error) throw error;
+}
+
+/**
+ * Mark a new DC year in the DB (sentinel row, same trick as initOcYear).
+ */
+export async function initDcYear(season) {
+  const { error } = await supabase.from("dc_entries").upsert(
+    [{ season, team: "__init__", name: "" }],
+    { onConflict: "season,team", ignoreDuplicates: true }
+  );
+  // Ignore errors on the sentinel row; it's just a year marker.
+  void error;
+}
+
 // ── Rookie Draft Plans ────────────────────────────────────────────────────────
 // One plan per (user_id, league_id, season). `picks` stores
 // { [pickKey]: prospectId } and `prospect_snapshot` freezes the prospect's

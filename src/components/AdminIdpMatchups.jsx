@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { adminSignIn, restoreAdmin, signOutAccount } from "../lib/supabase.js";
+import {
+  adminSignIn, restoreAdmin, signOutAccount,
+  fetchDcEntries, upsertDcEntry, initDcYear, fetchOcEntries,
+} from "../lib/supabase.js";
 import { fetchPlayersDb, fetchHistoricalStats } from "../lib/sleeperApi.js";
 import { fetchNflState } from "../lib/projectionsApi.js";
 import { fetchSeasonWeeklyScores } from "../lib/weeklyScoringApi.js";
@@ -18,9 +21,10 @@ import {
   outcomeVerdict,
 } from "../lib/matchupOutcomes.js";
 import { coordinatorFor, coordinatorContinuityFactors } from "../lib/dcBlueprint.js";
-import { DC_DATA } from "../lib/dcData.js";
-import { OC_DATA } from "../lib/ocData.js";
+import { loadDcOverrides, setDcOverride, addDcYear, mergeDcData } from "../lib/dcData.js";
+import { loadOcOverrides, mergeOcData } from "../lib/ocData.js";
 import { fetchDefenseSchemeSeasons, defenseFingerprintFor } from "../lib/dcHistoryApi.js";
+import DcSeasonManager from "./DcSeasonManager.jsx";
 
 const POS_COLORS = {
   QB: "bg-rose-500/15 text-rose-300 border-rose-500/30",
@@ -235,7 +239,7 @@ function RankingsTab({ rows, loading, error, seasons, season, setSeason }) {
 
 // ── Tab: Defense vs Position (multiplier grid) ───────────────────────────────
 
-function MultiplierGrid({ engine }) {
+function MultiplierGrid({ engine, dcData, ocData }) {
   const [direction, setDirection] = useState("offense"); // offense | idp
   const [sort, setSort] = useState({ key: "overall", dir: -1 });
   const anchorSeason = engine.seasons[0];
@@ -246,7 +250,7 @@ function MultiplierGrid({ engine }) {
 
   // DC name for defenses, OC name for offenses — whichever side the group is.
   const coordName = (group) =>
-    coordinatorFor(direction === "offense" ? DC_DATA : OC_DATA, anchorSeason, group);
+    coordinatorFor(direction === "offense" ? dcData : ocData, anchorSeason, group);
 
   const rows = useMemo(() => {
     const list = result.groups.map((group) => {
@@ -319,7 +323,7 @@ function MultiplierGrid({ engine }) {
         </table>
       </div>
       <p className="text-[10px] text-slate-600 mt-2">
-        Recency-weighted over {engine.seasons.join(" / ")} (weights 1.0 / 0.6 / 0.3) · Bayesian-shrunk toward league average by 4 pseudo-games · clamped to 0.75–1.30 · where dcData.js/ocData.js know a team's coordinator, seasons under a different one count at 0.35× weight. Hover a cell for the underlying sample.
+        Recency-weighted over {engine.seasons.join(" / ")} (weights 1.0 / 0.6 / 0.3) · Bayesian-shrunk toward league average by 4 pseudo-games · clamped to 0.75–1.30 · where the coordinator datasets (DC Manager tab / OC editor) know a team's coordinator, seasons under a different one count at 0.35× weight. Hover a cell for the underlying sample.
       </p>
     </div>
   );
@@ -564,12 +568,12 @@ function DcFingerprint({ fp, dcName }) {
   );
 }
 
-function OffenseVsDefenseTab({ engine, playersDb, dcScheme }) {
+function OffenseVsDefenseTab({ engine, playersDb, dcScheme, dcData }) {
   const teams = engine.dirA.groups;
   const [offense, setOffense] = useState(teams[0] || "");
   const [defense, setDefense] = useState(teams[1] || "");
   const anchorSeason = engine.seasons[0];
-  const dcName = coordinatorFor(DC_DATA, anchorSeason, defense);
+  const dcName = coordinatorFor(dcData, anchorSeason, defense);
   const fingerprint = defenseFingerprintFor(dcScheme, defense, anchorSeason);
 
   const profiles = useMemo(() => buildPlayerProfiles(engine.offRows), [engine]);
@@ -796,6 +800,7 @@ const TABS = [
   ["ovd", "Offense vs Defense"],
   ["predictions", "Week Predictions"],
   ["history", "History"],
+  ["dcs", "DC Manager"],
 ];
 
 function fallbackSeasonYear() {
@@ -816,6 +821,20 @@ export default function AdminIdpMatchups() {
   const [nflState, setNflState] = useState(null);
   const [playersDb, setPlayersDb] = useState(null);
   const [dcScheme, setDcScheme] = useState([]); // defense_scheme_seasons rows (best-effort)
+
+  // Coordinator datasets = static seed ⊕ Supabase overrides (localStorage until
+  // the fetch lands). The DC Manager tab edits dcOverrides; OC overrides are
+  // read-only here (edited in /admin/oc-rankings) but keep the continuity
+  // weighting in sync with that editor.
+  const [dcOverrides, setDcOverrides] = useState(() => loadDcOverrides());
+  const [ocOverrides, setOcOverrides] = useState(() => loadOcOverrides());
+  const [dcSyncError, setDcSyncError] = useState("");
+  const effectiveDcData = useMemo(() => mergeDcData(dcOverrides), [dcOverrides]);
+  const effectiveOcData = useMemo(() => mergeOcData(ocOverrides), [ocOverrides]);
+  const dcSeasonList = useMemo(
+    () => Object.keys(effectiveDcData).map(Number).filter(Number.isFinite).sort((a, b) => b - a),
+    [effectiveDcData],
+  );
 
   // Rankings (per-season, loaded on demand)
   const [rankSeason, setRankSeason] = useState(null);
@@ -890,8 +909,45 @@ export default function AdminIdpMatchups() {
     // DC-Blueprint fingerprints — resolves to [] until the table is published.
     fetchDefenseSchemeSeasons()
       .then((rows) => { if (!cancelled) setDcScheme(rows); });
+    // Coordinator overrides from Supabase (localStorage stays the fallback).
+    fetchDcEntries()
+      .then((db) => {
+        if (cancelled) return;
+        setDcOverrides(db);
+        try { localStorage.setItem("dc_overrides_v1", JSON.stringify(db)); } catch {}
+      })
+      .catch((err) => setDcSyncError("Could not load DC overrides from DB: " + (err.message || err)));
+    fetchOcEntries()
+      .then((db) => { if (!cancelled) setOcOverrides(db); })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, [unlocked]);
+
+  // ── DC Manager edit handlers ──────────────────────────────────────────────
+  function handleSetDcOverride(year, team, entry) {
+    setDcOverrides((prev) => setDcOverride(prev, year, team, entry));
+    upsertDcEntry(year, team, entry).catch((err) =>
+      setDcSyncError("Failed to save to DB: " + (err.message || err)));
+  }
+
+  function handleBulkSetDc(year, entriesByTeam) {
+    setDcOverrides((prev) => {
+      let next = prev;
+      for (const [team, entry] of Object.entries(entriesByTeam)) {
+        next = setDcOverride(next, year, team, entry);
+      }
+      return next;
+    });
+    for (const [team, entry] of Object.entries(entriesByTeam)) {
+      upsertDcEntry(year, team, entry).catch((err) =>
+        setDcSyncError("Failed to save to DB: " + (err.message || err)));
+    }
+  }
+
+  function handleAddDcYear(year) {
+    setDcOverrides((prev) => addDcYear(prev, year));
+    initDcYear(year).catch(() => {});
+  }
 
   useEffect(() => {
     if (rankSeason == null) setRankSeason(anchorSeason);
@@ -915,7 +971,7 @@ export default function AdminIdpMatchups() {
   }, [unlocked, playersDb, rankSeason, rankingsBySeason]);
 
   // ── Matchup engine: 3 seasons of offensive + IDP weekly rows ─────────────
-  const needsEngine = tab !== "rankings";
+  const needsEngine = tab !== "rankings" && tab !== "dcs";
   useEffect(() => {
     if (!unlocked || !needsEngine || !nflState || engineStarted.current) return;
     engineStarted.current = true;
@@ -951,20 +1007,7 @@ export default function AdminIdpMatchups() {
             idpRows.push({ season, ...r });
           }
         }
-        const seasonWeights = defaultSeasonWeights(anchorSeason);
-        // Coordinator continuity: a defense's pre-DC-change seasons (and an
-        // offense's pre-OC-change seasons in the IDP direction) count less.
-        // Empty datasets produce no overrides, so this is a no-op until
-        // dcData.js / ocData.js cover the seasons in play.
-        const dirA = buildMultipliers(offRows, {
-          seasonWeights,
-          groupSeasonFactors: coordinatorContinuityFactors(DC_DATA, anchorSeason),
-        });
-        const dirB = buildMultipliers(idpRows, {
-          seasonWeights,
-          groupSeasonFactors: coordinatorContinuityFactors(OC_DATA, anchorSeason),
-        });
-        if (!cancelled) setEngine({ offRows, idpRows, dirA, dirB, seasons });
+        if (!cancelled) setEngine({ offRows, idpRows, seasons });
       } catch (err) {
         if (!cancelled) setEngineError(err.message || "Failed to load weekly data.");
       } finally {
@@ -974,6 +1017,27 @@ export default function AdminIdpMatchups() {
 
     return () => { cancelled = true; };
   }, [unlocked, needsEngine, nflState, seasons, anchorSeason]);
+
+  // Multipliers are derived (not stored) so coordinator edits in the DC
+  // Manager re-weight the engine immediately. Coordinator continuity: a
+  // defense's pre-DC-change seasons (and an offense's pre-OC-change seasons
+  // in the IDP direction) count at reduced weight; teams the datasets don't
+  // cover stay neutral.
+  const engineView = useMemo(() => {
+    if (!engine) return null;
+    const seasonWeights = defaultSeasonWeights(anchorSeason);
+    return {
+      ...engine,
+      dirA: buildMultipliers(engine.offRows, {
+        seasonWeights,
+        groupSeasonFactors: coordinatorContinuityFactors(effectiveDcData, anchorSeason),
+      }),
+      dirB: buildMultipliers(engine.idpRows, {
+        seasonWeights,
+        groupSeasonFactors: coordinatorContinuityFactors(effectiveOcData, anchorSeason),
+      }),
+    };
+  }, [engine, effectiveDcData, effectiveOcData, anchorSeason]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   if (initLoading) {
@@ -1005,7 +1069,7 @@ export default function AdminIdpMatchups() {
   }
 
   const enginePct = Math.round((engineProgress.done / engineProgress.total) * 100);
-  const engineReady = engine && !engineLoading;
+  const engineReady = engineView && !engineLoading;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -1060,7 +1124,22 @@ export default function AdminIdpMatchups() {
           />
         )}
 
-        {tab !== "rankings" && engineLoading && (
+        {dcSyncError && (
+          <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 p-3 text-xs text-amber-200 mb-4">{dcSyncError}</div>
+        )}
+
+        {tab === "dcs" && (
+          <DcSeasonManager
+            seasons={dcSeasonList}
+            effectiveDcData={effectiveDcData}
+            overrides={dcOverrides}
+            onSetOverride={handleSetDcOverride}
+            onBulkSet={handleBulkSetDc}
+            onAddYear={handleAddDcYear}
+          />
+        )}
+
+        {needsEngine && engineLoading && (
           <div className="rounded-xl border border-white/10 bg-slate-900/40 p-8 text-center">
             <div className="text-slate-400 text-sm mb-3">
               Loading {seasons.join(", ")} weekly box scores + IDP stats… {engineProgress.done}/{engineProgress.total}
@@ -1070,17 +1149,21 @@ export default function AdminIdpMatchups() {
             </div>
           </div>
         )}
-        {tab !== "rankings" && engineError && (
+        {needsEngine && engineError && (
           <div className="rounded-xl border border-rose-400/40 bg-rose-500/10 p-4 text-sm text-rose-200 mb-4">{engineError}</div>
         )}
 
-        {tab === "defense" && engineReady && <MultiplierGrid engine={engine} />}
-        {tab === "ovd" && engineReady && <OffenseVsDefenseTab engine={engine} playersDb={playersDb} dcScheme={dcScheme} />}
+        {tab === "defense" && engineReady && (
+          <MultiplierGrid engine={engineView} dcData={effectiveDcData} ocData={effectiveOcData} />
+        )}
+        {tab === "ovd" && engineReady && (
+          <OffenseVsDefenseTab engine={engineView} playersDb={playersDb} dcScheme={dcScheme} dcData={effectiveDcData} />
+        )}
         {tab === "predictions" && engineReady && (
-          <PredictionsTab engine={engine} playersDb={playersDb}
+          <PredictionsTab engine={engineView} playersDb={playersDb}
             predSeason={predSeason} predWeek={predWeek} setPredWeek={setPredWeek} />
         )}
-        {tab === "history" && engineReady && <HistoryTab engine={engine} />}
+        {tab === "history" && engineReady && <HistoryTab engine={engineView} />}
       </main>
     </div>
   );
