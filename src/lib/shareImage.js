@@ -71,3 +71,38 @@ export function tiktokFilename(name, tiktok) {
   if (!tiktok) return name;
   return name.replace(/\.png$/i, "") + "-tiktok.png";
 }
+
+function dataUrlToBlob(dataUrl) {
+  const [meta, b64] = dataUrl.split(",");
+  const mime = /data:(.*?)[;,]/.exec(meta)?.[1] || "image/png";
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+// Save a captured PNG. With preferShare (phones/tablets), open the native
+// share sheet via the Web Share API — "Save Image" there drops the PNG
+// straight into the photo library, which beats hunting for it in Files /
+// Downloads. Anywhere the share sheet isn't available (or errors for a reason
+// other than the user cancelling) this falls back to a plain anchor download.
+// Returns "shared" | "cancelled" | "downloaded" so callers can react.
+export async function saveShareImage(dataUrl, filename, { preferShare = false } = {}) {
+  if (preferShare && typeof navigator !== "undefined" && navigator.share) {
+    try {
+      const file = new File([dataUrlToBlob(dataUrl)], filename, { type: "image/png" });
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file] });
+        return "shared";
+      }
+    } catch (err) {
+      if (err?.name === "AbortError") return "cancelled";
+      // fall through to the download path
+    }
+  }
+  const link = document.createElement("a");
+  link.download = filename;
+  link.href = dataUrl;
+  link.click();
+  return "downloaded";
+}
