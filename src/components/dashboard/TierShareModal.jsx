@@ -11,36 +11,61 @@ const POS_COLOR = {
   TE: "#4dd0ff",
 };
 
-// Position-tinted initials avatar for the export card. No player photos —
-// keeps the shared PNG free of external images (and capture needs no
-// cross-origin fetches).
+// Sleeper CDN headshot for the export card, matching the board's cards. The
+// CDN sends Access-Control-Allow-Origin: *, and capture works because
+// html-to-image re-fetches each img src itself with cacheBust (a unique URL
+// that sidesteps the no-CORS cached copies the board already created — do NOT
+// add crossOrigin here, it would fail against that same cache). Players
+// without a portrait fall back to position-tinted initials before capture.
 function ShareAvatar({ player, size }) {
+  const [errored, setErrored] = useState(false);
   const color = POS_COLOR[player.position] || "#d9deef";
-  const initials = (player.name || "")
-    .split(" ")
-    .filter(Boolean)
-    .map((w) => w[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+  const url = player.id
+    ? `https://sleepercdn.com/content/nfl/players/${player.id}.jpg`
+    : null;
+
+  if (!url || errored) {
+    const initials = (player.name || "")
+      .split(" ")
+      .filter(Boolean)
+      .map((w) => w[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase();
+    return (
+      <div
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          background: `${color}22`,
+          border: `2px solid ${color}66`,
+          color,
+          fontSize: Math.round(size * 0.32),
+          fontWeight: 800,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {initials || player.position}
+      </div>
+    );
+  }
   return (
-    <div
+    <img
+      src={url}
+      alt={player.name}
+      onError={() => setErrored(true)}
       style={{
         width: size,
         height: size,
         borderRadius: "50%",
-        background: `${color}22`,
+        objectFit: "cover",
+        background: "#0d0f17",
         border: `2px solid ${color}66`,
-        color,
-        fontSize: Math.round(size * 0.32),
-        fontWeight: 800,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
       }}
-    >
-      {initials || player.position}
-    </div>
+    />
   );
 }
 
