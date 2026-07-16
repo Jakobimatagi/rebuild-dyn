@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
+  MeasuringStrategy,
   PointerSensor,
   TouchSensor,
-  closestCorners,
+  pointerWithin,
+  rectIntersection,
   useDroppable,
   useSensor,
   useSensors,
@@ -223,7 +225,8 @@ function AssignMenu({ placedTier, onAssign, onRemove, onClose }) {
 
 // A draggable/sortable face card. dnd-kit's useSortable covers both the tier
 // rows (reorder) and the pool (drag out) since every card lives in some
-// SortableContext.
+// SortableContext. Placed cards get an ✕ badge that sends them back to the
+// pool without dragging.
 function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign, onRemove }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: player.id });
@@ -242,6 +245,35 @@ function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign
       }}
     >
       <CardFace player={player} />
+      {placedTier && !isDragging && (
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onRemove(player.id); }}
+          title="Send back to the pool"
+          style={{
+            position: "absolute",
+            top: -5,
+            right: -5,
+            zIndex: 5,
+            width: 16,
+            height: 16,
+            borderRadius: "50%",
+            border: "1px solid rgba(255,107,107,0.6)",
+            background: "#1a0f14",
+            color: "#ff6b6b",
+            fontSize: 9,
+            fontWeight: 700,
+            lineHeight: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            padding: 0,
+          }}
+        >
+          ✕
+        </button>
+      )}
       {assignOpen && (
         <AssignMenu
           placedTier={placedTier}
@@ -470,6 +502,15 @@ export default function TierMakerTab() {
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 8 } }),
   );
+
+  // Drop where the pointer actually is. closestCorners kept resolving to the
+  // top (S) row because the tall pool sidebar skews corner distances; pointer
+  // containment has no such bias. rectIntersection covers the touch case
+  // where the pointer can sit outside the dragged card's rect.
+  const collisionDetection = (args) => {
+    const withPointer = pointerWithin(args);
+    return withPointer.length ? withPointer : rectIntersection(args);
+  };
 
   // Resolve what container a droppable/sortable id belongs to.
   const containerOf = (id) => {
@@ -702,7 +743,8 @@ export default function TierMakerTab() {
 
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCorners}
+        collisionDetection={collisionDetection}
+        measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
         onDragStart={({ active }) => { setActiveId(String(active.id)); setAssignId(null); }}
         onDragCancel={() => setActiveId(null)}
         onDragEnd={handleDragEnd}
