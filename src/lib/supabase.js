@@ -827,6 +827,43 @@ export async function initOcYear(season) {
   void error;
 }
 
+// ── Tier Maker boards ─────────────────────────────────────────────────────────
+// One board per (user_id, position_scope). `tiers` stores
+// { S: [sleeperPlayerId, ...], A: [...], ..., E: [...] } with array order =
+// display order within the tier row. Schema:
+// docs/migrations/player_tier_rankings_schema.sql
+
+export async function fetchTierRankings(userId) {
+  const { data, error } = await supabase
+    .from("player_tier_rankings")
+    .select("*")
+    .eq("user_id", userId);
+  if (error) throw error;
+  return data || [];
+}
+
+export async function upsertTierRanking({ userId, positionScope, title, tiers }) {
+  const { error } = await supabase.from("player_tier_rankings").upsert(
+    {
+      user_id:        userId,
+      position_scope: positionScope,
+      title:          title || null,
+      tiers:          tiers || {},
+    },
+    { onConflict: "user_id,position_scope" },
+  );
+  if (error) throw error;
+}
+
+export async function deleteTierRanking(userId, positionScope) {
+  const { error } = await supabase
+    .from("player_tier_rankings")
+    .delete()
+    .eq("user_id", userId)
+    .eq("position_scope", positionScope);
+  if (error) throw error;
+}
+
 // ── Trade Tinder ──────────────────────────────────────────────────────────────
 // Swipes are anonymous — keyed by a random session UUID stored in localStorage,
 // not tied to any Sleeper identity. Swiped hashes are also cached locally so

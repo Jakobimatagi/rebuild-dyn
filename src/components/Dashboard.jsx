@@ -29,6 +29,7 @@ const RookieRankingsTab = lazy(() => import("./dashboard/RookieRankingsTab"));
 const ProjectionsTab    = lazy(() => import("./dashboard/ProjectionsTab"));
 const PowerRankingsTab  = lazy(() => import("./dashboard/PowerRankingsTab"));
 const WaiverTab         = lazy(() => import("./dashboard/WaiverTab"));
+const TierMakerTab      = lazy(() => import("./dashboard/TierMakerTab"));
 
 // Centered fallback while a lazy tab chunk downloads.
 function TabLoading() {
@@ -55,6 +56,7 @@ const ROW2 = [
   { key: "waiver",    label: "Waivers" },
   { key: "power",     label: "Power" },
   { key: "rankings",  label: "Rankings" },
+  { key: "tiers",     label: "Tier Maker" },
   { key: "rookies",   label: "Rookies" },
   { key: "blueprint", label: "Blueprint" },
   { key: "tinder",    label: "Trade Jury" },
@@ -434,6 +436,8 @@ export default function Dashboard({
       )}
 
       {activeTab === "rookies" && <RookieRankingsTab />}
+
+      {activeTab === "tiers" && <TierMakerTab />}
 
       {activeTab === "blueprint" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
