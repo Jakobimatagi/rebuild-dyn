@@ -11,56 +11,36 @@ const POS_COLOR = {
   TE: "#4dd0ff",
 };
 
-// Headshot for the export card. Deliberately no crossOrigin attribute —
-// html-to-image fetches the portrait itself and inlines it into the PNG
-// (same approach as the AdminHotStreaks share card).
+// Position-tinted initials avatar for the export card. No player photos —
+// keeps the shared PNG free of external images (and capture needs no
+// cross-origin fetches).
 function ShareAvatar({ player, size }) {
-  const [errored, setErrored] = useState(false);
   const color = POS_COLOR[player.position] || "#d9deef";
-  const url = `https://sleepercdn.com/content/nfl/players/${player.id}.jpg`;
-
-  if (errored) {
-    const initials = (player.name || "")
-      .split(" ")
-      .filter(Boolean)
-      .map((w) => w[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase();
-    return (
-      <div
-        style={{
-          width: size,
-          height: size,
-          borderRadius: "50%",
-          background: `${color}22`,
-          border: `2px solid ${color}66`,
-          color,
-          fontSize: Math.round(size * 0.32),
-          fontWeight: 800,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {initials || player.position}
-      </div>
-    );
-  }
+  const initials = (player.name || "")
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
   return (
-    <img
-      src={url}
-      alt={player.name}
-      onError={() => setErrored(true)}
+    <div
       style={{
         width: size,
         height: size,
         borderRadius: "50%",
-        objectFit: "cover",
-        background: "#0d0f17",
+        background: `${color}22`,
         border: `2px solid ${color}66`,
+        color,
+        fontSize: Math.round(size * 0.32),
+        fontWeight: 800,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
       }}
-    />
+    >
+      {initials || player.position}
+    </div>
   );
 }
 
