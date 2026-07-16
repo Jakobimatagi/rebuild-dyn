@@ -118,6 +118,7 @@ function ShareCard({ innerRef, board, scope, title, playerById }) {
               <div
                 style={{
                   flex: 1,
+                  minWidth: 0,
                   display: "flex",
                   flexWrap: "wrap",
                   alignContent: "flex-start",

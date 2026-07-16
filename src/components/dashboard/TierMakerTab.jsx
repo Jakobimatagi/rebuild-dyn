@@ -53,36 +53,62 @@ function posColor(pos) {
   return POS_COLOR[pos] || "#d9deef";
 }
 
-// Position-tinted initials avatar. Deliberately NOT the Sleeper CDN headshot:
-// tier boards get downloaded and reshared, so the cards stay photo-free.
-function PlayerAvatar({ name, position, size = 44 }) {
+// Sleeper CDN headshot (same source as the Admin boards), with a
+// position-tinted initials fallback for players without a portrait.
+function PlayerAvatar({ playerId, name, position, size = 44 }) {
+  const [errored, setErrored] = useState(false);
   const color = posColor(position);
-  const initials = (name || "")
-    .split(" ")
-    .filter(Boolean)
-    .map((w) => w[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+  const url = playerId
+    ? `https://sleepercdn.com/content/nfl/players/${playerId}.jpg`
+    : null;
+
+  if (!url || errored) {
+    const initials = (name || "")
+      .split(" ")
+      .filter(Boolean)
+      .map((w) => w[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase();
+    return (
+      <div
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          background: `${color}22`,
+          border: `1px solid ${color}55`,
+          color,
+          fontSize: Math.round(size * 0.34),
+          fontWeight: 700,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+        }}
+      >
+        {initials || position || "—"}
+      </div>
+    );
+  }
   return (
-    <div
+    <img
+      src={url}
+      alt={name}
+      loading="lazy"
+      draggable={false}
+      onError={() => setErrored(true)}
       style={{
         width: size,
         height: size,
         borderRadius: "50%",
-        background: `${color}22`,
+        objectFit: "cover",
+        background: "#0d0f17",
         border: `1px solid ${color}55`,
-        color,
-        fontSize: Math.round(size * 0.34),
-        fontWeight: 700,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
         flexShrink: 0,
+        pointerEvents: "none",
       }}
-    >
-      {initials || position || "—"}
-    </div>
+    />
   );
 }
 
@@ -105,7 +131,7 @@ function CardFace({ player, dragging = false }) {
         touchAction: "none",
       }}
     >
-      <PlayerAvatar name={player.name} position={player.position} />
+      <PlayerAvatar playerId={player.id} name={player.name} position={player.position} />
       <div
         style={{
           fontSize: 9,
@@ -274,6 +300,9 @@ function TierRow({ tier, players, onClear, renderCard }) {
           ref={setNodeRef}
           style={{
             flex: 1,
+            // Without an explicit minWidth the shelf's auto minimum is its
+            // single-line width, so long rows clip instead of wrapping.
+            minWidth: 0,
             display: "flex",
             flexWrap: "wrap",
             gap: 6,
@@ -678,100 +707,121 @@ export default function TierMakerTab() {
         onDragCancel={() => setActiveId(null)}
         onDragEnd={handleDragEnd}
       >
-        {/* Tier rows */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {TIERS.map((tier) => (
-            <TierRow
-              key={tier}
-              tier={tier}
-              players={board[tier].map((id) => playerById.get(id)).filter(Boolean)}
-              onClear={() => setBoard((b) => clearTier(b, tier))}
-              renderCard={renderCard}
-            />
-          ))}
-        </div>
+        {/* Board + pool side by side: tier rows on the left, the draggable
+            player pool as a sticky sidebar on the right so cards stay within
+            reach of every tier. Wraps back to stacked on narrow screens. */}
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 12 }}>
+          {/* Tier rows */}
+          <div style={{ flex: "3 1 460px", minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+            {TIERS.map((tier) => (
+              <TierRow
+                key={tier}
+                tier={tier}
+                players={board[tier].map((id) => playerById.get(id)).filter(Boolean)}
+                onClear={() => setBoard((b) => clearTier(b, tier))}
+                renderCard={renderCard}
+              />
+            ))}
+          </div>
 
-        {/* Pool */}
-        <div style={{ borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.6)" }}>
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-            <span style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "#94a3b8", fontWeight: 700 }}>
-              Player pool
-            </span>
-            {scope === "ALL" && (
-              <div style={{ display: "flex", gap: 4 }}>
-                {["ALL", ...POOL_POSITIONS].map((pos) => {
-                  const active = poolPos === pos;
-                  const color = pos === "ALL" ? "#94a3b8" : posColor(pos);
-                  return (
-                    <button
-                      key={pos}
-                      onClick={() => setPoolPos(pos)}
-                      style={{
-                        padding: "3px 9px",
-                        borderRadius: 6,
-                        fontSize: 9,
-                        fontWeight: 700,
-                        letterSpacing: 1,
-                        border: `1px solid ${active ? color : "rgba(255,255,255,0.1)"}`,
-                        background: active ? `${color}1e` : "transparent",
-                        color: active ? color : "#64748b",
-                        cursor: "pointer",
-                      }}
-                    >
-                      {pos}
-                    </button>
-                  );
-                })}
+          {/* Pool sidebar */}
+          <div
+            style={{
+              flex: "1 1 260px",
+              minWidth: 250,
+              maxWidth: 380,
+              position: "sticky",
+              top: 10,
+              alignSelf: "flex-start",
+              maxHeight: "calc(100vh - 20px)",
+              display: "flex",
+              flexDirection: "column",
+              borderRadius: 10,
+              border: "1px solid rgba(255,255,255,0.08)",
+              background: "rgba(2,6,23,0.6)",
+            }}
+          >
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
+              <span style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "#94a3b8", fontWeight: 700 }}>
+                Player pool
+              </span>
+              {scope === "ALL" && (
+                <div style={{ display: "flex", gap: 4 }}>
+                  {["ALL", ...POOL_POSITIONS].map((pos) => {
+                    const active = poolPos === pos;
+                    const color = pos === "ALL" ? "#94a3b8" : posColor(pos);
+                    return (
+                      <button
+                        key={pos}
+                        onClick={() => setPoolPos(pos)}
+                        style={{
+                          padding: "3px 9px",
+                          borderRadius: 6,
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: 1,
+                          border: `1px solid ${active ? color : "rgba(255,255,255,0.1)"}`,
+                          background: active ? `${color}1e` : "transparent",
+                          color: active ? color : "#64748b",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {pos}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search players…"
+                style={{
+                  flex: "1 1 120px",
+                  minWidth: 0,
+                  padding: "6px 10px",
+                  borderRadius: 8,
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  background: "rgba(15,23,42,0.8)",
+                  color: "#e2e8f0",
+                  fontSize: 12,
+                  outline: "none",
+                }}
+              />
+            </div>
+            <SortableContext items={poolVisible.map((p) => p.id)} strategy={rectSortingStrategy}>
+              <div
+                ref={setPoolRef}
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 6,
+                  padding: 10,
+                  minHeight: 100,
+                  overflowY: "auto",
+                  background: poolOver ? "rgba(255,107,107,0.06)" : "transparent",
+                  transition: "background 0.15s",
+                }}
+              >
+                {poolVisible.map(renderCard)}
+                {poolVisible.length === 0 && (
+                  <span style={{ alignSelf: "center", fontSize: 11, color: "#475569", padding: 8 }}>
+                    {search ? "No players match that search." : "Every listed player is on the board."}
+                  </span>
+                )}
+              </div>
+            </SortableContext>
+            {pool.length > visible && (
+              <div style={{ padding: "8px 10px 10px", textAlign: "center", flexShrink: 0, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                <button
+                  onClick={() => setVisible((v) => v + POOL_PAGE)}
+                  style={{ padding: "7px 16px", borderRadius: 8, fontSize: 10, fontWeight: 700, letterSpacing: 1, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(15,23,42,0.8)", color: "#94a3b8", cursor: "pointer" }}
+                >
+                  Show more ({pool.length - visible} more)
+                </button>
               </div>
             )}
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search players…"
-              style={{
-                marginLeft: "auto",
-                width: 180,
-                padding: "6px 10px",
-                borderRadius: 8,
-                border: "1px solid rgba(255,255,255,0.12)",
-                background: "rgba(15,23,42,0.8)",
-                color: "#e2e8f0",
-                fontSize: 12,
-                outline: "none",
-              }}
-            />
           </div>
-          <SortableContext items={poolVisible.map((p) => p.id)} strategy={rectSortingStrategy}>
-            <div
-              ref={setPoolRef}
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 6,
-                padding: 10,
-                minHeight: 100,
-                background: poolOver ? "rgba(255,107,107,0.06)" : "transparent",
-                transition: "background 0.15s",
-              }}
-            >
-              {poolVisible.map(renderCard)}
-              {poolVisible.length === 0 && (
-                <span style={{ alignSelf: "center", fontSize: 11, color: "#475569", padding: 8 }}>
-                  {search ? "No players match that search." : "Every listed player is on the board."}
-                </span>
-              )}
-            </div>
-          </SortableContext>
-          {pool.length > visible && (
-            <div style={{ padding: "0 10px 10px", textAlign: "center" }}>
-              <button
-                onClick={() => setVisible((v) => v + POOL_PAGE)}
-                style={{ padding: "7px 16px", borderRadius: 8, fontSize: 10, fontWeight: 700, letterSpacing: 1, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(15,23,42,0.8)", color: "#94a3b8", cursor: "pointer" }}
-              >
-                Show more ({pool.length - visible} more)
-              </button>
-            </div>
-          )}
         </div>
 
         <DragOverlay dropAnimation={null}>
