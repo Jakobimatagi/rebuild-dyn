@@ -300,6 +300,9 @@ function TierRow({ tier, players, onClear, renderCard }) {
           ref={setNodeRef}
           style={{
             flex: 1,
+            // Without an explicit minWidth the shelf's auto minimum is its
+            // single-line width, so long rows clip instead of wrapping.
+            minWidth: 0,
             display: "flex",
             flexWrap: "wrap",
             gap: 6,
