@@ -53,36 +53,62 @@ function posColor(pos) {
   return POS_COLOR[pos] || "#d9deef";
 }
 
-// Position-tinted initials avatar. Deliberately NOT the Sleeper CDN headshot:
-// tier boards get downloaded and reshared, so the cards stay photo-free.
-function PlayerAvatar({ name, position, size = 44 }) {
+// Sleeper CDN headshot (same source as the Admin boards), with a
+// position-tinted initials fallback for players without a portrait.
+function PlayerAvatar({ playerId, name, position, size = 44 }) {
+  const [errored, setErrored] = useState(false);
   const color = posColor(position);
-  const initials = (name || "")
-    .split(" ")
-    .filter(Boolean)
-    .map((w) => w[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+  const url = playerId
+    ? `https://sleepercdn.com/content/nfl/players/${playerId}.jpg`
+    : null;
+
+  if (!url || errored) {
+    const initials = (name || "")
+      .split(" ")
+      .filter(Boolean)
+      .map((w) => w[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase();
+    return (
+      <div
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          background: `${color}22`,
+          border: `1px solid ${color}55`,
+          color,
+          fontSize: Math.round(size * 0.34),
+          fontWeight: 700,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+        }}
+      >
+        {initials || position || "—"}
+      </div>
+    );
+  }
   return (
-    <div
+    <img
+      src={url}
+      alt={name}
+      loading="lazy"
+      draggable={false}
+      onError={() => setErrored(true)}
       style={{
         width: size,
         height: size,
         borderRadius: "50%",
-        background: `${color}22`,
+        objectFit: "cover",
+        background: "#0d0f17",
         border: `1px solid ${color}55`,
-        color,
-        fontSize: Math.round(size * 0.34),
-        fontWeight: 700,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
         flexShrink: 0,
+        pointerEvents: "none",
       }}
-    >
-      {initials || position || "—"}
-    </div>
+    />
   );
 }
 
@@ -105,7 +131,7 @@ function CardFace({ player, dragging = false }) {
         touchAction: "none",
       }}
     >
-      <PlayerAvatar name={player.name} position={player.position} />
+      <PlayerAvatar playerId={player.id} name={player.name} position={player.position} />
       <div
         style={{
           fontSize: 9,
