@@ -437,7 +437,9 @@ export default function Dashboard({
 
       {activeTab === "rookies" && <RookieRankingsTab />}
 
-      {activeTab === "tiers" && <TierMakerTab />}
+      {activeTab === "tiers" && (
+        <TierMakerTab rosterAuditSource={analysis.rosterAuditSource} />
+      )}
 
       {activeTab === "blueprint" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
