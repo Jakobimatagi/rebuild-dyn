@@ -356,7 +356,7 @@ function TierRow({ tier, players, onClear, renderCard }) {
   );
 }
 
-export default function TierMakerTab() {
+export default function TierMakerTab({ rosterAuditSource }) {
   const [playersDb, setPlayersDb] = useState(null);
   const [loadError, setLoadError] = useState("");
 
@@ -446,6 +446,17 @@ export default function TierMakerTab() {
   };
 
   // ── Player pool ────────────────────────────────────────────────────────────
+  // RosterAudit overall rank per sleeper id — the pool's primary sort order.
+  const raRankById = useMemo(() => {
+    const map = new Map();
+    for (const row of rosterAuditSource?.rankings || []) {
+      const sid = String(row.sleeper_id || "");
+      const rank = Number(row.rank_overall);
+      if (sid && rank > 0 && !map.has(sid)) map.set(sid, rank);
+    }
+    return map;
+  }, [rosterAuditSource]);
+
   const allPlayers = useMemo(() => {
     if (!playersDb) return [];
     const list = [];
@@ -456,12 +467,18 @@ export default function TierMakerTab() {
         name: p.full_name || `${p.first_name || ""} ${p.last_name || ""}`.trim(),
         position: p.position,
         team: p.team || "",
+        raRank: raRankById.get(String(id)) ?? null,
         rank: Number(p.search_rank) || 9999999,
       });
     }
-    list.sort((a, b) => a.rank - b.rank);
+    // RosterAudit-ranked players first in RA order; everyone else after,
+    // ordered by Sleeper search rank.
+    list.sort(
+      (a, b) =>
+        (a.raRank ?? Infinity) - (b.raRank ?? Infinity) || a.rank - b.rank,
+    );
     return list;
-  }, [playersDb]);
+  }, [playersDb, raRankById]);
 
   const playerById = useMemo(() => {
     const map = new Map();
@@ -637,7 +654,7 @@ export default function TierMakerTab() {
                   cursor: "pointer",
                 }}
               >
-                {s === "ALL" ? "All players" : s}
+                {s === "ALL" ? "All Players" : `${s} Rankings`}
                 {count > 0 ? ` · ${count}` : ""}
               </button>
             );
@@ -654,7 +671,7 @@ export default function TierMakerTab() {
             setDoc((prev) => ({ ...prev, titles: { ...prev.titles, [scope]: v } }));
             setCloudStatus("");
           }}
-          placeholder={scope === "ALL" ? "My Dynasty Tiers" : `My ${scope} Tiers`}
+          placeholder={scope === "ALL" ? "My Dynasty Tiers" : `My ${scope} Rankings`}
           maxLength={60}
           style={{
             flex: "1 1 220px",
@@ -787,6 +804,23 @@ export default function TierMakerTab() {
               <span style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "#94a3b8", fontWeight: 700 }}>
                 Player pool
               </span>
+              {scope !== "ALL" && (
+                <span
+                  title={`This board only ranks ${scope}s — switch to All Players for every position`}
+                  style={{
+                    padding: "3px 9px",
+                    borderRadius: 6,
+                    fontSize: 9,
+                    fontWeight: 700,
+                    letterSpacing: 1,
+                    border: `1px solid ${posColor(scope)}55`,
+                    background: `${posColor(scope)}14`,
+                    color: posColor(scope),
+                  }}
+                >
+                  🔒 {scope} only
+                </span>
+              )}
               {scope === "ALL" && (
                 <div style={{ display: "flex", gap: 4 }}>
                   {["ALL", ...POOL_POSITIONS].map((pos) => {
@@ -875,7 +909,7 @@ export default function TierMakerTab() {
         <TierShareModal
           board={board}
           scope={scope}
-          title={title || (scope === "ALL" ? "My Dynasty Tiers" : `My ${scope} Tiers`)}
+          title={title || (scope === "ALL" ? "My Dynasty Tiers" : `My ${scope} Rankings`)}
           playerById={playerById}
           onClose={() => setShowShare(false)}
         />
