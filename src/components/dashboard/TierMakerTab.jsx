@@ -119,7 +119,7 @@ function PlayerAvatar({ playerId, name, position, size = 44 }) {
 // touchAction stays "manipulation" (not "none") so a touch that starts on a
 // card can still scroll the page/pool; the TouchSensor's hold delay is what
 // separates a scroll from a drag.
-function CardFace({ player, dragging = false, compact = false }) {
+function CardFace({ player, dragging = false, compact = false, tapOnly = false }) {
   const width = compact ? 64 : 74;
   return (
     <div
@@ -133,7 +133,7 @@ function CardFace({ player, dragging = false, compact = false }) {
         borderRadius: 10,
         background: dragging ? "#101726" : "#0b1120",
         border: `1px solid ${dragging ? posColor(player.position) : "rgba(255,255,255,0.08)"}`,
-        cursor: "grab",
+        cursor: tapOnly ? "pointer" : "grab",
         userSelect: "none",
         WebkitUserSelect: "none",
         touchAction: "manipulation",
@@ -309,10 +309,12 @@ function MobileAssignBar({ player, placedTier, onAssign, onRemove, onClose }) {
 // rows (reorder) and the pool (drag out) since every card lives in some
 // SortableContext. Placed cards get an ✕ badge that sends them back to the
 // pool without dragging. inlineAssign=false suppresses the anchored popover so
-// the mobile layout can show its fixed MobileAssignBar instead.
-function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign, onRemove, compact = false, inlineAssign = true }) {
+// the mobile layout can show its fixed MobileAssignBar instead. tapOnly turns
+// dragging off entirely — mobile uses tap + the assign bar, where touch drags
+// fight the scroll gesture.
+function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign, onRemove, compact = false, inlineAssign = true, tapOnly = false }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: player.id });
+    useSortable({ id: player.id, disabled: tapOnly });
 
   return (
     <div
@@ -327,7 +329,7 @@ function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign
         opacity: isDragging ? 0.35 : 1,
       }}
     >
-      <CardFace player={player} compact={compact} />
+      <CardFace player={player} compact={compact} tapOnly={tapOnly} />
       {placedTier && !isDragging && (
         <button
           onPointerDown={(e) => e.stopPropagation()}
@@ -431,7 +433,7 @@ function TierRow({ tier, players, onClear, renderCard, compact = false }) {
           {players.map(renderCard)}
           {players.length === 0 && (
             <span style={{ alignSelf: "center", fontSize: 10, color: "#334155", letterSpacing: 1, textTransform: "uppercase", paddingLeft: 6 }}>
-              Drag players here
+              {compact ? "Tap a player to place them" : "Drag players here"}
             </span>
           )}
         </div>
@@ -691,6 +693,7 @@ export default function TierMakerTab({ rosterAuditSource }) {
       onRemove={removePlayer}
       compact={isMobile}
       inlineAssign={!isMobile}
+      tapOnly={isMobile}
     />
   );
 
@@ -731,7 +734,9 @@ export default function TierMakerTab({ rosterAuditSource }) {
             Tier Maker
           </div>
           <div style={{ fontSize: 11, color: "#64748b" }}>
-            Drag player cards into tiers — or tap a card to place it. Download the board to share.
+            {isMobile
+              ? "Tap a player card, then pick their tier. Download the board to share."
+              : "Drag player cards into tiers — or tap a card to place it. Download the board to share."}
           </div>
         </div>
 
