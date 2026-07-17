@@ -1,7 +1,9 @@
-import { useRef, useState } from "react";
-import { captureShareImage, tiktokFilename } from "../../lib/shareImage.js";
+import { useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { captureShareImage, saveShareImage, tiktokFilename } from "../../lib/shareImage.js";
 import TikTokFrame from "../TikTokFrame.jsx";
 import { useModalBehavior } from "../../lib/useModalBehavior.js";
+import { useIsMobile } from "../../lib/useIsMobile.js";
 import { TIERS, TIER_COLORS } from "../../lib/tierBoard.js";
 
 const POS_COLOR = {
@@ -217,14 +219,61 @@ function ShareCard({ innerRef, board, scope, title, playerById }) {
   );
 }
 
+// Shrinks the fixed-1080px share card to fit the viewport so phones (and
+// narrow windows) see the whole board instead of a horizontal-scroll corner.
+// The scale is visual only — the capture ref lives on the card itself and
+// html-to-image clones it without ancestor transforms, so the export is
+// unaffected.
+function FitToWidth({ children }) {
+  const outerRef = useRef(null);
+  const innerRef = useRef(null);
+  const [scale, setScale] = useState(1);
+  const [box, setBox] = useState(null);
+
+  useLayoutEffect(() => {
+    const outer = outerRef.current;
+    const inner = innerRef.current;
+    if (!outer || !inner) return;
+    const measure = () => {
+      const w = inner.offsetWidth || 1;
+      const h = inner.offsetHeight || 1;
+      const s = Math.min(1, outer.clientWidth / w);
+      setScale(s);
+      setBox({ width: w * s, height: h * s });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(outer);
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div ref={outerRef} style={{ width: "100%", display: "flex", justifyContent: "center" }}>
+      <div style={box ? { width: box.width, height: box.height, overflow: "hidden" } : undefined}>
+        <div ref={innerRef} style={{ width: "fit-content", transform: `scale(${scale})`, transformOrigin: "top left" }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TierShareModal({ board, scope, title, playerById, onClose }) {
   const modalRef = useModalBehavior(onClose);
   const cardRef = useRef(null);
+  const isMobile = useIsMobile();
   const [tiktok, setTiktok] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
+  // Mobile fallback: when the native share sheet isn't available, show the
+  // rendered PNG so a long-press can save it straight to the photo library.
+  const [fallbackUrl, setFallbackUrl] = useState("");
 
   async function download() {
+    // The fallback <img> replaces the live card, so remount it synchronously
+    // before grabbing the capture ref.
+    flushSync(() => setFallbackUrl(""));
     const node = cardRef.current;
     if (!node) return;
     setDownloading(true);
@@ -232,10 +281,11 @@ export default function TierShareModal({ board, scope, title, playerById, onClos
     try {
       const dataUrl = await captureShareImage(node, { tiktok, skipFonts: true });
       const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-      const link = document.createElement("a");
-      link.download = tiktokFilename(`tiers-${scope.toLowerCase()}-${stamp}.png`, tiktok);
-      link.href = dataUrl;
-      link.click();
+      const filename = tiktokFilename(`tiers-${scope.toLowerCase()}-${stamp}.png`, tiktok);
+      // On phones the share sheet's "Save Image" beats a file download that
+      // lands somewhere in Files/Downloads; desktop keeps the plain download.
+      const result = await saveShareImage(dataUrl, filename, { preferShare: isMobile });
+      if (result === "downloaded" && isMobile) setFallbackUrl(dataUrl);
     } catch (err) {
       console.error("Failed to generate tier image:", err);
       setError("Image generation failed — try again.");
@@ -286,7 +336,7 @@ export default function TierShareModal({ board, scope, title, playerById, onClos
           {error && <span style={{ fontSize: 11, color: "#ff6b6b" }}>{error}</span>}
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
             <button
-              onClick={() => setTiktok((v) => !v)}
+              onClick={() => { setTiktok((v) => !v); setFallbackUrl(""); }}
               title="Export as a 1080×1920 vertical image sized for TikTok / Reels / Shorts"
               style={{
                 padding: "7px 12px",
@@ -317,7 +367,7 @@ export default function TierShareModal({ board, scope, title, playerById, onClos
                 opacity: downloading ? 0.6 : 1,
               }}
             >
-              {downloading ? "Generating…" : "Download PNG"}
+              {downloading ? "Generating…" : isMobile ? "💾 Save image" : "Download PNG"}
             </button>
             <button
               onClick={onClose}
@@ -338,16 +388,38 @@ export default function TierShareModal({ board, scope, title, playerById, onClos
         </div>
 
         {/* Preview (the same node gets captured) */}
-        <div style={{ flex: 1, overflow: "auto", padding: 24, display: "flex", flexDirection: "column", alignItems: "center" }}>
-          <TikTokFrame enabled={tiktok}>
-            <ShareCard
-              innerRef={cardRef}
-              board={board}
-              scope={scope}
-              title={title}
-              playerById={playerById}
-            />
-          </TikTokFrame>
+        <div style={{ flex: 1, overflow: "auto", padding: isMobile ? 12 : 24, display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+          {fallbackUrl && (
+            <div style={{ width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 12, color: "#ffd84d", fontWeight: 700, textAlign: "center" }}>
+                Press and hold the image below, then choose “Save to Photos” / “Download image”.
+              </div>
+              <img
+                src={fallbackUrl}
+                alt={`${title} tier board`}
+                style={{ width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.15)" }}
+              />
+              <button
+                onClick={() => setFallbackUrl("")}
+                style={{ alignSelf: "center", padding: "6px 14px", borderRadius: 8, fontSize: 11, fontWeight: 700, border: "1px solid rgba(255,255,255,0.15)", background: "transparent", color: "#94a3b8", cursor: "pointer" }}
+              >
+                Back to preview
+              </button>
+            </div>
+          )}
+          {!fallbackUrl && (
+            <FitToWidth>
+              <TikTokFrame enabled={tiktok}>
+                <ShareCard
+                  innerRef={cardRef}
+                  board={board}
+                  scope={scope}
+                  title={title}
+                  playerById={playerById}
+                />
+              </TikTokFrame>
+            </FitToWidth>
+          )}
         </div>
       </div>
     </div>

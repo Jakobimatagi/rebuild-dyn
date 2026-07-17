@@ -38,6 +38,7 @@ import {
   upsertTierRanking,
 } from "../../lib/supabase.js";
 import TierShareModal from "./TierShareModal.jsx";
+import { useIsMobile } from "../../lib/useIsMobile.js";
 
 const POS_COLOR = {
   QB: "#ff6b6b",
@@ -115,7 +116,11 @@ function PlayerAvatar({ playerId, name, position, size = 44 }) {
 }
 
 // The face card itself — shared by pool, tier rows, and the drag overlay.
-function CardFace({ player, dragging = false }) {
+// touchAction stays "manipulation" (not "none") so a touch that starts on a
+// card can still scroll the page/pool; the TouchSensor's hold delay is what
+// separates a scroll from a drag.
+function CardFace({ player, dragging = false, compact = false }) {
+  const width = compact ? 64 : 74;
   return (
     <div
       style={{
@@ -123,17 +128,19 @@ function CardFace({ player, dragging = false }) {
         flexDirection: "column",
         alignItems: "center",
         gap: 4,
-        width: 74,
+        width,
         padding: "8px 4px 6px",
         borderRadius: 10,
         background: dragging ? "#101726" : "#0b1120",
         border: `1px solid ${dragging ? posColor(player.position) : "rgba(255,255,255,0.08)"}`,
         cursor: "grab",
         userSelect: "none",
-        touchAction: "none",
+        WebkitUserSelect: "none",
+        touchAction: "manipulation",
+        flexShrink: 0,
       }}
     >
-      <PlayerAvatar playerId={player.id} name={player.name} position={player.position} />
+      <PlayerAvatar playerId={player.id} name={player.name} position={player.position} size={compact ? 36 : 44} />
       <div
         style={{
           fontSize: 9,
@@ -141,7 +148,7 @@ function CardFace({ player, dragging = false }) {
           color: "#e2e8f0",
           textAlign: "center",
           lineHeight: 1.15,
-          maxWidth: 68,
+          maxWidth: width - 6,
           overflow: "hidden",
           display: "-webkit-box",
           WebkitLineClamp: 2,
@@ -223,11 +230,87 @@ function AssignMenu({ placedTier, onAssign, onRemove, onClose }) {
   );
 }
 
+// Fixed-position tier picker for touch screens. The desktop AssignMenu is a
+// tiny popover anchored to the tapped card; on a phone that's both hard to hit
+// and easy to clip, so this renders as a bar pinned above the pool dock with
+// finger-sized buttons instead.
+function MobileAssignBar({ player, placedTier, onAssign, onRemove, onClose }) {
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: 8,
+        padding: "10px 12px",
+        borderBottom: "1px solid rgba(255,255,255,0.08)",
+      }}
+    >
+      <div style={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#e2e8f0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {player.name}
+        </span>
+        <span style={{ fontSize: 10, color: "#64748b" }}>
+          {placedTier ? `in tier ${placedTier} — move to:` : "place in tier:"}
+        </span>
+        <button
+          onClick={onClose}
+          aria-label="Cancel"
+          style={{ marginLeft: "auto", border: "none", background: "transparent", color: "#94a3b8", fontSize: 16, lineHeight: 1, padding: "4px 6px", cursor: "pointer" }}
+        >
+          ✕
+        </button>
+      </div>
+      {TIERS.map((tier) => (
+        <button
+          key={tier}
+          onClick={() => { onAssign(tier); onClose(); }}
+          disabled={tier === placedTier}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 8,
+            border: "none",
+            background: tier === placedTier ? "#1e293b" : TIER_COLORS[tier],
+            color: tier === placedTier ? "#475569" : "#0f172a",
+            fontWeight: 800,
+            fontSize: 15,
+            cursor: tier === placedTier ? "default" : "pointer",
+          }}
+        >
+          {tier}
+        </button>
+      ))}
+      {placedTier && (
+        <button
+          onClick={() => { onRemove(); onClose(); }}
+          style={{
+            height: 40,
+            padding: "0 12px",
+            borderRadius: 8,
+            border: "1px solid rgba(255,107,107,0.5)",
+            background: "rgba(255,107,107,0.12)",
+            color: "#ff6b6b",
+            fontWeight: 700,
+            fontSize: 11,
+            cursor: "pointer",
+          }}
+        >
+          ✕ Pool
+        </button>
+      )}
+    </div>
+  );
+}
+
 // A draggable/sortable face card. dnd-kit's useSortable covers both the tier
 // rows (reorder) and the pool (drag out) since every card lives in some
 // SortableContext. Placed cards get an ✕ badge that sends them back to the
-// pool without dragging.
-function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign, onRemove }) {
+// pool without dragging. inlineAssign=false suppresses the anchored popover so
+// the mobile layout can show its fixed MobileAssignBar instead.
+function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign, onRemove, compact = false, inlineAssign = true }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: player.id });
 
@@ -236,7 +319,7 @@ function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      onClick={() => onToggleAssign(player.id)}
+      onClick={(e) => { e.stopPropagation(); onToggleAssign(player.id); }}
       style={{
         position: "relative",
         transform: CSS.Transform.toString(transform),
@@ -244,7 +327,7 @@ function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign
         opacity: isDragging ? 0.35 : 1,
       }}
     >
-      <CardFace player={player} />
+      <CardFace player={player} compact={compact} />
       {placedTier && !isDragging && (
         <button
           onPointerDown={(e) => e.stopPropagation()}
@@ -255,13 +338,13 @@ function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign
             top: -5,
             right: -5,
             zIndex: 5,
-            width: 16,
-            height: 16,
+            width: compact ? 20 : 16,
+            height: compact ? 20 : 16,
             borderRadius: "50%",
             border: "1px solid rgba(255,107,107,0.6)",
             background: "#1a0f14",
             color: "#ff6b6b",
-            fontSize: 9,
+            fontSize: compact ? 11 : 9,
             fontWeight: 700,
             lineHeight: 1,
             display: "flex",
@@ -274,7 +357,7 @@ function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign
           ✕
         </button>
       )}
-      {assignOpen && (
+      {assignOpen && inlineAssign && (
         <AssignMenu
           placedTier={placedTier}
           onAssign={(tier) => onAssign(player.id, tier)}
@@ -288,15 +371,16 @@ function SortableCard({ player, placedTier, assignOpen, onToggleAssign, onAssign
 
 // One S–E row: colored tier block on the left, droppable card shelf on the
 // right.
-function TierRow({ tier, players, onClear, renderCard }) {
+function TierRow({ tier, players, onClear, renderCard, compact = false }) {
   const { setNodeRef, isOver } = useDroppable({ id: `tier-${tier}` });
   const color = TIER_COLORS[tier];
+  const minHeight = compact ? 82 : 96;
   return (
     <div style={{ display: "flex", alignItems: "stretch", gap: 0, borderRadius: 10, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)" }}>
       <div
         style={{
-          width: 54,
-          minHeight: 96,
+          width: compact ? 42 : 54,
+          minHeight,
           background: color,
           display: "flex",
           flexDirection: "column",
@@ -306,7 +390,7 @@ function TierRow({ tier, players, onClear, renderCard }) {
           flexShrink: 0,
         }}
       >
-        <span style={{ fontSize: 26, fontWeight: 900, color: "#0f172a" }}>{tier}</span>
+        <span style={{ fontSize: compact ? 20 : 26, fontWeight: 900, color: "#0f172a" }}>{tier}</span>
         {players.length > 0 && (
           <button
             onClick={onClear}
@@ -338,8 +422,8 @@ function TierRow({ tier, players, onClear, renderCard }) {
             display: "flex",
             flexWrap: "wrap",
             gap: 6,
-            padding: 8,
-            minHeight: 96,
+            padding: compact ? 6 : 8,
+            minHeight,
             background: isOver ? `${color}14` : "rgba(2,6,23,0.6)",
             transition: "background 0.15s",
           }}
@@ -374,6 +458,11 @@ export default function TierMakerTab({ rosterAuditSource }) {
   const [assignId, setAssignId] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [showShare, setShowShare] = useState(false);
+
+  // Mobile: the pool becomes a fixed bottom dock (collapsible) and card taps
+  // open a fixed assign bar instead of the anchored popover.
+  const isMobile = useIsMobile();
+  const [poolOpen, setPoolOpen] = useState(true);
 
   // Cloud sync
   const [account, setAccount] = useState(null);
@@ -588,6 +677,7 @@ export default function TierMakerTab({ rosterAuditSource }) {
   };
 
   const activePlayer = activeId ? playerById.get(activeId) : null;
+  const assignPlayerCard = assignId ? playerById.get(assignId) : null;
   const placedCount = boardCount(board);
 
   const renderCard = (player) => (
@@ -599,6 +689,8 @@ export default function TierMakerTab({ rosterAuditSource }) {
       onToggleAssign={toggleAssign}
       onAssign={assignPlayer}
       onRemove={removePlayer}
+      compact={isMobile}
+      inlineAssign={!isMobile}
     />
   );
 
@@ -622,7 +714,16 @@ export default function TierMakerTab({ rosterAuditSource }) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }} onClick={() => assignId && setAssignId(null)}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+        // Leave room under the tier rows for the fixed pool dock.
+        paddingBottom: isMobile ? (poolOpen ? 250 : 90) : 0,
+      }}
+      onClick={() => assignId && setAssignId(null)}
+    >
       {/* Header / controls */}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
         <div>
@@ -681,7 +782,8 @@ export default function TierMakerTab({ rosterAuditSource }) {
             border: "1px solid rgba(255,255,255,0.12)",
             background: "rgba(2,6,23,0.7)",
             color: "#e2e8f0",
-            fontSize: 13,
+            // 16px on touch screens so iOS doesn't auto-zoom into the field.
+            fontSize: isMobile ? 16 : 13,
             outline: "none",
           }}
         />
@@ -766,9 +868,11 @@ export default function TierMakerTab({ rosterAuditSource }) {
         onDragCancel={() => setActiveId(null)}
         onDragEnd={handleDragEnd}
       >
-        {/* Board + pool side by side: tier rows on the left, the draggable
-            player pool as a sticky sidebar on the right so cards stay within
-            reach of every tier. Wraps back to stacked on narrow screens. */}
+        {/* Desktop: tier rows on the left, the draggable player pool as a
+            sticky sidebar on the right so cards stay within reach of every
+            tier. Mobile: full-width tier rows with the pool as a fixed bottom
+            dock — a horizontally scrolling card strip that's always in thumb
+            reach, collapsible to get it out of the way. */}
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 12 }}>
           {/* Tier rows */}
           <div style={{ flex: "3 1 460px", minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -779,32 +883,80 @@ export default function TierMakerTab({ rosterAuditSource }) {
                 players={board[tier].map((id) => playerById.get(id)).filter(Boolean)}
                 onClear={() => setBoard((b) => clearTier(b, tier))}
                 renderCard={renderCard}
+                compact={isMobile}
               />
             ))}
           </div>
 
-          {/* Pool sidebar */}
+          {/* Pool: sticky sidebar (desktop) / fixed bottom dock (mobile) */}
           <div
-            style={{
-              flex: "1 1 260px",
-              minWidth: 250,
-              maxWidth: 380,
-              position: "sticky",
-              top: 10,
-              alignSelf: "flex-start",
-              maxHeight: "calc(100vh - 20px)",
-              display: "flex",
-              flexDirection: "column",
-              borderRadius: 10,
-              border: "1px solid rgba(255,255,255,0.08)",
-              background: "rgba(2,6,23,0.6)",
-            }}
+            style={
+              isMobile
+                ? {
+                    position: "fixed",
+                    left: 8,
+                    right: 8,
+                    bottom: 8,
+                    zIndex: 40,
+                    display: "flex",
+                    flexDirection: "column",
+                    maxHeight: "55vh",
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,255,255,0.14)",
+                    background: "rgba(4,8,22,0.97)",
+                    boxShadow: "0 -10px 34px rgba(0,0,0,0.55)",
+                    paddingBottom: "env(safe-area-inset-bottom)",
+                  }
+                : {
+                    flex: "1 1 260px",
+                    minWidth: 250,
+                    maxWidth: 380,
+                    position: "sticky",
+                    top: 10,
+                    alignSelf: "flex-start",
+                    maxHeight: "calc(100vh - 20px)",
+                    display: "flex",
+                    flexDirection: "column",
+                    borderRadius: 10,
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    background: "rgba(2,6,23,0.6)",
+                  }
+            }
           >
+            {isMobile && assignPlayerCard && (
+              <MobileAssignBar
+                player={assignPlayerCard}
+                placedTier={findTier(board, assignPlayerCard.id)}
+                onAssign={(tier) => assignPlayer(assignPlayerCard.id, tier)}
+                onRemove={() => removePlayer(assignPlayerCard.id)}
+                onClose={() => setAssignId(null)}
+              />
+            )}
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
               <span style={{ fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: "#94a3b8", fontWeight: 700 }}>
                 Player pool
               </span>
-              {scope !== "ALL" && (
+              {isMobile && (
+                <button
+                  onClick={() => setPoolOpen((v) => !v)}
+                  aria-label={poolOpen ? "Collapse player pool" : "Expand player pool"}
+                  style={{
+                    order: 10,
+                    marginLeft: "auto",
+                    padding: "4px 12px",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    border: "1px solid rgba(255,255,255,0.14)",
+                    background: "rgba(15,23,42,0.8)",
+                    color: "#94a3b8",
+                    cursor: "pointer",
+                  }}
+                >
+                  {poolOpen ? "▾" : "▴"}
+                </button>
+              )}
+              {(!isMobile || poolOpen) && scope !== "ALL" && (
                 <span
                   title={`This board only ranks ${scope}s — switch to All Players for every position`}
                   style={{
@@ -821,7 +973,7 @@ export default function TierMakerTab({ rosterAuditSource }) {
                   🔒 {scope} only
                 </span>
               )}
-              {scope === "ALL" && (
+              {(!isMobile || poolOpen) && scope === "ALL" && (
                 <div style={{ display: "flex", gap: 4 }}>
                   {["ALL", ...POOL_POSITIONS].map((pos) => {
                     const active = poolPos === pos;
@@ -831,9 +983,9 @@ export default function TierMakerTab({ rosterAuditSource }) {
                         key={pos}
                         onClick={() => setPoolPos(pos)}
                         style={{
-                          padding: "3px 9px",
+                          padding: isMobile ? "6px 11px" : "3px 9px",
                           borderRadius: 6,
-                          fontSize: 9,
+                          fontSize: isMobile ? 11 : 9,
                           fontWeight: 700,
                           letterSpacing: 1,
                           border: `1px solid ${active ? color : "rgba(255,255,255,0.1)"}`,
@@ -848,60 +1000,71 @@ export default function TierMakerTab({ rosterAuditSource }) {
                   })}
                 </div>
               )}
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search players…"
-                style={{
-                  flex: "1 1 120px",
-                  minWidth: 0,
-                  padding: "6px 10px",
-                  borderRadius: 8,
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  background: "rgba(15,23,42,0.8)",
-                  color: "#e2e8f0",
-                  fontSize: 12,
-                  outline: "none",
-                }}
-              />
+              {(!isMobile || poolOpen) && (
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search players…"
+                  style={{
+                    flex: "1 1 120px",
+                    minWidth: 0,
+                    padding: "6px 10px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    background: "rgba(15,23,42,0.8)",
+                    color: "#e2e8f0",
+                    // 16px on touch screens so iOS doesn't auto-zoom into the field.
+                    fontSize: isMobile ? 16 : 12,
+                    outline: "none",
+                  }}
+                />
+              )}
             </div>
-            <SortableContext items={poolVisible.map((p) => p.id)} strategy={rectSortingStrategy}>
-              <div
-                ref={setPoolRef}
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 6,
-                  padding: 10,
-                  minHeight: 100,
-                  overflowY: "auto",
-                  background: poolOver ? "rgba(255,107,107,0.06)" : "transparent",
-                  transition: "background 0.15s",
-                }}
-              >
-                {poolVisible.map(renderCard)}
-                {poolVisible.length === 0 && (
-                  <span style={{ alignSelf: "center", fontSize: 11, color: "#475569", padding: 8 }}>
-                    {search ? "No players match that search." : "Every listed player is on the board."}
-                  </span>
+            {(!isMobile || poolOpen) && (
+              <>
+                <SortableContext items={poolVisible.map((p) => p.id)} strategy={rectSortingStrategy}>
+                  <div
+                    ref={setPoolRef}
+                    style={{
+                      display: "flex",
+                      // Mobile dock: a single horizontally scrolling strip
+                      // keeps the dock short so the board stays visible above.
+                      flexWrap: isMobile ? "nowrap" : "wrap",
+                      gap: 6,
+                      padding: 10,
+                      minHeight: isMobile ? 0 : 100,
+                      overflowY: isMobile ? "hidden" : "auto",
+                      overflowX: isMobile ? "auto" : "visible",
+                      WebkitOverflowScrolling: "touch",
+                      background: poolOver ? "rgba(255,107,107,0.06)" : "transparent",
+                      transition: "background 0.15s",
+                    }}
+                  >
+                    {poolVisible.map(renderCard)}
+                    {poolVisible.length === 0 && (
+                      <span style={{ alignSelf: "center", fontSize: 11, color: "#475569", padding: 8 }}>
+                        {search ? "No players match that search." : "Every listed player is on the board."}
+                      </span>
+                    )}
+                  </div>
+                </SortableContext>
+                {pool.length > visible && (
+                  <div style={{ padding: "8px 10px 10px", textAlign: "center", flexShrink: 0, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                    <button
+                      onClick={() => setVisible((v) => v + POOL_PAGE)}
+                      style={{ padding: "7px 16px", borderRadius: 8, fontSize: 10, fontWeight: 700, letterSpacing: 1, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(15,23,42,0.8)", color: "#94a3b8", cursor: "pointer" }}
+                    >
+                      Show more ({pool.length - visible} more)
+                    </button>
+                  </div>
                 )}
-              </div>
-            </SortableContext>
-            {pool.length > visible && (
-              <div style={{ padding: "8px 10px 10px", textAlign: "center", flexShrink: 0, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                <button
-                  onClick={() => setVisible((v) => v + POOL_PAGE)}
-                  style={{ padding: "7px 16px", borderRadius: 8, fontSize: 10, fontWeight: 700, letterSpacing: 1, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(15,23,42,0.8)", color: "#94a3b8", cursor: "pointer" }}
-                >
-                  Show more ({pool.length - visible} more)
-                </button>
-              </div>
+              </>
             )}
           </div>
         </div>
 
         <DragOverlay dropAnimation={null}>
-          {activePlayer ? <CardFace player={activePlayer} dragging /> : null}
+          {activePlayer ? <CardFace player={activePlayer} dragging compact={isMobile} /> : null}
         </DragOverlay>
       </DndContext>
 
