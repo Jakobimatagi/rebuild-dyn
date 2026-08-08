@@ -340,12 +340,14 @@ export default function SeasonSimulationPanel({
   regWeeks = 14,
   playoffTeams = 6,
   hasProj = true,
+  rosterSchedule = null,
 }) {
   const { status, progress, total, snapshot, run } = useSeasonSimulation({
     input,
     weeks: regWeeks,
     playoffTeams,
     focusRosterId: myRosterId,
+    rosterSchedule,
   });
 
   const [speed, setSpeed] = useState("slow");

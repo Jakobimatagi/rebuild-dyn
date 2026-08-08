@@ -6,6 +6,12 @@ import {
   fetchDraftTradedPicks,
 } from "../../lib/sleeperApi";
 import { buildLiveDraftState } from "../../lib/liveDraft";
+import {
+  replacementLevels,
+  vorFor,
+  draftRosterNeeds,
+  recommendRedraftPicks,
+} from "../../lib/redraftDraft";
 import { fetchNflState, fetchSeasonProjectedPpg } from "../../lib/projectionsApi";
 import { fetchStartupAdp } from "../../lib/startupAdpApi";
 import { parseTrades, mergeTransactions } from "../../lib/draftTrades";
@@ -369,6 +375,22 @@ export default function LiveDraftTab({
 
   const myTeam = state.teams.find((t) => t.isMe);
 
+  const isRedraft = !!leagueContext.isRedraft;
+
+  // Redraft draft signals: value-over-replacement and roster need over the
+  // currently-available pool, plus the top need-weighted VOR recommendations.
+  // Only computed (and surfaced) in redraft, where production leads.
+  const redraftBoard = (() => {
+    if (!isRedraft) return null;
+    const drafted = state.draftedIds || new Set();
+    const available = bestAvailablePool.filter((p) => !drafted.has(p.playerId));
+    const ppgOf = (p) => effectivePpg[p.playerId] || 0;
+    const levels = replacementLevels(available, ppgOf, leagueContext);
+    const needs = draftRosterNeeds(myTeam?.starters);
+    const recs = recommendRedraftPicks(available, ppgOf, levels, needs, 3);
+    return { levels, needs, recs };
+  })();
+
   // My drafted players for the Blueprint view. Live picks carry position/round/value
   // but not age — pull age from the Sleeper players map already in scope.
   const myDrafted = (myTeam?.picks || []).map((p) => ({
@@ -627,7 +649,12 @@ export default function LiveDraftTab({
         {[
           ...(state.powerRankings ? [{ key: "power", label: "Power Rankings" }] : []),
           ...(bestAvailablePool.length > 0
-            ? [{ key: "best", label: "Best Available" }, { key: "plan", label: "Blueprint" }]
+            ? [
+                { key: "best", label: "Best Available" },
+                // Blueprint is a dynasty startup-draft tool — hidden in redraft,
+                // where the Best Available board carries the pick recommendation.
+                ...(isRedraft ? [] : [{ key: "plan", label: "Blueprint" }]),
+              ]
             : []),
           { key: "team", label: "Rosters" },
           {
@@ -666,16 +693,24 @@ export default function LiveDraftTab({
       )}
 
       {view === "best" && (
-        <BestAvailable
-          pool={bestAvailablePool}
-          draftedIds={state.draftedIds}
-          posFilter={posFilter}
-          setPosFilter={setPosFilter}
-          ppgBySleeperId={effectivePpg}
-          rosterPositions={rosterPositions}
-          compareIds={compareIds}
-          toggleCompare={toggleCompare}
-        />
+        <>
+          {isRedraft && redraftBoard && (
+            <RedraftRecommendation recs={redraftBoard.recs} onCompare={toggleCompare} compareIds={compareIds} />
+          )}
+          <BestAvailable
+            pool={bestAvailablePool}
+            draftedIds={state.draftedIds}
+            posFilter={posFilter}
+            setPosFilter={setPosFilter}
+            ppgBySleeperId={effectivePpg}
+            rosterPositions={rosterPositions}
+            compareIds={compareIds}
+            toggleCompare={toggleCompare}
+            isRedraft={isRedraft}
+            vorLevels={redraftBoard?.levels}
+            needs={redraftBoard?.needs}
+          />
+        </>
       )}
 
       {view === "plan" && (
@@ -771,6 +806,9 @@ export default function LiveDraftTab({
                 rosterPositions={rosterPositions}
                 compareIds={compareIds}
                 toggleCompare={toggleCompare}
+                isRedraft={isRedraft}
+                vorLevels={redraftBoard?.levels}
+                needs={redraftBoard?.needs}
                 rail
               />
             </div>
@@ -990,7 +1028,103 @@ function TradesView({ trades, tradeReview, myRosterId }) {
 
 const BEST_AVAIL_LIMIT = 75;
 
-function BestAvailable({
+// Redraft next-pick recommendation: the best need-weighted value-over-replacement
+// players still on the board. Replaces the dynasty Blueprint recommender.
+export function RedraftRecommendation({ recs = [], onCompare, compareIds = [] }) {
+  if (!recs.length) return null;
+  const top = recs[0];
+  const rest = recs.slice(1, 3);
+  const compareSet = new Set(compareIds);
+  const reason =
+    (top.need || 0) > 0
+      ? `Best value at a slot you still need (${top.position})`
+      : `Best value over replacement on the board`;
+  return (
+    <div
+      style={{
+        ...styles.card,
+        borderColor: "rgba(0,245,160,0.3)",
+        background: "rgba(0,245,160,0.05)",
+        marginBottom: 12,
+      }}
+    >
+      <div style={{ ...styles.sectionLabel, marginBottom: 8 }}>Recommended Pick</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <PlayerHeadshot
+          playerId={top.playerId}
+          name={top.name}
+          position={top.position}
+          team={top.team}
+          size={40}
+        />
+        <div style={{ minWidth: 0, flex: "1 1 180px" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#e8e8f0" }}>{top.name}</div>
+          <div style={{ fontSize: 11, color: "#9aa0b8" }}>
+            <span style={{ color: posColor(top.position), fontWeight: 700 }}>{top.position}</span>
+            {top.team ? ` · ${top.team}` : ""} · {reason}
+          </div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: "#00f5a0", fontVariantNumeric: "tabular-nums" }}>
+            {(top.ppg || 0).toFixed(1)}<span style={{ fontSize: 10, color: "#7a819c", fontWeight: 600 }}> ppg</span>
+          </div>
+          {top.vor != null && (
+            <div style={{ fontSize: 11, fontWeight: 700, color: top.vor >= 0 ? "#00f5a0" : "#ff7a7a" }}>
+              {top.vor >= 0 ? "+" : ""}{top.vor.toFixed(1)} VOR
+            </div>
+          )}
+        </div>
+        {onCompare && (
+          <button
+            type="button"
+            onClick={() => onCompare(top.playerId)}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 4,
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: "pointer",
+              border: `1px solid ${compareSet.has(top.playerId) ? "#00f5a0" : "rgba(0,245,160,0.4)"}`,
+              background: compareSet.has(top.playerId) ? "#00f5a0" : "transparent",
+              color: compareSet.has(top.playerId) ? "#050508" : "#00f5a0",
+            }}
+          >
+            {compareSet.has(top.playerId) ? "✓ Comparing" : "Compare"}
+          </button>
+        )}
+      </div>
+      {rest.length > 0 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+          <span style={{ fontSize: 9.5, color: "#7a819c", alignSelf: "center", textTransform: "uppercase", letterSpacing: 0.6 }}>
+            Next best
+          </span>
+          {rest.map((r) => (
+            <span
+              key={r.playerId}
+              style={{
+                fontSize: 11,
+                color: "#d1d7ea",
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 3,
+                padding: "3px 8px",
+              }}
+            >
+              <span style={{ color: posColor(r.position), fontWeight: 700 }}>{r.position}</span> {r.name}
+              {r.vor != null && (
+                <span style={{ color: r.vor >= 0 ? "#00f5a0" : "#ff7a7a", fontWeight: 700 }}>
+                  {" "}{r.vor >= 0 ? "+" : ""}{r.vor.toFixed(1)}
+                </span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function BestAvailable({
   pool,
   draftedIds,
   posFilter,
@@ -999,6 +1133,9 @@ function BestAvailable({
   rosterPositions = [],
   compareIds = [],
   toggleCompare,
+  isRedraft = false,
+  vorLevels = null,
+  needs = null,
   rail = false,
 }) {
   const drafted = draftedIds || new Set();
@@ -1023,12 +1160,17 @@ function BestAvailable({
       if (p.position === "DEF" && !rostersDef) return false;
       return true;
     })
-    .map((p) => ({ ...p, ppg: ppgBySleeperId[p.playerId] || 0 }));
+    .map((p) => {
+      const ppg = ppgBySleeperId[p.playerId] || 0;
+      // VOR = points above the replacement-level starter at this position.
+      const vor = isRedraft && vorLevels ? vorFor(p, ppg, vorLevels) : null;
+      return { ...p, ppg, vor, need: (needs && needs[p.position]) || 0 };
+    });
   // As the board sidebar, cap the list so it doesn't run off the page.
   const rowLimit = rail ? 40 : BEST_AVAIL_LIMIT;
 
-  // Sort the board by dynasty value (default) or by projected PPG.
-  const [sortBy, setSortBy] = useState("value"); // "value" | "ppg"
+  // Redraft leads with this-season production; dynasty leads with value.
+  const [sortBy, setSortBy] = useState(isRedraft ? "ppg" : "value"); // "value" | "ppg"
 
   // Position filter chips, in a sensible order, only for positions present.
   const presentPositions = [];
@@ -1052,11 +1194,15 @@ function BestAvailable({
   };
 
   // Positional rank within the *available* pool (e.g. "WR3"), computed over the
-  // full pool so it stays true even when the list is sliced or filtered. The
-  // pool arrives pre-sorted by dynasty value, so running counts give the rank.
+  // full pool so it stays true even when the list is sliced or filtered. Ranked
+  // by the active sort — dynasty value, or projected PPG in redraft — so the
+  // positional rank matches the order the board is showing.
+  const rankOrder = [...available].sort((a, b) =>
+    sortBy === "ppg" ? (b.ppg || 0) - (a.ppg || 0) : (b.value || 0) - (a.value || 0),
+  );
   const posRankById = new Map();
   const posSeen = {};
-  for (const p of available) {
+  for (const p of rankOrder) {
     posSeen[p.position] = (posSeen[p.position] || 0) + 1;
     posRankById.set(p.playerId, posSeen[p.position]);
   }
@@ -1074,9 +1220,10 @@ function BestAvailable({
     )
     .slice(0, rowLimit);
 
-  // Scale the value bars to the top player currently shown so tier drop-offs
-  // read at a glance.
+  // Scale the bars to the top player currently shown so tier drop-offs read at a
+  // glance — by projected PPG in redraft, dynasty value otherwise.
   const maxValue = filtered.reduce((m, p) => Math.max(m, p.value || 0), 0) || 1;
+  const maxPpg = filtered.reduce((m, p) => Math.max(m, p.ppg || 0), 0) || 1;
 
   return (
     <div style={{ ...styles.card }}>
@@ -1240,7 +1387,9 @@ function BestAvailable({
               rank={i + 1}
               posRank={posRankById.get(p.playerId)}
               maxValue={maxValue}
+              maxPpg={maxPpg}
               ppg={p.ppg}
+              isRedraft={isRedraft}
               selected={compareSet.has(p.playerId)}
               compareDisabled={compareFull && !compareSet.has(p.playerId)}
               onToggleCompare={toggleCompare ? () => toggleCompare(p.playerId) : null}
@@ -1250,8 +1399,10 @@ function BestAvailable({
       )}
 
       <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 10 }}>
-        Undrafted players ranked by dynasty value (RosterAudit, FantasyCalc
-        fallback). Updates live as picks come off the board
+        {isRedraft
+          ? "Undrafted players ranked by projected PPG. VOR = points above the replacement-level starter at each position; NEED marks a starting slot you haven't filled."
+          : "Undrafted players ranked by dynasty value (RosterAudit, FantasyCalc fallback)."}{" "}
+        Updates live as picks come off the board
         {available.length > rowLimit ? ` · showing top ${rowLimit}` : ""}.
       </div>
     </div>
@@ -1267,15 +1418,20 @@ function BestAvailableRow({
   rank,
   posRank,
   maxValue,
+  maxPpg = 1,
   ppg = 0,
+  isRedraft = false,
   selected = false,
   compareDisabled = false,
   onToggleCompare = null,
 }) {
   const color = posColor(p.position);
   const isTop = rank <= 3;
-  const barPct = Math.max(4, Math.round(((p.value || 0) / maxValue) * 100));
+  const barPct = isRedraft
+    ? Math.max(4, Math.round((ppg / maxPpg) * 100))
+    : Math.max(4, Math.round(((p.value || 0) / maxValue) * 100));
   const showCompare = !!onToggleCompare;
+  const isNeed = isRedraft && (p.need || 0) > 0;
   return (
     <div
       style={{
@@ -1341,33 +1497,79 @@ function BestAvailableRow({
             {posRank ? posRank : ""}
           </span>
           {p.team && <span style={{ color: "#7a819c" }}> · {p.team}</span>}
+          {isNeed && (
+            <span
+              style={{
+                marginLeft: 6,
+                fontSize: 8,
+                fontWeight: 800,
+                letterSpacing: 0.6,
+                color: "#050508",
+                background: "#00f5a0",
+                borderRadius: 2,
+                padding: "0 4px",
+              }}
+            >
+              NEED
+            </span>
+          )}
         </span>
       </span>
-      <span style={{ textAlign: "right" }}>
-        <span
-          style={{
-            display: "block",
-            fontSize: 12,
-            fontWeight: 700,
-            color: "#d9deef",
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {formatValue(p.value)}
-        </span>
-        {ppg > 0 && (
+      {isRedraft ? (
+        <span style={{ textAlign: "right" }}>
           <span
             style={{
               display: "block",
-              fontSize: 9,
-              color: "#7a819c",
+              fontSize: 12.5,
+              fontWeight: 700,
+              color: "#d9deef",
               fontVariantNumeric: "tabular-nums",
             }}
           >
-            {ppg.toFixed(1)} ppg
+            {ppg > 0 ? `${ppg.toFixed(1)}` : "—"}
+            <span style={{ fontSize: 8.5, color: "#7a819c", fontWeight: 600 }}> ppg</span>
           </span>
-        )}
-      </span>
+          {p.vor != null && (
+            <span
+              style={{
+                display: "block",
+                fontSize: 9.5,
+                fontWeight: 700,
+                color: p.vor >= 0 ? "#00f5a0" : "#ff7a7a",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {p.vor >= 0 ? "+" : ""}{p.vor.toFixed(1)} VOR
+            </span>
+          )}
+        </span>
+      ) : (
+        <span style={{ textAlign: "right" }}>
+          <span
+            style={{
+              display: "block",
+              fontSize: 12,
+              fontWeight: 700,
+              color: "#d9deef",
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {formatValue(p.value)}
+          </span>
+          {ppg > 0 && (
+            <span
+              style={{
+                display: "block",
+                fontSize: 9,
+                color: "#7a819c",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {ppg.toFixed(1)} ppg
+            </span>
+          )}
+        </span>
+      )}
       {showCompare && (
         <button
           type="button"

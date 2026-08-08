@@ -27,7 +27,7 @@ const PACES = {
   fast: { steps: 0, delay: 0 },
 };
 
-export function useSeasonSimulation({ input, weeks, playoffTeams, focusRosterId }) {
+export function useSeasonSimulation({ input, weeks, playoffTeams, focusRosterId, rosterSchedule = null }) {
   const [status, setStatus] = useState("idle"); // idle | running | done
   const [total, setTotal] = useState(0);
   const [snapshot, setSnapshot] = useState(null);
@@ -62,6 +62,7 @@ export function useSeasonSimulation({ input, weeks, playoffTeams, focusRosterId 
         weeks,
         playoffTeams,
         focusRosterId,
+        rosterSchedule,
         // fresh seed each run → results vary run-to-run
       });
 
@@ -113,7 +114,7 @@ export function useSeasonSimulation({ input, weeks, playoffTeams, focusRosterId 
 
       timerRef.current = setTimeout(step, pace.delay);
     },
-    [input, weeks, playoffTeams, focusRosterId, clearTimer],
+    [input, weeks, playoffTeams, focusRosterId, rosterSchedule, clearTimer],
   );
 
   const progress = total > 0 ? Math.min(1, (snapshot?.simsDone || 0) / total) : 0;

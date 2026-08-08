@@ -90,6 +90,8 @@ export default function RankingsTab({
   leagueTeams,
   scoringWeights,
   ageCurves,
+  isRedraft = false,
+  projPctileMap = null,
 }) {
   const [posFilter, setPosFilter] = useState("ALL");
   const [moversOnly, setMoversOnly] = useState(false);
@@ -114,6 +116,14 @@ export default function RankingsTab({
   const fusedFor = (sleeperId) => enrichedById.get(String(sleeperId))?.dynastyValue || null;
   const hasFused = enrichedById.size > 0;
 
+  // Redraft reorders the board by this-season projected production (percentile
+  // within position) instead of RosterAudit's dynasty order. Players without a
+  // projection sort after those with one, keeping the trailing RA order.
+  const projOf = (sleeperId) => {
+    const v = projPctileMap?.get?.(String(sleeperId));
+    return v == null ? -1 : Number(v);
+  };
+
   const filtered = useMemo(() => {
     let list =
       posFilter === "ALL"
@@ -128,9 +138,11 @@ export default function RankingsTab({
           (a, b) =>
             forwardTilt(fusedFor(b.sleeper_id)) - forwardTilt(fusedFor(a.sleeper_id)),
         );
+    } else if (isRedraft && projPctileMap?.size) {
+      list = [...list].sort((a, b) => projOf(b.sleeper_id) - projOf(a.sleeper_id));
     }
     return list.slice(0, 200);
-  }, [rankings, posFilter, moversOnly, hasFused, enrichedById]);
+  }, [rankings, posFilter, moversOnly, hasFused, enrichedById, isRedraft, projPctileMap]);
 
   const pulse = useMemo(() => buildMarketPulse(rankings), [rankings]);
 
@@ -153,7 +165,7 @@ export default function RankingsTab({
         />
       )}
 
-      <div style={styles.sectionLabel}>Dynasty Rankings</div>
+      <div style={styles.sectionLabel}>{isRedraft ? "Redraft Rankings" : "Dynasty Rankings"}</div>
       <div
         style={{
           fontSize: 11,

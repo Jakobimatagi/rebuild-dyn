@@ -25,6 +25,19 @@ export const DEFAULT_SCORING_WEIGHTS = {
   situ: 10,
 };
 
+// Redraft profile: single-season value is production-first. Age is nearly zeroed
+// (kept slightly for durability), and production dominates — availability (games
+// played drives season totals), recent trend, and role/situation fill in the
+// rest. This trailing grade is then further pulled toward the forward projection
+// in computeDynastyValue (REDRAFT_PROJ_WEIGHT).
+export const REDRAFT_SCORING_WEIGHTS = {
+  age: 2,
+  prod: 55,
+  avail: 15,
+  trend: 13,
+  situ: 15,
+};
+
 export function normalizeScoringWeights(weights = DEFAULT_SCORING_WEIGHTS) {
   const safe = {
     age: Number(weights.age ?? DEFAULT_SCORING_WEIGHTS.age),

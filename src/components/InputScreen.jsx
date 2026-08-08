@@ -24,9 +24,17 @@ export default function InputScreen({
   onSetPlatform,
   ffEmail,
   setFfEmail,
+  espnLeagueId,
+  setEspnLeagueId,
+  espnS2,
+  setEspnS2,
+  espnSwid,
+  setEspnSwid,
   onExplore,
 }) {
   const isSleeper = platform === "sleeper";
+  const isEspn = platform === "espn";
+  const [showEspnHelp, setShowEspnHelp] = useState(false);
 
   // authStage: null = closed; "signin" | "enroll" | "reset" | "linkSleeper".
   const [authStage, setAuthStage] = useState(null);
@@ -90,15 +98,24 @@ export default function InputScreen({
     else setFfEmail(value);
   }
 
+  function handleEspnChange(setter, value) {
+    if (error && clearError) clearError();
+    setter(value);
+  }
+
   function handlePlatformChange(next) {
     if (error && clearError) clearError();
     onSetPlatform(next);
   }
 
+  const canSubmit = isEspn
+    ? !!espnLeagueId.trim()
+    : isSleeper
+      ? !!username.trim()
+      : !!ffEmail.trim();
+
   function handleSubmit() {
-    if (loading) return;
-    const value = (isSleeper ? username : ffEmail).trim();
-    if (!value) return;
+    if (loading || !canSubmit) return;
     onSubmit();
   }
 
@@ -107,7 +124,7 @@ export default function InputScreen({
       <div style={styles.header}>
         <h1 style={styles.title}>Dynasty Oracle</h1>
         <p style={styles.subtitle}>
-          AI-powered dynasty fantasy football analysis for Sleeper &amp; Fleaflicker leagues.
+          AI-powered dynasty fantasy football analysis for Sleeper, Fleaflicker &amp; ESPN leagues.
         </p>
       </div>
 
@@ -127,25 +144,109 @@ export default function InputScreen({
           <button
             style={{
               ...platformTabBase,
-              ...(!isSleeper ? platformTabActive : platformTabInactive),
-              borderRadius: "0 4px 4px 0",
+              ...(platform === "fleaflicker" ? platformTabActive : platformTabInactive),
+              borderRadius: 0,
             }}
             onClick={() => handlePlatformChange("fleaflicker")}
           >
             Fleaflicker
           </button>
+          <button
+            style={{
+              ...platformTabBase,
+              ...(isEspn ? platformTabActive : platformTabInactive),
+              borderRadius: "0 4px 4px 0",
+            }}
+            onClick={() => handlePlatformChange("espn")}
+          >
+            ESPN
+          </button>
         </div>
 
-        <div style={styles.sectionLabel}>
-          {isSleeper ? "Your Sleeper Username" : "Your Fleaflicker Email"}
-        </div>
-        <input
-          style={styles.input}
-          value={isSleeper ? username : ffEmail}
-          onChange={(e) => handleInputChange(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-          placeholder={isSleeper ? "e.g. UserName" : "e.g. user@email.com"}
-        />
+        {isEspn ? (
+          <>
+            <div style={styles.sectionLabel}>ESPN League ID</div>
+            <input
+              style={styles.input}
+              value={espnLeagueId}
+              onChange={(e) => handleEspnChange(setEspnLeagueId, e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+              placeholder="e.g. 123456"
+            />
+            <div style={{ ...styles.sectionLabel, marginTop: 16 }}>
+              espn_s2 cookie{" "}
+              <span style={{ color: "#6b7390", textTransform: "none", letterSpacing: 0 }}>
+                — private leagues only
+              </span>
+            </div>
+            <input
+              style={styles.input}
+              value={espnS2}
+              onChange={(e) => handleEspnChange(setEspnS2, e.target.value)}
+              placeholder="paste espn_s2 value (optional)"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <div style={{ ...styles.sectionLabel, marginTop: 16 }}>
+              SWID cookie{" "}
+              <span style={{ color: "#6b7390", textTransform: "none", letterSpacing: 0 }}>
+                — private leagues only
+              </span>
+            </div>
+            <input
+              style={styles.input}
+              value={espnSwid}
+              onChange={(e) => handleEspnChange(setEspnSwid, e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+              placeholder="{XXXXXXXX-XXXX-...}  (optional)"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              onClick={() => setShowEspnHelp((v) => !v)}
+              style={{ ...exploreLinkStyle, marginTop: 12 }}
+            >
+              {showEspnHelp ? "Hide" : "How do I find my espn_s2 & SWID?"} →
+            </button>
+            {showEspnHelp && (
+              <div style={espnHelpStyle}>
+                <p style={{ margin: "0 0 8px" }}>
+                  <strong style={{ color: "#e8e8f0" }}>Public league?</strong> Just the
+                  league ID — no cookies needed. Find the ID in your ESPN league URL:
+                  <code style={espnCodeStyle}>…/leagueId=123456</code>
+                </p>
+                <p style={{ margin: "0 0 8px" }}>
+                  <strong style={{ color: "#e8e8f0" }}>Private league?</strong> You need two
+                  browser cookies:
+                </p>
+                <ol style={{ margin: "0 0 8px", paddingLeft: 18 }}>
+                  <li>Log in at <code style={espnCodeStyle}>fantasy.espn.com</code> in a desktop browser.</li>
+                  <li>Open DevTools (F12 or ⌥⌘I) → <strong>Application</strong> tab (Chrome) or <strong>Storage</strong> (Firefox).</li>
+                  <li>Under <strong>Cookies → https://fantasy.espn.com</strong>, find <code style={espnCodeStyle}>espn_s2</code> and <code style={espnCodeStyle}>SWID</code>.</li>
+                  <li>Copy each value and paste them above. Include the braces on SWID.</li>
+                </ol>
+                <p style={{ margin: 0, color: "#6b7390" }}>
+                  These cookies are stored only in your browser and are sent to ESPN through
+                  our proxy solely to read your league. They're never saved on our servers.
+                </p>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div style={styles.sectionLabel}>
+              {isSleeper ? "Your Sleeper Username" : "Your Fleaflicker Email"}
+            </div>
+            <input
+              style={styles.input}
+              value={isSleeper ? username : ffEmail}
+              onChange={(e) => handleInputChange(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+              placeholder={isSleeper ? "e.g. UserName" : "e.g. user@email.com"}
+            />
+          </>
+        )}
         {error && (
           <div style={{ color: "#ff6b35", fontSize: 12, marginTop: 8, letterSpacing: 1 }}>
             {error}
@@ -156,7 +257,7 @@ export default function InputScreen({
             className="dyn-btn"
             style={styles.btn}
             onClick={handleSubmit}
-            disabled={loading || (isSleeper ? !username.trim() : !ffEmail.trim())}
+            disabled={loading || !canSubmit}
           >
             {loading ? "Loading..." : "Connect →"}
           </button>
@@ -450,6 +551,27 @@ const stepNumStyle = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+};
+
+const espnHelpStyle = {
+  marginTop: 12,
+  padding: 14,
+  background: "rgba(0,245,160,0.03)",
+  border: "1px solid rgba(0,245,160,0.12)",
+  borderRadius: 4,
+  fontSize: 12,
+  color: "#9aa0b8",
+  lineHeight: 1.6,
+};
+
+const espnCodeStyle = {
+  fontFamily: "monospace",
+  fontSize: 11,
+  color: "#00f5a0",
+  background: "rgba(0,245,160,0.08)",
+  padding: "1px 5px",
+  borderRadius: 3,
+  margin: "0 3px",
 };
 
 const platformTabBase = {

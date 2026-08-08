@@ -15,6 +15,7 @@ import { buildPlayerStreaks } from "../../lib/hotStreaks";
 import {
   scoreWaiverCandidates,
   buildBoardDeltas,
+  REDRAFT_WAIVER_WEIGHTS,
 } from "../../lib/waiverEngine";
 
 const ACCENT = "#00f5a0";
@@ -297,6 +298,9 @@ export default function WaiverTab({
       surplusPositions,
       week,
       faabBudget,
+      // Redraft drops the long-term dynasty signal; the engine renormalizes the
+      // remaining present-season signals over the missing weight.
+      ...(leagueContext?.isRedraft ? { weights: REDRAFT_WAIVER_WEIGHTS } : {}),
     });
 
     // Rank deltas vs the last saved board, then roll the snapshot forward when

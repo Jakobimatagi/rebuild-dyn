@@ -49,6 +49,11 @@ export default function LeaguePickerScreen({
                   {" "}· Your team: {league._ff_team_name}
                 </span>
               )}
+              {league._espn_team_name && (
+                <span style={{ color: league._espn_is_mine ? "#00f5a0" : "#9aa0b8" }}>
+                  {" "}· {league._espn_is_mine ? "Your team" : "Team"}: {league._espn_team_name}
+                </span>
+              )}
             </span>
           </span>
           {loading && selectedLeague?.league_id === league.league_id && (

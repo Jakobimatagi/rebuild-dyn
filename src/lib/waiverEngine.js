@@ -24,6 +24,17 @@ export const DEFAULT_WAIVER_WEIGHTS = {
   availability: 0.10,
 };
 
+// Redraft: the long-term dynasty signal is irrelevant, so its weight is dropped
+// and reallocated to the present signals (projection, form, trending). The
+// engine renormalizes over available signals, so a zero here simply removes it.
+export const REDRAFT_WAIVER_WEIGHTS = {
+  dynasty: 0,
+  projection: 0.42,
+  form: 0.22,
+  trending: 0.20,
+  availability: 0.16,
+};
+
 // Trending-only candidates (not in the FC/RA value pool) have no dynastyValue.
 // Score them a neutral-low 30: real enough to surface on trending, unproven
 // enough not to outrank established assets on the dynasty signal.

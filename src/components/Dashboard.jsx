@@ -6,6 +6,7 @@ import { getAccount, onAuthChange } from "../lib/supabase";
 import GradeKeyModal from "./dashboard/GradeKeyModal";
 import OverviewTab from "./dashboard/OverviewTab";
 import ScoreWeightsModal from "./dashboard/ScoreWeightsModal";
+import { formatModeLabel } from "../lib/formatMode";
 
 // Every non-default tab is lazy so its chunk only downloads when the user
 // opens it. OverviewTab stays eager — it's the landing tab and lazy-loading
@@ -30,6 +31,7 @@ const ProjectionsTab    = lazy(() => import("./dashboard/ProjectionsTab"));
 const PowerRankingsTab  = lazy(() => import("./dashboard/PowerRankingsTab"));
 const WaiverTab         = lazy(() => import("./dashboard/WaiverTab"));
 const TierMakerTab      = lazy(() => import("./dashboard/TierMakerTab"));
+const DraftBoardTab     = lazy(() => import("./dashboard/DraftBoardTab"));
 
 // Centered fallback while a lazy tab chunk downloads.
 function TabLoading() {
@@ -101,6 +103,8 @@ function TabRow({ tabs, activeTab, setActiveTab, extraTabs = [], dimmed = false 
 export default function Dashboard({
   analysis,
   selectedLeague,
+  formatMode = "dynasty",
+  onToggleFormatMode,
   activeTab,
   setActiveTab,
   showGradeKey,
@@ -157,6 +161,8 @@ export default function Dashboard({
     fantasyCalcTrades,
   } = analysis;
 
+  const isRedraft = formatMode === "redraft";
+
   const hasLiveDraft = !!analysis.liveDraft;
   const liveDraftTab = hasLiveDraft
     ? [{ key: "live", label: "Live Draft" }]
@@ -167,9 +173,24 @@ export default function Dashboard({
   // ~3-5, so the round count distinguishes the phase.
   const draftRounds = Number(analysis.liveDraft?.draft?.settings?.rounds) || 0;
   const isStartupPhase = hasLiveDraft && draftRounds >= 10;
-  const mockTab = isStartupPhase
+  // Blueprint (startup-dynasty archetypes), Rookies (rookie-pick rankings), and
+  // Mock Blueprints are dynasty-only tools — hide them in redraft.
+  const DYNASTY_ONLY_TABS = new Set(["blueprint", "rookies", "mock"]);
+  // Redraft swaps the dynasty-only tabs for an always-on Draft Board cheat sheet.
+  const row2 = isRedraft
+    ? [{ key: "draftboard", label: "Draft Board" }, ...ROW2.filter((t) => !DYNASTY_ONLY_TABS.has(t.key))]
+    : ROW2;
+  const mockTab = isStartupPhase && !isRedraft
     ? [{ key: "mock", label: "Mock Blueprints" }]
     : [];
+
+  // If the user toggles to redraft while sitting on a now-hidden dynasty tab,
+  // bounce them back to Overview so they don't stare at a blank pane.
+  useEffect(() => {
+    if (isRedraft && DYNASTY_ONLY_TABS.has(activeTab)) setActiveTab("overview");
+    if (!isRedraft && activeTab === "draftboard") setActiveTab("overview");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRedraft, activeTab]);
 
   return (
     <>
@@ -180,18 +201,51 @@ export default function Dashboard({
           style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}
         >
           <div style={styles.logo}>Dynasty Oracle — {selectedLeague?.name}</div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center" }}>
+            {onToggleFormatMode && (
+              <div
+                role="group"
+                aria-label="League format"
+                title="Switch between dynasty and single-season (redraft) analysis"
+                style={{ display: "inline-flex", border: "1px solid rgba(0,245,160,0.25)", borderRadius: 4, overflow: "hidden" }}
+              >
+                {["dynasty", "redraft"].map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => onToggleFormatMode(m)}
+                    disabled={recalculating}
+                    aria-pressed={formatMode === m}
+                    style={{
+                      padding: "6px 12px",
+                      fontSize: 10,
+                      letterSpacing: 1,
+                      textTransform: "uppercase",
+                      fontWeight: 700,
+                      border: "none",
+                      cursor: recalculating ? "default" : "pointer",
+                      fontFamily: "inherit",
+                      background: formatMode === m ? "#00f5a0" : "transparent",
+                      color: formatMode === m ? "#05080f" : "#9aa0b8",
+                    }}
+                  >
+                    {formatModeLabel(m)}
+                  </button>
+                ))}
+              </div>
+            )}
             <button className="dyn-btn-ghost" style={styles.btnGhost} onClick={onSwitchLeague}>
               Switch League
             </button>
-            <button
-              className="dyn-btn-ghost"
-              style={styles.btnGhost}
-              onClick={() => setShowScoreWeights(true)}
-              disabled={recalculating}
-            >
-              Adjust Weights
-            </button>
+            {!isRedraft && (
+              <button
+                className="dyn-btn-ghost"
+                style={styles.btnGhost}
+                onClick={() => setShowScoreWeights(true)}
+                disabled={recalculating}
+              >
+                Adjust Weights
+              </button>
+            )}
             <a
               className="dyn-btn-ghost"
               style={{ ...styles.btnGhost, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
@@ -221,9 +275,10 @@ export default function Dashboard({
           style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}
         >
           <div>
-            <h1 style={styles.title}>Dynasty Dashboard</h1>
+            <h1 style={styles.title}>{formatModeLabel(formatMode)} Dashboard</h1>
             <p style={styles.subtitle}>
-              Avg age: {avgAge} · Dynasty score: {avgScore}/100 · {picks.length} picks ·{" "}
+              Avg age: {avgAge} · {isRedraft ? "Redraft" : "Dynasty"} score: {avgScore}/100
+              {!isRedraft && ` · ${picks.length} picks`} ·{" "}
               {analysis.isSuperflex ? "Superflex" : "1QB"} · Weights A
               {analysis.scoringWeights?.age ?? 35}/P{analysis.scoringWeights?.prod ?? 30}/V
               {analysis.scoringWeights?.avail ?? 15}/T{analysis.scoringWeights?.trend ?? 10}/S
@@ -248,7 +303,7 @@ export default function Dashboard({
         {/* Row 2 — secondary, slightly dimmer with more breathing room */}
         <div style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", paddingTop: 2 }}>
           <TabRow
-            tabs={ROW2}
+            tabs={row2}
             extraTabs={[...liveDraftTab, ...draftTab, ...mockTab, { key: "docs", label: "Docs" }]}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
@@ -432,6 +487,18 @@ export default function Dashboard({
           leagueTeams={analysis.leagueTeams}
           scoringWeights={analysis.scoringWeights}
           ageCurves={analysis.ageCurves}
+          isRedraft={isRedraft}
+          projPctileMap={analysis.projPctileMap}
+        />
+      )}
+
+      {activeTab === "draftboard" && isRedraft && (
+        <DraftBoardTab
+          waiver={analysis.waiver}
+          leagueContext={leagueContext}
+          myRosterPlayers={POSITION_PRIORITY.flatMap((pos) => byPos[pos] || [])}
+          rosterPositions={selectedLeague?.roster_positions}
+          ppr={leagueContext?.ppr ?? 1}
         />
       )}
 
@@ -487,6 +554,7 @@ export default function Dashboard({
           leagueTeams={analysis.leagueTeams}
           myTeamLabel={analysis.myTeamLabel}
           isSuperflex={analysis.isSuperflex}
+          isRedraft={isRedraft}
         />
       )}
 
