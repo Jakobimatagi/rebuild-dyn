@@ -8,12 +8,12 @@
  * so the rest of the app (buildRosterAnalysis, getLeagueRulesContext, …) is
  * platform-agnostic.
  *
- * Reads go through the /api/espn POST proxy (CORS + private-league cookies).
+ * Reads go through the /api/league POST proxy (CORS + private-league cookies).
  */
 
 import { buildPlayerLookup, normalizeName } from "./fleaflickerApi.js";
 
-const ESPN_PROXY = "/api/espn";
+const ESPN_PROXY = "/api/league";
 
 // ─── ESPN constant maps (from espn-api's constant.py) ─────
 

@@ -6,7 +6,7 @@
 
 const FF_BASE_URL = import.meta.env?.DEV
   ? "/fleaflicker"
-  : "/api/fleaflicker";
+  : "/api/league";
 
 /** Convert camelCase keys to snake_case (deep). Values are untouched. */
 function camelToSnakeKeys(obj) {

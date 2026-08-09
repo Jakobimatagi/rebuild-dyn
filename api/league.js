@@ -1,22 +1,19 @@
 /**
- * ESPN Fantasy read proxy.
- *
- * ESPN's fantasy read API (lm-api-reads.fantasy.espn.com) does not send
- * permissive CORS headers and, for private leagues, requires the user's
- * `espn_s2` + `SWID` cookies on the upstream request. The browser can't set a
- * cross-origin Cookie header, so all ESPN reads funnel through this function.
- *
- * POST (not GET) so the sensitive cookies travel in the request body and never
- * land in a URL, query string, or access log. The cookies are forwarded to
- * ESPN and never persisted server-side.
- *
- * Body: { leagueId, season, views?: string[], espn_s2?, swid? }
+ * External-league read proxy — ESPN and Fleaflicker in one serverless function
+ * (they were split, but Vercel's Hobby plan caps deployments at 12 functions).
+ * Dispatch is by method:
+ *   • POST → ESPN. Sensitive cookies (espn_s2 / SWID) travel in the request body
+ *     so they never land in a URL or log; forwarded to ESPN, never persisted.
+ *   • GET  → Fleaflicker. Path-allowlisted passthrough.
  */
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (req.method === "POST") return handleEspn(req, res);
+  return handleFleaflicker(req, res);
+}
 
+// ─── ESPN (POST) ──────────────────────────────────────────────────────────
+// Body: { leagueId, season, views?: string[], espn_s2?, swid? }
+async function handleEspn(req, res) {
   const body = req.body || {};
   const leagueId = String(body.leagueId || "").trim();
   const season = String(body.season || new Date().getFullYear()).trim();
@@ -80,6 +77,43 @@ export default async function handler(req, res) {
     // them. Public-league reads are cheap enough to re-fetch.
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json(data);
+  } catch (err) {
+    return res.status(502).json({ error: "Upstream request failed" });
+  }
+}
+
+// ─── Fleaflicker (GET) ────────────────────────────────────────────────────
+// Query: ?path=<endpoint>&<params>
+async function handleFleaflicker(req, res) {
+  const { path, ...params } = req.query;
+  if (!path) {
+    return res.status(400).json({ error: "Missing path parameter" });
+  }
+
+  // Allowlist of valid Fleaflicker endpoints to prevent open-proxy abuse
+  const ALLOWED = new Set([
+    "FetchUserLeagues",
+    "FetchLeagueRosters",
+    "FetchRoster",
+    "FetchLeagueRules",
+    "FetchLeagueStandings",
+    "FetchTeamPicks",
+    "FetchTrades",
+    "FetchLeagueTransactions",
+  ]);
+
+  if (!ALLOWED.has(path)) {
+    return res.status(403).json({ error: "Endpoint not allowed" });
+  }
+
+  const query = new URLSearchParams({ sport: "NFL", ...params });
+  const url = `https://www.fleaflicker.com/api/${path}?${query}`;
+
+  try {
+    const upstream = await fetch(url);
+    const data = await upstream.json();
+    res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
+    return res.status(upstream.status).json(data);
   } catch (err) {
     return res.status(502).json({ error: "Upstream request failed" });
   }

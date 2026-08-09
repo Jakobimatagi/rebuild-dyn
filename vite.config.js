@@ -89,7 +89,7 @@ export default defineConfig(({ mode }) => {
       devApiHandler('/api/cfbd', '/api/cfbd.js'),
       devApiHandler('/api/sleeper-auth', '/api/sleeper-auth.js'),
       devApiHandler('/api/admin-users', '/api/admin-users.js'),
-      devApiHandler('/api/espn', '/api/espn.js'),
+      devApiHandler('/api/league', '/api/league.js'),
     ],
     server: {
       proxy: {
