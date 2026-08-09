@@ -73,6 +73,31 @@ export function buildSchedule(n, weeks) {
   return schedule;
 }
 
+/**
+ * Resolve the season schedule the sim plays. When a real matchup schedule is
+ * supplied (`rosterSchedule` = [{ week, home, away }] of rosterIds, e.g. from
+ * ESPN's mMatchup), group it by week and translate rosterIds → indices into
+ * `strengths`. Otherwise fall back to a synthetic round-robin. Returns the sim's
+ * canonical shape: an array of rounds, each an array of `[i, j]` index pairs.
+ */
+export function scheduleToRounds(strengths, rosterSchedule, weeks) {
+  if (!Array.isArray(rosterSchedule) || rosterSchedule.length === 0) {
+    return buildSchedule(strengths.length, weeks);
+  }
+  const idxById = new Map(strengths.map((s, i) => [String(s.rosterId), i]));
+  const byWeek = new Map();
+  for (const g of rosterSchedule) {
+    const a = idxById.get(String(g.home));
+    const b = idxById.get(String(g.away));
+    if (a == null || b == null || a === b) continue;
+    if (!byWeek.has(g.week)) byWeek.set(g.week, []);
+    byWeek.get(g.week).push([a, b]);
+  }
+  const weekNums = [...byWeek.keys()].sort((x, y) => x - y);
+  const rounds = weekNums.map((w) => byWeek.get(w));
+  return rounds.length ? rounds : buildSchedule(strengths.length, weeks);
+}
+
 // ── Team strength ───────────────────────────────────────────────────────────
 /**
  * Turn a roster's projected players into its weekly scoring distribution. The
@@ -302,6 +327,7 @@ export function simulatePowerRankings(teams, opts = {}) {
     sims = 4000,
     seed = 1337,
     blendActual = 0.25,
+    rosterSchedule = null,
   } = opts;
 
   const strengths = buildStrengths(teams, { blendActual });
@@ -309,7 +335,7 @@ export function simulatePowerRankings(teams, opts = {}) {
   if (n === 0) return [];
 
   const field = Math.min(Math.max(2, playoffTeams), n);
-  const schedule = buildSchedule(n, weeks);
+  const schedule = scheduleToRounds(strengths, rosterSchedule, weeks);
   const rng = mulberry32(seed);
   const priorWins = strengths.map((s) => s.priorWins);
   const counters = makeCounters(n);
@@ -345,12 +371,16 @@ export function createSeasonSimulator(teams, opts = {}) {
     blendActual = 0.25,
     focusRosterId = null,
     sampleTrajectories = 40,
+    rosterSchedule = null,
   } = opts;
 
   const strengths = buildStrengths(teams, { blendActual });
   const n = strengths.length;
   const field = Math.min(Math.max(2, playoffTeams), Math.max(2, n));
-  const schedule = buildSchedule(n, weeks);
+  const schedule = scheduleToRounds(strengths, rosterSchedule, weeks);
+  // The real schedule may differ in length from the `weeks` hint — size the
+  // per-team win histograms by what's actually played.
+  const playedWeeks = schedule.length || weeks;
   const rng = mulberry32(seed >>> 0);
   const priorWins = strengths.map((s) => s.priorWins);
   const counters = makeCounters(n);
@@ -362,7 +392,7 @@ export function createSeasonSimulator(teams, opts = {}) {
   let simsDone = 0;
 
   // Focus-team accumulators (only populated when focusIdx >= 0).
-  const winsHistogram = new Array(weeks + 1).fill(0); // final wins 0..weeks
+  const winsHistogram = new Array(playedWeeks + 1).fill(0); // final wins 0..playedWeeks
   const seedHistogram = new Array(n + 1).fill(0); // final seed 1..n (index 0 unused)
   let focusWinsSum = 0;
   const trajectories = []; // ring buffer of { wins:number[], champ, madePlayoffs, finalWins }
@@ -393,7 +423,7 @@ export function createSeasonSimulator(teams, opts = {}) {
 
       if (focusIdx >= 0) {
         const fw = wins[focusIdx];
-        winsHistogram[Math.min(weeks, Math.max(0, fw))]++;
+        winsHistogram[Math.min(playedWeeks, Math.max(0, fw))]++;
         focusWinsSum += fw;
         const seedRank = order.indexOf(focusIdx) + 1; // 1-based standing
         if (seedRank >= 1 && seedRank <= n) seedHistogram[seedRank]++;
@@ -432,7 +462,7 @@ export function createSeasonSimulator(teams, opts = {}) {
         championOdds: fr ? fr.championOdds : 0,
         powerRank: fr ? fr.powerRank : null,
         avgWins: simsDone ? focusWinsSum / simsDone : 0, // simulated wins (excl. carried record)
-        weeks,
+        weeks: playedWeeks,
         field,
         winsHistogram: winsHistogram.slice(),
         seedHistogram: seedHistogram.slice(),

@@ -637,7 +637,7 @@ export function PlayerTrajectoryChart({ chart }) {
 }
 
 export function DynastyValueHeadline({ dynastyValue }) {
-  const { value, tier, confidence, breakdown } = dynastyValue;
+  const { value, tier, confidence, breakdown, redraft } = dynastyValue;
   const c = getColor(getVerdict(breakdown?.modelScore ?? value));
   const confColor =
     confidence === "high" ? "#00f5a0" : confidence === "medium" ? "#ffd166" : "#808898";
@@ -667,7 +667,7 @@ export function DynastyValueHeadline({ dynastyValue }) {
         <div style={{ fontSize: 32, fontWeight: 800, color: c, lineHeight: 1 }}>{value}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#d1d7ea" }}>
-            Fused Dynasty Value
+            {redraft ? "Season Value" : "Fused Dynasty Value"}
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <span
@@ -690,20 +690,35 @@ export function DynastyValueHeadline({ dynastyValue }) {
         </div>
       </div>
 
-      {/* Component breakdown: present + the 3 projected years on the 0-99 grade
-          scale, plus the nflverse weekly-projection percentile when it fed in. */}
-      <div style={{ display: "flex", gap: 4 }}>
-        <Cell label="NOW" val={breakdown?.present} />
-        <Cell label="YR 1" val={breakdown?.y1} />
-        <Cell label="YR 2" val={breakdown?.y2} />
-        <Cell label="YR 3" val={breakdown?.y3} />
-        <Cell label="MKT" val={breakdown?.market != null ? Math.round(breakdown.market) : null} />
-      </div>
+      {/* Redraft: single-season value — the current grade refined by this year's
+          projection. Dynasty: present + the 3 projected years, plus market. */}
+      {redraft ? (
+        <div style={{ display: "flex", gap: 4 }}>
+          <Cell label="GRADE" val={breakdown?.grade} />
+          <Cell label="NOW" val={breakdown?.present} />
+          <Cell
+            label="PROJ"
+            val={breakdown?.projPctile != null ? `${breakdown.projPctile}%` : null}
+          />
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 4 }}>
+          <Cell label="NOW" val={breakdown?.present} />
+          <Cell label="YR 1" val={breakdown?.y1} />
+          <Cell label="YR 2" val={breakdown?.y2} />
+          <Cell label="YR 3" val={breakdown?.y3} />
+          <Cell label="MKT" val={breakdown?.market != null ? Math.round(breakdown.market) : null} />
+        </div>
+      )}
 
       <div style={{ fontSize: 9, color: "#6a7282", lineHeight: 1.4 }}>
-        {usesProj
-          ? `Fuses the age-curve trajectory, current grade, and the nflverse-enriched weekly projection (forward production ${breakdown.projPctile}th pctile), anchored to market.`
-          : "Fuses the age-curve trajectory and current grade, anchored to market (weekly projection unavailable for this player)."}
+        {redraft
+          ? usesProj
+            ? `Single-season value: the current grade refined by this year's projection (forward production ${breakdown.projPctile}th pctile within position).`
+            : "Single-season value from the current production grade (weekly projection unavailable for this player)."
+          : usesProj
+            ? `Fuses the age-curve trajectory, current grade, and the nflverse-enriched weekly projection (forward production ${breakdown.projPctile}th pctile), anchored to market.`
+            : "Fuses the age-curve trajectory and current grade, anchored to market (weekly projection unavailable for this player)."}
       </div>
     </div>
   );
@@ -753,11 +768,6 @@ function PredictionSection({ prediction, dynastyValue, history }) {
 
   return (
     <>
-      {DIVIDER}
-      <SectionLabel>Dynasty Prediction Model</SectionLabel>
-
-      {dynastyValue && <DynastyValueHeadline dynastyValue={dynastyValue} />}
-
       {/* Trajectory chart: past production → now → projection w/ ceiling-floor band */}
       {chart && chart.points.length >= 2 && (
         <div style={{ marginBottom: 16, padding: "12px 14px 8px", borderRadius: 6, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
@@ -1363,7 +1373,18 @@ export default function PlayerDeepDiveModal({ player, scoringWeights, ageCurves,
           </div>
         </div>
 
-        {/* ── Prediction ── */}
+        {/* ── Value + Prediction ── */}
+        {/* The fused value shows in both modes; the 3-year trajectory/projection
+            block is dynasty-only (redraft players carry no prediction). */}
+        {dynastyValue && (
+          <>
+            {DIVIDER}
+            <SectionLabel>
+              {dynastyValue.redraft ? "Season Value Model" : "Dynasty Prediction Model"}
+            </SectionLabel>
+            <DynastyValueHeadline dynastyValue={dynastyValue} />
+          </>
+        )}
         {prediction && (
           <PredictionSection
             prediction={prediction}

@@ -1,4 +1,4 @@
-import { DEFAULT_SCORING_WEIGHTS, buildBenchmarks } from './scoringEngine';
+import { DEFAULT_SCORING_WEIGHTS, REDRAFT_SCORING_WEIGHTS, buildBenchmarks } from './scoringEngine';
 import { buildFantasyCalcContext, buildFantasyCalcPickMap } from './fantasyCalcBlend';
 import { buildFantasyCalcTradeIndex } from './fantasyCalcTradeIndex';
 import { buildRosterAuditContext } from './rosterAuditApi';
@@ -209,7 +209,12 @@ export function buildRosterAnalysis(
   projPctileMap = null, // player_id → forward production percentile (weekly engine)
   valueSnapshots = null, // dated value snapshots for trade "value then" (see tradeReview)
   contractMap = null, // sleeper_id → current contract (player_contracts; see contractsApi)
+  formatMode = "dynasty", // "dynasty" | "redraft" — switches the value model (see formatMode.js)
 ) {
+  const isRedraft = formatMode === "redraft";
+  // In redraft, the age-heavy dynasty grade weights are replaced with a
+  // production-led profile. The user's custom dynasty weights don't apply.
+  const effScoringWeights = isRedraft ? REDRAFT_SCORING_WEIGHTS : scoringWeights;
   const currentYear = new Date().getFullYear();
   // Sleeper's `season` field on a draft can be the upcoming NFL season (2026)
   // or the prior offseason year (2025) depending on how the league was set up.
@@ -246,6 +251,10 @@ export function buildRosterAnalysis(
   );
 
   const leagueContext = getLeagueRulesContext(league);
+  // Mode flows to every engine through leagueContext (already threaded everywhere)
+  // rather than a new param on each — see rosterBuilder, marketValue, dynastyValue.
+  leagueContext.formatMode = formatMode;
+  leagueContext.isRedraft = isRedraft;
   const benchmarks = buildBenchmarks(
     players,
     stats22,
@@ -316,7 +325,7 @@ export function buildRosterAnalysis(
       stats23,
       stats22,
       benchmarks,
-      scoringWeights,
+      effScoringWeights,
       rosterLabelById,
       leagueContext,
       fantasyCalcContext,
@@ -367,7 +376,7 @@ export function buildRosterAnalysis(
   assignDraftSlots(leagueTeams, knownDraftSlots);
 
   // Rank every team's position rooms 1..N across the league.
-  _assignPositionRanks(leagueTeams, leagueContext.isSuperflex);
+  _assignPositionRanks(leagueTeams, leagueContext);
 
   const myTeam =
     leagueTeams.find((team) => team.rosterId === myRoster.roster_id) ||
@@ -478,7 +487,7 @@ export function buildRosterAnalysis(
           stats23,
           stats22,
           benchmarks,
-          scoringWeights,
+          effScoringWeights,
           rosterLabelById,
           leagueContext,
           fantasyCalcContext,
@@ -524,7 +533,7 @@ export function buildRosterAnalysis(
       stats23,
       stats22,
       benchmarks,
-      scoringWeights,
+      effScoringWeights,
       rosterLabelById,
       leagueContext,
       fantasyCalcContext,
@@ -560,7 +569,12 @@ export function buildRosterAnalysis(
       attribution: 'RosterAudit',
       url: 'https://rosteraudit.com/',
     },
-    scoringWeights,
+    scoringWeights: effScoringWeights,
+    formatMode,
+    // Forward production percentile (0-99, within position) per Sleeper id, from
+    // the weekly projection engine. Surfaced so redraft rankings can order on
+    // this-season production. Null when the projections table isn't populated.
+    projPctileMap: projPctileMap || null,
     ageCurves: benchmarks.ageCurves,
     tradeMarket,
     tradeSuggestions,
@@ -597,7 +611,7 @@ export function buildRosterAnalysis(
           bestAvailableEnriched,
           // The score-math + age-curve sections in the compare modal need these,
           // same as PlayerDeepDiveModal does on the roster tabs.
-          scoringWeights,
+          effScoringWeights,
           ageCurves: benchmarks.ageCurves,
           leagueId: league.league_id,
           players,

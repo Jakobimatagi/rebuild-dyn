@@ -59,7 +59,7 @@ function Notice({ title, children }) {
 }
 
 /** Settings + methodology header. */
-function SettingsBar({ league, numTeams, regWeeks, playoffTeams, isSuperflex, scoringLabel, projLed }) {
+function SettingsBar({ league, numTeams, regWeeks, playoffTeams, isSuperflex, scoringLabel, projLed, realSchedule }) {
   const chip = (label, value) => (
     <div>
       <div style={{ fontSize: 9, letterSpacing: 2, color: MUTED, textTransform: "uppercase" }}>{label}</div>
@@ -80,6 +80,7 @@ function SettingsBar({ league, numTeams, regWeeks, playoffTeams, isSuperflex, sc
         {chip("Scoring", scoringLabel)}
         {chip("Playoff field", `${playoffTeams} teams`)}
         {chip("Reg. season", `${regWeeks} wks`)}
+        {chip("Schedule", realSchedule ? "Actual" : "Round-robin")}
         {chip("Sims", "4,000")}
       </div>
     </div>
@@ -213,6 +214,9 @@ export default function PowerRankingsTab({
     [teamData, hasProj],
   );
 
+  // Real fantasy matchup schedule (ESPN) when present; else round-robin.
+  const rosterSchedule = league?.schedule || null;
+
   const results = useMemo(() => {
     if (simInput.length === 0) return [];
     return simulatePowerRankings(simInput, {
@@ -220,8 +224,9 @@ export default function PowerRankingsTab({
       playoffTeams,
       sims: 4000,
       seed: 1337,
+      rosterSchedule,
     });
-  }, [simInput, regWeeks, playoffTeams]);
+  }, [simInput, regWeeks, playoffTeams, rosterSchedule]);
 
   const dataByRoster = useMemo(
     () => new Map(teamData.map((d) => [String(d.team.rosterId), d])),
@@ -243,6 +248,7 @@ export default function PowerRankingsTab({
         isSuperflex={isSuperflex}
         scoringLabel={scoringLabel}
         projLed={hasProj}
+        realSchedule={!!rosterSchedule}
       />
 
       {!hasProj && (
@@ -337,6 +343,7 @@ export default function PowerRankingsTab({
         regWeeks={regWeeks}
         playoffTeams={playoffTeams}
         hasProj={hasProj}
+        rosterSchedule={rosterSchedule}
       />
 
       {/* Methodology */}

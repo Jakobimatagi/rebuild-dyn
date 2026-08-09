@@ -5,6 +5,7 @@ import {
   gaussian,
   roundRobin,
   buildSchedule,
+  scheduleToRounds,
   lineupStrength,
   buildStrengths,
   simulatePowerRankings,
@@ -137,6 +138,60 @@ const SIM_TEAMS = [
   { rosterId: 5, label: "Weak", projMean: 95, projSigma: 18 },
   { rosterId: 6, label: "Tank", projMean: 85, projSigma: 18 },
 ];
+
+test("scheduleToRounds falls back to round-robin when no real schedule given", () => {
+  const strengths = buildStrengths(SIM_TEAMS, {});
+  const rr = scheduleToRounds(strengths, null, 5);
+  assert.deepEqual(rr, buildSchedule(strengths.length, 5));
+  assert.deepEqual(scheduleToRounds(strengths, [], 5), buildSchedule(strengths.length, 5));
+});
+
+test("scheduleToRounds groups a real schedule by week and maps rosterIds to indices", () => {
+  const strengths = buildStrengths(SIM_TEAMS, {}); // rosterIds 1..6 → indices 0..5
+  const rosterSchedule = [
+    { week: 1, home: 1, away: 6 },
+    { week: 1, home: 2, away: 5 },
+    { week: 2, home: 1, away: 2 },
+  ];
+  const rounds = scheduleToRounds(strengths, rosterSchedule, 14);
+  assert.equal(rounds.length, 2); // two distinct weeks
+  assert.deepEqual(rounds[0], [[0, 5], [1, 4]]); // week 1, ids→indices
+  assert.deepEqual(rounds[1], [[0, 1]]); // week 2
+});
+
+test("scheduleToRounds skips games referencing unknown or self rosterIds", () => {
+  const strengths = buildStrengths(SIM_TEAMS, {});
+  const rounds = scheduleToRounds(
+    strengths,
+    [
+      { week: 1, home: 1, away: 999 }, // unknown away → dropped
+      { week: 1, home: 3, away: 3 }, // self → dropped
+      { week: 1, home: 2, away: 4 }, // valid
+    ],
+    14,
+  );
+  assert.deepEqual(rounds, [[[1, 3]]]);
+});
+
+test("simulatePowerRankings respects a real schedule (unbeaten team's only loss is its scheduled game)", () => {
+  // One dominant team; give it a single week where it plays another team, and
+  // otherwise it never appears — its wins should cap at that one game.
+  const teams = [
+    { rosterId: 1, label: "A", projMean: 130, projSigma: 10 },
+    { rosterId: 2, label: "B", projMean: 120, projSigma: 10 },
+    { rosterId: 3, label: "C", projMean: 110, projSigma: 10 },
+    { rosterId: 4, label: "D", projMean: 100, projSigma: 10 },
+  ];
+  const rosterSchedule = [
+    { week: 1, home: 1, away: 2 },
+    { week: 1, home: 3, away: 4 },
+    { week: 2, home: 3, away: 4 }, // team 1 has no game week 2
+  ];
+  const res = simulatePowerRankings(teams, { weeks: 2, playoffTeams: 2, sims: 500, seed: 5, rosterSchedule });
+  const a = res.find((r) => r.rosterId === 1);
+  // Team 1 plays exactly one game → avgWins ≤ 1.
+  assert.ok(a.avgWins <= 1.001, `team 1 avgWins ${a.avgWins} should be ≤ 1`);
+});
 
 test("createSeasonSimulator: chunked runBatch equals one big batch for a fixed seed", () => {
   const opts = { weeks: 12, playoffTeams: 4, seed: 77 };

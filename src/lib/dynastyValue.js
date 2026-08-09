@@ -26,10 +26,20 @@ import { clamp } from "./scoringEngine.js";
 // present via `yearWeights`; a rebuilder toward the out years.
 export const DYNASTY_YEAR_WEIGHTS = { present: 0.30, y1: 0.28, y2: 0.24, y3: 0.18 };
 
+// Redraft horizon: only this season counts. Collapses the fused value to the
+// present (grade refined by the weekly-projection percentile), with no forward
+// tilt and no dynasty-market anchor (see the `redraft` opt in computeDynastyValue).
+export const REDRAFT_YEAR_WEIGHTS = { present: 1, y1: 0, y2: 0, y3: 0 };
+
 // How much the nflverse weekly-projection percentile pulls the present value off
 // the trailing-stats grade. The grade still leads (0.65) — the forward signal
 // refines it (0.35), it doesn't replace it.
 const PROJ_PRESENT_WEIGHT = 0.35;
+
+// Redraft cares about how a player will produce *this* year, so the forward
+// projection leads (0.6) and the trailing grade supports it — the inverse of the
+// dynasty balance. When no projection exists it falls back to the grade.
+const REDRAFT_PROJ_WEIGHT = 0.6;
 
 // Final anchor to the trade-market value. Mirrors the weekly engine's Sleeper
 // blend: keep the model honest against the market rather than drifting on it.
@@ -46,28 +56,41 @@ const DEFAULT_MARKET_ANCHOR = 0.45;
  *   (offseason gaps, rookies) — the value degrades gracefully to grade+prediction.
  * @param {number} [opts.marketAnchor]  weight on market value in the final blend.
  * @param {object} [opts.yearWeights]    override the dynasty horizon weights.
+ * @param {boolean} [opts.redraft]  single-season mode: present-only horizon and
+ *   no dynasty-market anchor (the FC market is dynasty-priced). Explicit
+ *   `yearWeights`/`marketAnchor` still win over the redraft defaults.
  * @returns {{value:number, model:number, tier:string, confidence:string,
  *   breakdown:object}|null}
  */
 export function computeDynastyValue(player, opts = {}) {
   if (!player || !POSITION_PRIORITY.includes(player.position)) return null;
 
-  const {
-    projPctile = null,
-    marketAnchor = DEFAULT_MARKET_ANCHOR,
-    yearWeights = DYNASTY_YEAR_WEIGHTS,
-  } = opts;
+  const { projPctile = null, redraft = false } = opts;
+  const yearWeights =
+    opts.yearWeights || (redraft ? REDRAFT_YEAR_WEIGHTS : DYNASTY_YEAR_WEIGHTS);
+  const marketAnchor =
+    opts.marketAnchor != null
+      ? opts.marketAnchor
+      : redraft
+        ? 0
+        : DEFAULT_MARKET_ANCHOR;
 
   const grade = clamp(Number(player.score) || 0, 0, 99);
   const pred = player.prediction || null;
 
   // Present value: the current grade, refined by the forward production signal.
+  // Redraft leans hard on the forward projection (production-led); dynasty lets
+  // the grade lead. An explicit projWeight opt overrides either default.
+  const projWeight =
+    opts.projWeight != null
+      ? opts.projWeight
+      : redraft
+        ? REDRAFT_PROJ_WEIGHT
+        : PROJ_PRESENT_WEIGHT;
   let present = grade;
   const hasProj = projPctile != null && Number.isFinite(Number(projPctile));
   if (hasProj) {
-    present =
-      (1 - PROJ_PRESENT_WEIGHT) * grade +
-      PROJ_PRESENT_WEIGHT * clamp(Number(projPctile), 0, 99);
+    present = (1 - projWeight) * grade + projWeight * clamp(Number(projPctile), 0, 99);
   }
 
   // Future values from the (age-aware) 3-yr projection; flat fallback to present.
@@ -110,6 +133,7 @@ export function computeDynastyValue(player, opts = {}) {
     value,
     model: Math.round(model),
     tier: valueTier(value),
+    redraft,
     confidence: hasProj && pred ? "high" : pred || hasProj ? "medium" : "low",
     breakdown: {
       grade: Math.round(grade),

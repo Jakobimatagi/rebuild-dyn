@@ -20,6 +20,7 @@ export function getLeagueRulesContext(league) {
   const flexCount = rosterPositions.filter((slot) =>
     ["FLEX", "REC_FLEX", "WRRB_FLEX", "WRTE_FLEX", "SUPER_FLEX"].includes(slot),
   ).length;
+  const superFlexCount = rosterPositions.filter((slot) => slot === "SUPER_FLEX").length;
   const starterCounts = {
     QB: rosterPositions.filter((slot) => slot === "QB").length,
     RB: rosterPositions.filter((slot) => slot === "RB").length,
@@ -42,6 +43,7 @@ export function getLeagueRulesContext(league) {
     numTeams: Number(league.total_rosters || 12),
     starterCounts,
     flexCount,
+    superFlexCount,
     formatLabel: [
       isSuperflex ? "Superflex" : "1QB",
       tePremium ? "TE Premium" : null,
@@ -94,12 +96,15 @@ export function buildPlayerMarketValue(
   // Separately track internalValue (from raw internal score) for display/comparison.
   const applyPremiums = (base) => {
     let v = base + (leagueContext.positionPremiums[player.position] || 0) * 0.6;
-    // Smooth youth premium curve: age 20 = +10/+8, decays linearly to 0 at 27, penalty at 29+
-    if (player.age >= 29) {
-      v -= player.position === "RB" ? 14 : 7;
-    } else if (player.age < 27) {
-      const maxBonus = player.position === "QB" ? 10 : 8;
-      v += Math.round(maxBonus * Math.max(0, (27 - player.age) / 7));
+    // Smooth youth premium curve: age 20 = +10/+8, decays linearly to 0 at 27,
+    // penalty at 29+. Dynasty-only — redraft value doesn't reward youth.
+    if (!leagueContext.isRedraft) {
+      if (player.age >= 29) {
+        v -= player.position === "RB" ? 14 : 7;
+      } else if (player.age < 27) {
+        const maxBonus = player.position === "QB" ? 10 : 8;
+        v += Math.round(maxBonus * Math.max(0, (27 - player.age) / 7));
+      }
     }
     if (player.draftRound === 1) v += player.draftSlot <= 12 ? 8 : 5;
     else if (player.draftRound === 2) v += 2;

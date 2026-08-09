@@ -10,6 +10,7 @@ import {
   projectionPercentiles,
   valueTier,
   dynastyForwardMultiplier,
+  REDRAFT_YEAR_WEIGHTS,
 } from "./dynastyValue.js";
 
 // A young ascending WR: same current grade as an aging RB, but a rising
@@ -158,5 +159,51 @@ describe("dynastyForwardMultiplier", () => {
     const dv = computeDynastyValue(youngAscending, { projPctile: 85 });
     const m = dynastyForwardMultiplier({ dynastyValue: dv });
     assert.ok(m > 1, `expected breakout lift, got ${m}`);
+  });
+});
+
+describe("computeDynastyValue — redraft mode", () => {
+  it("collapses to the present, ignoring the 3-year projection", () => {
+    // Dynasty rewards the rising out-years. In real redraft usage the player
+    // carries no prediction (rosterBuilder skips it), so the fused value tracks
+    // the present alone and sits at/below the future-lifted dynasty value.
+    const dyn = computeDynastyValue(youngAscending, { projPctile: 70 });
+    const { prediction, ...noPred } = youngAscending;
+    const re = computeDynastyValue(noPred, { projPctile: 70, redraft: true });
+    assert.equal(re.redraft, true);
+    assert.ok(re.value <= dyn.value, `redraft ${re.value} should be <= dynasty ${dyn.value}`);
+    // With no prediction, the future-year breakdown cells fall back to present.
+    assert.equal(re.breakdown.y1, re.breakdown.present);
+    assert.equal(re.breakdown.y2, re.breakdown.present);
+    assert.equal(re.breakdown.y3, re.breakdown.present);
+  });
+
+  it("drops the dynasty-market anchor (present-only, no market pull)", () => {
+    // A player whose market value sits well above their model. In dynasty the
+    // market anchor lifts the value; in redraft it must not.
+    const player = { position: "WR", age: 24, score: 60, marketValue: 120 };
+    const dyn = computeDynastyValue(player, { projPctile: 60 });
+    const re = computeDynastyValue(player, { projPctile: 60, redraft: true });
+    assert.ok(re.value < dyn.value, `redraft ${re.value} should be < market-anchored dynasty ${dyn.value}`);
+    // With no market anchor, value equals the model score.
+    assert.equal(re.value, re.model);
+  });
+
+  it("ignores age: a young and an old player with equal grade/projection value the same", () => {
+    const base = { position: "RB", score: 65 };
+    const young = computeDynastyValue({ ...base, age: 23 }, { projPctile: 55, redraft: true });
+    const old = computeDynastyValue({ ...base, age: 31 }, { projPctile: 55, redraft: true });
+    assert.equal(young.value, old.value);
+  });
+
+  it("still refines the present by the weekly projection percentile", () => {
+    const player = { position: "WR", age: 26, score: 50 };
+    const low = computeDynastyValue(player, { projPctile: 10, redraft: true });
+    const high = computeDynastyValue(player, { projPctile: 90, redraft: true });
+    assert.ok(high.value > low.value, "higher projection → higher redraft value");
+  });
+
+  it("REDRAFT_YEAR_WEIGHTS is present-only", () => {
+    assert.deepEqual(REDRAFT_YEAR_WEIGHTS, { present: 1, y1: 0, y2: 0, y3: 0 });
   });
 });

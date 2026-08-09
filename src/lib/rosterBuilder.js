@@ -302,19 +302,24 @@ export function classifyLeagueTeams(leagueTeams, leagueContext) {
     if (m.weakRooms === 0) signals.push("No weak position rooms");
 
     // 7. Age window & future outlook (0-10)
-    //    Young + strong = dynasty asset; old + weak = time to sell
-    const ageIdeal =
-      m.avgAge >= 24 && m.avgAge <= 28
-        ? 8
-        : m.avgAge >= 22 && m.avgAge <= 30
-          ? 5
-          : 2;
-    // Bonus if young AND strong — the future is bright
-    const futureBonus =
-      m.avgAge < 26 && scorePctile >= 60 ? 2 : 0;
-    score += ageIdeal + futureBonus;
-    if (m.avgAge < 23) signals.push("Very young roster — developing");
-    if (m.avgAge > 29) signals.push("Aging roster — window closing");
+    //    Young + strong = dynasty asset; old + weak = time to sell.
+    //    Redraft has no future — collapse this to the points-now signal instead.
+    if (leagueContext?.isRedraft) {
+      score += (ppgPctile / 100) * 10;
+    } else {
+      const ageIdeal =
+        m.avgAge >= 24 && m.avgAge <= 28
+          ? 8
+          : m.avgAge >= 22 && m.avgAge <= 30
+            ? 5
+            : 2;
+      // Bonus if young AND strong — the future is bright
+      const futureBonus =
+        m.avgAge < 26 && scorePctile >= 60 ? 2 : 0;
+      score += ageIdeal + futureBonus;
+      if (m.avgAge < 23) signals.push("Very young roster — developing");
+      if (m.avgAge > 29) signals.push("Aging roster — window closing");
+    }
 
     score = Math.round(clamp(score, 0, 100));
 
@@ -440,14 +445,19 @@ export function buildRosterSnapshot(
   contractMap = null,
 ) {
   const playerIds = roster.players || [];
-  const picks = buildRosterPicks(
-    roster.roster_id,
-    league,
-    tradedPicks,
-    rosterLabelById,
-    futureSeasons,
-    completedDraftSeasons,
-  );
+  // Redraft leagues have no future rookie picks — don't synthesize any, so pick
+  // capital, the roster's Draft Capital section, and pick-based trade suggestions
+  // all drop out cleanly.
+  const picks = leagueContext?.isRedraft
+    ? []
+    : buildRosterPicks(
+        roster.roster_id,
+        league,
+        tradedPicks,
+        rosterLabelById,
+        futureSeasons,
+        completedDraftSeasons,
+      );
 
   const enriched = playerIds
     .map((id) => {
@@ -613,15 +623,18 @@ export function buildRosterSnapshot(
       enrichedPlayer.dynastyMarketValue =
         fc > 0 && ra > 0 ? fc * 0.60 + ra * 0.40 : fc > 0 ? fc : ra;
 
-      if (predictionContext) {
+      // The 3-year age-curve forecast is a dynasty concept — skip it in redraft.
+      if (predictionContext && !leagueContext.isRedraft) {
         enrichedPlayer.prediction = buildPlayerPrediction(enrichedPlayer, predictionContext);
       }
 
-      // Fused forward dynasty value: the age-curve prediction + current grade +
-      // the nflverse-enriched weekly-projection percentile (when supplied),
-      // anchored to market. See dynastyValue.js.
+      // Fused value. Dynasty: forward-tilted, age-curve prediction + grade +
+      // weekly-projection percentile, anchored to market. Redraft: present-only
+      // (grade refined by the projection percentile), no forward tilt or dynasty
+      // market anchor. See dynastyValue.js.
       enrichedPlayer.dynastyValue = computeDynastyValue(enrichedPlayer, {
         projPctile: projPctileMap?.get(String(id)) ?? null,
+        redraft: !!leagueContext.isRedraft,
       });
 
       // Active contract (OTC via nflverse), keyed by Sleeper id. Null when the table

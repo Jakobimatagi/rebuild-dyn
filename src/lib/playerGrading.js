@@ -50,15 +50,44 @@ function isStashPlayer(player) {
 //
 // Production carries the larger share because room rank answers
 // "who can win games this year?" — PPG drives wins, market value follows.
-export function computeRoomQuality(players, pos = null, isSuperflex = null) {
+// How many of a position realistically START each week — the pool a room's
+// rank should be judged on. Depth beyond this (a 3rd QB, a 6th WR) is bench
+// insurance and must NOT inflate (or, via a weak body, deflate) the room. QB in
+// superflex counts the SUPER_FLEX slot; RB/WR absorb the non-SF flex slots.
+export function roomStarterCount(pos, ctx) {
+  if (!ctx?.starterCounts) return null;
+  const sc = ctx.starterCounts;
+  const sf = ctx.superFlexCount || 0;
+  const nonSfFlex = Math.max(0, (ctx.flexCount || 0) - sf);
+  const core = {
+    QB: (sc.QB || 0) + sf,
+    RB: (sc.RB || 0) + Math.round(nonSfFlex * 0.4),
+    WR: (sc.WR || 0) + Math.round(nonSfFlex * 0.5),
+    TE: (sc.TE || 0),
+  }[pos];
+  return Math.max(1, core || 1);
+}
+
+// `coreCount` is how many players actually contribute to the room's rank (the
+// starters). When omitted it falls back to the full graded pool. In redraft the
+// production signal is this-season's projection (how they'll produce *now*),
+// not last year's box scores — an elite QB coming off a down year still anchors
+// a top room.
+export function computeRoomQuality(players, pos = null, coreCount = null, forwardProd = false) {
   if (!players.length) return null;
 
   const graded = players.filter((p) => !isStashPlayer(p));
   if (!graded.length) return null;
 
-  const keepCount = pos && isSuperflex !== null
-    ? getKeepCount(pos, isSuperflex)
-    : graded.length;
+  const keepCount =
+    coreCount != null ? Math.min(coreCount, graded.length) : graded.length;
+
+  // Production proxy: trailing percentile in dynasty; the forward projection
+  // percentile (when available) in redraft, falling back to trailing.
+  const prodOf = (p) =>
+    forwardProd
+      ? (p.dynastyValue?.breakdown?.projPctile ?? p.currentPctile ?? 0)
+      : (p.currentPctile ?? 0);
 
   // Pick the core by the same blended formula we grade with — otherwise a
   // dynasty-only sort lets a backup with an inflated speculative value (e.g.
@@ -66,7 +95,7 @@ export function computeRoomQuality(players, pos = null, isSuperflex = null) {
   // starter, then drag the room average down via the 0.7 production weight.
   const blends = graded.map((p) => ({
     p,
-    blend: 0.3 * (p.score ?? 0) + 0.7 * (p.currentPctile ?? 0),
+    blend: 0.3 * (p.score ?? 0) + 0.7 * prodOf(p),
   }));
   blends.sort((a, b) => b.blend - a.blend);
   const core = blends.slice(0, keepCount);
@@ -185,16 +214,24 @@ const POSITIONS_TO_RANK = ["QB", "RB", "WR", "TE"];
 // team in `leagueTeams` to add `posRanks: { QB: { rank, of, quality, color }, ... }`.
 // Color tiers split the league into thirds: top → green, middle → yellow,
 // bottom → red. Empty rooms (null quality) sort last and get red.
-export function assignPositionRanks(leagueTeams, isSuperflex) {
+export function assignPositionRanks(leagueTeams, leagueContext) {
   const total = leagueTeams.length;
   if (!total) return;
 
+  // Back-compat: callers historically passed a bare `isSuperflex` boolean.
+  const ctx =
+    leagueContext && typeof leagueContext === "object"
+      ? leagueContext
+      : { isSuperflex: !!leagueContext };
+  const isSuperflex = !!ctx.isSuperflex;
+
   for (const pos of POSITIONS_TO_RANK) {
+    const core = roomStarterCount(pos, ctx);
     const entries = leagueTeams.map((team) => {
       const roster = team.byPos?.[pos] || [];
       return {
         team,
-        quality: computeRoomQuality(roster, pos, isSuperflex),
+        quality: computeRoomQuality(roster, pos, core, !!ctx.isRedraft),
         grade: computePositionGrade(roster, pos, isSuperflex),
       };
     });

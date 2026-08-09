@@ -520,7 +520,7 @@ function TeamPhaseChart({ teams, myTeamLabel, expandedTeam, onPickTeam }) {
   );
 }
 
-export default function LeagueTab({ leagueTeams, myTeamLabel, isSuperflex }) {
+export default function LeagueTab({ leagueTeams, myTeamLabel, isSuperflex, isRedraft = false }) {
   const [expandedTeam, setExpandedTeam] = useState(null);
 
   const sorted = [...leagueTeams].sort(
@@ -618,7 +618,7 @@ export default function LeagueTab({ leagueTeams, myTeamLabel, isSuperflex }) {
 
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <PositionGrades posRanks={team.posRanks} />
-                  <PickGrade pickRank={team.pickRank} />
+                  {!isRedraft && <PickGrade pickRank={team.pickRank} />}
                   <div style={{ textAlign: "right", flexShrink: 0, minWidth: 38 }}>
                     <div
                       style={{

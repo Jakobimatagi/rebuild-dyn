@@ -21,6 +21,8 @@ import {
   fetchFFUserLeagues,
   loadFleaflickerLeague,
 } from "./lib/fleaflickerApi";
+import { loadEspnLeague, fetchEspnLeagueTeams } from "./lib/espnApi";
+import { deriveFormatMode } from "./lib/formatMode";
 import {
   fetchDeepHistoricalStats,
   fetchDraftPicks,
@@ -59,6 +61,9 @@ export default function App() {
         ? "loading"
         : "input";
     }
+    if (savedPlatform === "espn") {
+      return localStorage.getItem("espn_league") ? "loading" : "input";
+    }
     const savedUsername = localStorage.getItem("sleeper_username");
     const savedLeague = localStorage.getItem("sleeper_league");
     return savedUsername && savedLeague ? "loading" : "input";
@@ -69,11 +74,27 @@ export default function App() {
   const [ffEmail, setFfEmail] = useState(
     () => localStorage.getItem("ff_email") || "",
   );
+  // ESPN connect inputs: league id + the two private-league cookies. Persisted
+  // in the browser only (never server-side), like the Fleaflicker email.
+  const [espnLeagueId, setEspnLeagueId] = useState(
+    () => localStorage.getItem("espn_league_id") || "",
+  );
+  const [espnS2, setEspnS2] = useState(
+    () => localStorage.getItem("espn_s2") || "",
+  );
+  const [espnSwid, setEspnSwid] = useState(
+    () => localStorage.getItem("espn_swid") || "",
+  );
   const [leagues, setLeagues] = useState([]);
   const [selectedLeague, setSelectedLeague] = useState(() => {
     try {
       const savedPlatform = localStorage.getItem("dynasty_os_platform");
-      const key = savedPlatform === "fleaflicker" ? "ff_league" : "sleeper_league";
+      const key =
+        savedPlatform === "fleaflicker"
+          ? "ff_league"
+          : savedPlatform === "espn"
+            ? "espn_league"
+            : "sleeper_league";
       const raw = localStorage.getItem(key);
       return raw ? JSON.parse(raw) : null;
     } catch {
@@ -95,6 +116,13 @@ export default function App() {
   // keeps it in sync.
   const scoringWeightsRef = useRef(DEFAULT_SCORING_WEIGHTS);
   const [analysis, setAnalysis] = useState(null);
+  // Dynasty vs redraft. `formatMode` is the resolved mode used for the current
+  // analysis; `formatModeOverride` is the user's manual pick (persisted), which
+  // wins over auto-detection until they switch leagues. See formatMode.js.
+  const [formatMode, setFormatMode] = useState("dynasty");
+  const [formatModeOverride, setFormatModeOverride] = useState(
+    () => localStorage.getItem("format_mode_override") || null,
+  );
   const [activeTab, setActiveTab] = useState("overview");
   const [showGradeKey, setShowGradeKey] = useState(false);
   const [showScoreWeights, setShowScoreWeights] = useState(false);
@@ -121,7 +149,7 @@ export default function App() {
     }
   }
 
-  function computeAnalysis(payload, nextWeights = scoringWeights) {
+  function computeAnalysis(payload, nextWeights = scoringWeights, mode = formatMode) {
     return buildRosterAnalysis(
       payload.myRoster,
       payload.players,
@@ -151,6 +179,7 @@ export default function App() {
       payload.projPctileMap ?? null,
       payload.valueSnapshots ?? null,
       payload.contractMap ?? null,
+      mode,
     );
   }
 
@@ -181,6 +210,12 @@ export default function App() {
         setFfEmail(savedEmail);
         setPlatform("fleaflicker");
         loadFleaflickerDashboard(JSON.parse(savedLeague));
+      }
+    } else if (savedPlatform === "espn") {
+      const savedLeague = localStorage.getItem("espn_league");
+      if (savedLeague) {
+        setPlatform("espn");
+        loadEspnDashboard(JSON.parse(savedLeague));
       }
     } else {
       const savedUsername = localStorage.getItem("sleeper_username");
@@ -308,8 +343,12 @@ export default function App() {
       };
 
       step("Crunching analysis");
+      // Resolve dynasty vs redraft from the normalized league (unless the user
+      // has overridden it). Captured here so the enrichment recompute reuses it.
+      const mode = formatModeOverride || deriveFormatMode(corePayload.league);
+      setFormatMode(mode);
       setAnalysisPayload(corePayload);
-      setAnalysis(computeAnalysis(corePayload, scoringWeightsRef.current));
+      setAnalysis(computeAnalysis(corePayload, scoringWeightsRef.current, mode));
       setStep("dashboard");
       setLoading(false);
       setLoadProgress(null);
@@ -411,7 +450,7 @@ export default function App() {
           };
 
           setAnalysisPayload(fullPayload);
-          setAnalysis(computeAnalysis(fullPayload, scoringWeightsRef.current));
+          setAnalysis(computeAnalysis(fullPayload, scoringWeightsRef.current, mode));
         } catch {
           // Enrichment is best-effort; the core analysis already rendered.
         } finally {
@@ -475,6 +514,16 @@ export default function App() {
         players,
       );
 
+      // Fold the normalized roster/scoring settings into selectedLeague so tabs
+      // reading it directly (Power Rankings, Projections) get real lineup slots.
+      setSelectedLeague((prev) => ({
+        ...(prev || league),
+        roster_positions: ffData.league.roster_positions,
+        scoring_settings: ffData.league.scoring_settings,
+        settings: { ...(league.settings || {}), ...ffData.league.settings },
+        total_rosters: ffData.league.total_rosters,
+      }));
+
       // Phase 3: current-season values, using normalized league settings.
       const [fantasyCalcValues, rosterAuditValues, rosterAuditPicks] =
         await Promise.all([
@@ -506,8 +555,12 @@ export default function App() {
       };
 
       step("Crunching analysis");
+      // Resolve dynasty vs redraft from the normalized league (unless the user
+      // has overridden it). Captured here so the enrichment recompute reuses it.
+      const mode = formatModeOverride || deriveFormatMode(corePayload.league);
+      setFormatMode(mode);
       setAnalysisPayload(corePayload);
-      setAnalysis(computeAnalysis(corePayload, scoringWeightsRef.current));
+      setAnalysis(computeAnalysis(corePayload, scoringWeightsRef.current, mode));
       setStep("dashboard");
       setLoading(false);
       setLoadProgress(null);
@@ -522,6 +575,7 @@ export default function App() {
             stats17, stats16, stats15, stats14,
             stats13, stats12, stats11, stats10, stats09,
             fantasyCalcTrades,
+            projPctileMap,
           ] = await Promise.all([
             fetchHistoricalStats(2021),
             fetchHistoricalStats(2020),
@@ -537,6 +591,9 @@ export default function App() {
             fetchDeepHistoricalStats(2010),
             fetchDeepHistoricalStats(2009),
             fetchFantasyCalcTrades(ffLeague).catch(() => []),
+            // Forward production percentiles (upcoming season) → drives redraft
+            // rankings and the fused value's present signal. Best-effort.
+            fetchSeasonPaceProjPercentiles(lastSeason + 1).catch(() => new Map()),
           ]);
 
           if (loadTokenRef.current !== token) return;
@@ -544,6 +601,7 @@ export default function App() {
           const fullPayload = {
             ...corePayload,
             fantasyCalcTrades,
+            projPctileMap,
             historicalStats: [
               { year: 2021, stats: stats21 },
               { year: 2020, stats: stats20 },
@@ -562,7 +620,7 @@ export default function App() {
           };
 
           setAnalysisPayload(fullPayload);
-          setAnalysis(computeAnalysis(fullPayload, scoringWeightsRef.current));
+          setAnalysis(computeAnalysis(fullPayload, scoringWeightsRef.current, mode));
         } catch {
           // Enrichment is best-effort; the core analysis already rendered.
         } finally {
@@ -572,6 +630,179 @@ export default function App() {
     } catch (e) {
       localStorage.removeItem("ff_league");
       setError(e.message || "Failed to load Fleaflicker dashboard. Try selecting your league again.");
+      setStep(returnToLeagues ? "leagues" : "input");
+      setLoading(false);
+      setLoadProgress(null);
+    }
+  }
+
+  // ESPN dashboard loader. Structurally identical to loadFleaflickerDashboard —
+  // the only substantive difference is the normalizer (loadEspnLeague) and that
+  // it forwards the private-league cookies, read from localStorage so a restored
+  // session on reload still has them.
+  async function loadEspnDashboard(league, { returnToLeagues = false } = {}) {
+    const token = (loadTokenRef.current += 1);
+    setSelectedLeague(league);
+    setLoading(true);
+    setEnriching(false);
+    setError("");
+
+    try {
+      const now = new Date();
+      const lastSeason =
+        now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+
+      let done = 0;
+      let total = 0;
+      const track = (label, p) =>
+        p.finally(() => {
+          done += 1;
+          setLoadProgress({ done, total, label });
+        });
+      const step = (label) => {
+        done += 1;
+        setLoadProgress({ done, total, label });
+      };
+
+      const corePhase1 = [
+        track("Player database", fetchPlayersDb().catch(() => ({}))),
+        track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason}`).catch(() => ({}))),
+        track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason - 1}`).catch(() => ({}))),
+        track("Recent stats", fetchSleeper(`/stats/nfl/regular/${lastSeason - 2}`).catch(() => ({}))),
+      ];
+      total = corePhase1.length + 1 + 3 + 1;
+      setLoadProgress({ done: 0, total, label: "Connecting…" });
+
+      const [players, stats24, stats23, stats22] = await Promise.all(corePhase1);
+
+      step("Your league");
+      const creds = {
+        espn_s2: localStorage.getItem("espn_s2") || espnS2 || "",
+        swid: localStorage.getItem("espn_swid") || espnSwid || "",
+        season: league.season,
+      };
+      const espnData = await loadEspnLeague(
+        league._espn_league_id,
+        league._espn_team_id,
+        players,
+        creds,
+      );
+
+      // The picker stub has no roster/scoring settings — fold in the normalized
+      // league's so tabs reading `selectedLeague` directly (Power Rankings,
+      // Projections, Waivers) get real lineup slots and scoring, not defaults.
+      setSelectedLeague((prev) => ({
+        ...(prev || league),
+        roster_positions: espnData.league.roster_positions,
+        scoring_settings: espnData.league.scoring_settings,
+        settings: { ...(league.settings || {}), ...espnData.league.settings },
+        total_rosters: espnData.league.total_rosters,
+        // Real fantasy matchup schedule → schedule-aware Power Rankings sim.
+        schedule: espnData.schedule,
+      }));
+
+      const [fantasyCalcValues, rosterAuditValues, rosterAuditPicks] =
+        await Promise.all([
+          track("Player values", fetchFantasyCalcValues(espnData.league).catch(() => [])),
+          track("Player values", fetchRosterAuditValues(espnData.league).catch(() => [])),
+          track("Pick values", fetchRosterAuditPicks().catch(() => null)),
+        ]);
+
+      const corePayload = {
+        myRoster: espnData.myRoster,
+        players,
+        league: espnData.league,
+        tradedPicks: espnData.tradedPicks,
+        currentDraftComplete: espnData.currentDraftComplete,
+        stats24,
+        stats23,
+        stats22,
+        transactions: espnData.transactions,
+        fantasyCalcValues,
+        fantasyCalcTrades: [],
+        rosterAuditValues,
+        rosterAuditPicks,
+        users: espnData.users,
+        rosters: espnData.rosters,
+        lastSeason,
+        historicalStats: [],
+      };
+
+      step("Crunching analysis");
+      // Resolve dynasty vs redraft from the normalized league (unless the user
+      // has overridden it). Captured here so the enrichment recompute reuses it.
+      const mode = formatModeOverride || deriveFormatMode(corePayload.league);
+      setFormatMode(mode);
+      setAnalysisPayload(corePayload);
+      setAnalysis(computeAnalysis(corePayload, scoringWeightsRef.current, mode));
+      setStep("dashboard");
+      setLoading(false);
+      setLoadProgress(null);
+
+      const espnLeague = espnData.league;
+      setEnriching(true);
+      (async () => {
+        try {
+          const [
+            stats21, stats20, stats19, stats18,
+            stats17, stats16, stats15, stats14,
+            stats13, stats12, stats11, stats10, stats09,
+            fantasyCalcTrades,
+            projPctileMap,
+          ] = await Promise.all([
+            fetchHistoricalStats(2021),
+            fetchHistoricalStats(2020),
+            fetchHistoricalStats(2019),
+            fetchHistoricalStats(2018),
+            fetchDeepHistoricalStats(2017),
+            fetchDeepHistoricalStats(2016),
+            fetchDeepHistoricalStats(2015),
+            fetchDeepHistoricalStats(2014),
+            fetchDeepHistoricalStats(2013),
+            fetchDeepHistoricalStats(2012),
+            fetchDeepHistoricalStats(2011),
+            fetchDeepHistoricalStats(2010),
+            fetchDeepHistoricalStats(2009),
+            fetchFantasyCalcTrades(espnLeague).catch(() => []),
+            // Forward production percentiles (upcoming season) → drives redraft
+            // rankings and the fused value's present signal. Best-effort.
+            fetchSeasonPaceProjPercentiles(lastSeason + 1).catch(() => new Map()),
+          ]);
+
+          if (loadTokenRef.current !== token) return;
+
+          const fullPayload = {
+            ...corePayload,
+            fantasyCalcTrades,
+            projPctileMap,
+            historicalStats: [
+              { year: 2021, stats: stats21 },
+              { year: 2020, stats: stats20 },
+              { year: 2019, stats: stats19 },
+              { year: 2018, stats: stats18 },
+              { year: 2017, stats: stats17 },
+              { year: 2016, stats: stats16 },
+              { year: 2015, stats: stats15 },
+              { year: 2014, stats: stats14 },
+              { year: 2013, stats: stats13 },
+              { year: 2012, stats: stats12 },
+              { year: 2011, stats: stats11 },
+              { year: 2010, stats: stats10 },
+              { year: 2009, stats: stats09 },
+            ],
+          };
+
+          setAnalysisPayload(fullPayload);
+          setAnalysis(computeAnalysis(fullPayload, scoringWeightsRef.current, mode));
+        } catch {
+          // Enrichment is best-effort; the core analysis already rendered.
+        } finally {
+          if (loadTokenRef.current === token) setEnriching(false);
+        }
+      })();
+    } catch (e) {
+      localStorage.removeItem("espn_league");
+      setError(e.message || "Failed to load ESPN dashboard. Check your league ID (and cookies for a private league).");
       setStep(returnToLeagues ? "leagues" : "input");
       setLoading(false);
       setLoadProgress(null);
@@ -593,7 +824,25 @@ export default function App() {
     setShowScoreWeights(false);
   }
 
-  // Fetch a Sleeper user's dynasty leagues. Shared by the manual entry flow
+  // Toggle dynasty ↔ redraft. The choice is an override that persists (and beats
+  // auto-detection) until the user switches leagues. Recomputes from the cached
+  // payload — no refetch — like the score-weights recompute above.
+  async function handleToggleFormatMode(nextMode) {
+    if (nextMode === formatMode) return;
+    setRecalculating(true);
+    setFormatMode(nextMode);
+    setFormatModeOverride(nextMode);
+    localStorage.setItem("format_mode_override", nextMode);
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    if (analysisPayload) {
+      setAnalysis(computeAnalysis(analysisPayload, scoringWeightsRef.current, nextMode));
+    }
+    setRecalculating(false);
+  }
+
+  // Fetch a Sleeper user's leagues. Shared by the manual entry flow
   // and the "Switch League" button so switching works even after a reload
   // (where `leagues` state was never populated).
   async function fetchSleeperLeagues(uname) {
@@ -613,13 +862,10 @@ export default function App() {
       ).catch(() => []);
     }
 
-    const dynasty = leagueData.filter(
-      (league) =>
-        league.settings?.type === 2 ||
-        league.name?.toLowerCase().includes("dynasty"),
-    );
-
-    return dynasty.length ? dynasty : leagueData;
+    // Return all NFL leagues — dynasty and redraft alike. Format is detected
+    // per-league (deriveFormatMode) and the dashboard has a Dynasty/Redraft
+    // toggle, so we no longer hide non-dynasty leagues at the picker.
+    return leagueData;
   }
 
   async function handleUsernameSubmit(overrideName) {
@@ -709,12 +955,58 @@ export default function App() {
     setLoading(false);
   }
 
+  // ESPN connect: user supplies a league ID (+ optional cookies for private
+  // leagues). We fetch the league's teams so they can pick which one is theirs.
+  async function handleEspnSubmit() {
+    const leagueId = espnLeagueId.trim().replace(/[{}]/g, "");
+    if (!/^\d+$/.test(leagueId)) {
+      setError("Enter a numeric ESPN league ID.");
+      return;
+    }
+    const s2 = espnS2.trim();
+    const swid = espnSwid.trim();
+
+    setLoading(true);
+    setError("");
+
+    try {
+      // ESPN keys leagues by calendar year (the lib also falls back to year-1).
+      const season = new Date().getFullYear();
+      const teamEntries = await fetchEspnLeagueTeams(leagueId, season, {
+        espn_s2: s2,
+        swid,
+      });
+
+      localStorage.setItem("dynasty_os_platform", "espn");
+      localStorage.setItem("espn_league_id", leagueId);
+      if (s2) localStorage.setItem("espn_s2", s2);
+      else localStorage.removeItem("espn_s2");
+      if (swid) localStorage.setItem("espn_swid", swid);
+      else localStorage.removeItem("espn_swid");
+
+      // Surface the user's own team first when the SWID identified it.
+      const sorted = [...teamEntries].sort(
+        (a, b) => (b._espn_is_mine ? 1 : 0) - (a._espn_is_mine ? 1 : 0),
+      );
+      setLeagues(sorted);
+      setStep("leagues");
+    } catch (e) {
+      setError(
+        e.message ||
+          "Could not load that ESPN league. Check the league ID (and cookies for a private league).",
+      );
+    }
+
+    setLoading(false);
+  }
+
   // Switch League: go to the picker and ensure the league list is loaded. When
   // the dashboard was restored from localStorage on reload, `leagues` was never
   // populated, so we re-fetch it here for the saved account.
   async function handleSwitchLeague() {
     localStorage.removeItem("sleeper_league");
     localStorage.removeItem("ff_league");
+    localStorage.removeItem("espn_league");
     setStep("leagues");
 
     if (leagues.length) return;
@@ -725,6 +1017,17 @@ export default function App() {
       if (platform === "fleaflicker") {
         const savedEmail = ffEmail || localStorage.getItem("ff_email") || "";
         if (savedEmail) setLeagues(await fetchFleaflickerLeagues(savedEmail));
+      } else if (platform === "espn") {
+        const savedId =
+          espnLeagueId || localStorage.getItem("espn_league_id") || "";
+        if (savedId) {
+          setLeagues(
+            await fetchEspnLeagueTeams(savedId, new Date().getFullYear(), {
+              espn_s2: localStorage.getItem("espn_s2") || "",
+              swid: localStorage.getItem("espn_swid") || "",
+            }),
+          );
+        }
       } else {
         const savedUsername =
           username || localStorage.getItem("sleeper_username") || "";
@@ -738,9 +1041,16 @@ export default function App() {
   }
 
   async function handleLeagueSelect(league) {
+    // A freshly chosen league should auto-detect its format; drop any prior
+    // manual override (it only applies to the league it was set on).
+    setFormatModeOverride(null);
+    localStorage.removeItem("format_mode_override");
     if (league._platform === "fleaflicker") {
       safeLocalStorageWrite("ff_league", JSON.stringify(league));
       await loadFleaflickerDashboard(league, { returnToLeagues: true });
+    } else if (league._platform === "espn") {
+      safeLocalStorageWrite("espn_league", JSON.stringify(league));
+      await loadEspnDashboard(league, { returnToLeagues: true });
     } else {
       safeLocalStorageWrite("sleeper_league", JSON.stringify(league));
       await loadDashboard(league, username, { returnToLeagues: true });
@@ -756,8 +1066,18 @@ export default function App() {
     localStorage.removeItem("dynasty_os_platform");
     localStorage.removeItem("ff_email");
     localStorage.removeItem("ff_league");
+    localStorage.removeItem("espn_league");
+    localStorage.removeItem("espn_league_id");
+    localStorage.removeItem("espn_s2");
+    localStorage.removeItem("espn_swid");
+    localStorage.removeItem("format_mode_override");
+    setFormatMode("dynasty");
+    setFormatModeOverride(null);
     setUsername("");
     setFfEmail("");
+    setEspnLeagueId("");
+    setEspnS2("");
+    setEspnSwid("");
     setPlatform("sleeper");
     setLeagues([]);
     setSelectedLeague(null);
@@ -778,7 +1098,9 @@ export default function App() {
           onSubmit={
             platform === "sleeper"
               ? handleUsernameSubmit
-              : handleFleaflickerSubmit
+              : platform === "espn"
+                ? handleEspnSubmit
+                : handleFleaflickerSubmit
           }
           onAccountTeams={(name) => {
             setPlatform("sleeper");
@@ -791,6 +1113,12 @@ export default function App() {
           onSetPlatform={setPlatform}
           ffEmail={ffEmail}
           setFfEmail={setFfEmail}
+          espnLeagueId={espnLeagueId}
+          setEspnLeagueId={setEspnLeagueId}
+          espnS2={espnS2}
+          setEspnS2={setEspnS2}
+          espnSwid={espnSwid}
+          setEspnSwid={setEspnSwid}
           onExplore={() => setStep("explore")}
         />
       </Layout>
@@ -833,6 +1161,8 @@ export default function App() {
         <Dashboard
           analysis={analysis}
           selectedLeague={selectedLeague}
+          formatMode={formatMode}
+          onToggleFormatMode={handleToggleFormatMode}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           showGradeKey={showGradeKey}
