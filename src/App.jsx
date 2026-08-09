@@ -1010,7 +1010,13 @@ export default function App() {
     setStep("leagues");
 
     if (leagues.length) return;
+    await handleRefreshLeagues();
+  }
 
+  // Refresh: always re-fetch the current account's leagues from the picker,
+  // regardless of whether `leagues` is already populated (handleSwitchLeague's
+  // guard skips the fetch when leagues exist, so it can't refresh).
+  async function handleRefreshLeagues() {
     setLoading(true);
     setError("");
     try {
@@ -1035,7 +1041,7 @@ export default function App() {
           setLeagues(await fetchSleeperLeagues(savedUsername));
       }
     } catch (e) {
-      setError(e.message || "Could not load your leagues. Try again.");
+      setError(e.message || "Could not refresh your leagues. Try again.");
     }
     setLoading(false);
   }
@@ -1149,6 +1155,11 @@ export default function App() {
           loading={loading}
           selectedLeague={selectedLeague}
           error={error}
+          onRefresh={handleRefreshLeagues}
+          onConnectAnother={() => {
+            setError("");
+            setStep("input");
+          }}
         />
       </Layout>
     );
