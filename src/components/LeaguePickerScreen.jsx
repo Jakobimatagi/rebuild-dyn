@@ -8,6 +8,8 @@ export default function LeaguePickerScreen({
   loading,
   selectedLeague,
   error,
+  onRefresh,
+  onConnectAnother,
 }) {
   return (
     <>
@@ -69,6 +71,40 @@ export default function LeaguePickerScreen({
       {!leagues.length && !loading && (
         <div style={{ color: "#d1d7ea", fontSize: 12, marginTop: 12 }}>
           No leagues found for this account in recent seasons.
+        </div>
+      )}
+      {(onRefresh || onConnectAnother) && (
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            marginTop: 20,
+            paddingTop: 16,
+            borderTop: "1px solid #1e2437",
+          }}
+        >
+          {onRefresh && (
+            <button
+              type="button"
+              className="dyn-btn-outline"
+              style={{ ...styles.btnOutline, flex: 1, textAlign: "center" }}
+              onClick={onRefresh}
+              disabled={loading}
+            >
+              {loading ? "Refreshing…" : "↻ Refresh leagues"}
+            </button>
+          )}
+          {onConnectAnother && (
+            <button
+              type="button"
+              className="dyn-btn-outline"
+              style={{ ...styles.btnOutline, flex: 1, textAlign: "center" }}
+              onClick={onConnectAnother}
+              disabled={loading}
+            >
+              + Connect a different account
+            </button>
+          )}
         </div>
       )}
     </>
