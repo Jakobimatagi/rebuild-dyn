@@ -4,6 +4,7 @@ import {
   DEFAULT_WAIVER_WEIGHTS,
   LITE_DYNASTY_SCORE,
   dynastyScore,
+  upsideScore,
   projectionPercentilesByPos,
   formScore,
   trendingScore,
@@ -49,6 +50,54 @@ test("dynastyScore maps the 1-130 scale to 0-100", () => {
 test("dynastyScore: lite candidates get the neutral floor, enriched-without-value gets null", () => {
   assert.equal(dynastyScore({ isLite: true, dynastyValue: null }), LITE_DYNASTY_SCORE);
   assert.equal(dynastyScore({ isLite: false, dynastyValue: null }), null);
+});
+
+// ── upside ──────────────────────────────────────────────────────────────────
+
+test("upsideScore: age curve fades youth to zero across the ascending window", () => {
+  // Full path strength isolates the age curve.
+  assert.equal(upsideScore(22, 1), 100);
+  assert.ok(upsideScore(24, 1) > upsideScore(26, 1));
+  assert.ok(upsideScore(26, 1) > upsideScore(28, 1));
+  assert.equal(upsideScore(31, 1), 0);
+  assert.equal(upsideScore(34, 1), 0);
+});
+
+test("upsideScore: youth alone isn't upside — no path collapses to ~0", () => {
+  assert.equal(upsideScore(22, 0), 0);
+  assert.ok(upsideScore(22, 0.1) < 15);
+  // Unknown age → null so its weight renormalizes away.
+  assert.equal(upsideScore(null, 1), null);
+  assert.equal(upsideScore(0, 1), null);
+});
+
+test("upside separates a young stash from a same-value aging body", () => {
+  // Identical dynasty value, no near-term points; only age differs. The young
+  // one must rank higher — the exact 2nd/3rd-string-veteran fix.
+  const results = scoreWaiverCandidates({
+    candidates: [
+      cand("young", { age: 22, dynastyValue: { value: 70 } }),
+      cand("old", { age: 31, dynastyValue: { value: 70 } }),
+    ],
+    week: 0,
+  });
+  assert.equal(results[0].playerId, "young");
+  assert.ok(results[0].breakdown.upside > results[1].breakdown.upside);
+  assert.ok(results[0].flags.includes("young-upside"));
+  assert.ok(!results[1].flags.includes("young-upside"));
+});
+
+test("instant production still wins: an older producer outranks a young zero", () => {
+  // Barbell's other leg — a 30-yo projecting big beats a 22-yo projecting nothing.
+  const results = scoreWaiverCandidates({
+    candidates: [
+      cand("producer", { position: "WR", age: 30, dynastyValue: { value: 45 } }),
+      cand("youngzero", { position: "WR", age: 22, dynastyValue: { value: 45 } }),
+    ],
+    rosProjPpgById: new Map([["producer", 16], ["youngzero", 3]]),
+    week: 5,
+  });
+  assert.equal(results[0].playerId, "producer");
 });
 
 // ── projection ──────────────────────────────────────────────────────────────
@@ -141,8 +190,10 @@ test("offseason: weights renormalize over dynasty + trending + availability", ()
   const sum = Object.values(used).reduce((s, w) => s + w, 0);
   assert.ok(Math.abs(sum - 1) < 1e-9, `weights should sum to 1, got ${sum}`);
   assert.ok(!("projection" in used) && !("form" in used));
-  // dynasty weight collapses from 0.30 to 0.30/0.55
-  assert.ok(Math.abs(used.dynasty - 0.3 / 0.55) < 1e-9);
+  // Offseason present signals: dynasty + upside + trending + availability.
+  const denom = 0.25 + 0.17 + 0.13 + 0.05;
+  assert.ok(Math.abs(used.dynasty - 0.25 / denom) < 1e-9);
+  assert.ok("upside" in used);
 });
 
 test("offseason: high-dynasty player outranks a high-trending scrub", () => {
@@ -222,11 +273,23 @@ test("suggestFaab bands and bonuses", () => {
   assert.equal(p.faabLabel, "$20–$35 of $100");
 
   const boosted = suggestFaab(85, { hasShock: true, fillsNeed: true, faabBudget: 100 });
-  assert.deepEqual(boosted.faabPct, { min: 28, max: 40 }); // 35+8 clamps at 40
+  assert.deepEqual(boosted.faabPct, { min: 25, max: 40 }); // 35+5 clamps at 40
 
+  // Speculative is a dart, and stays a dart even with roster-fit + shock bonuses.
   const spec = suggestFaab(55, { faabBudget: 200 });
   assert.equal(spec.verdict, "speculative");
-  assert.deepEqual(spec.faabPct, { min: 3, max: 8 });
+  assert.deepEqual(spec.faabPct, { min: 1, max: 4 });
+  const specBoosted = suggestFaab(55, { hasShock: true, fillsNeed: true, faabBudget: 200 });
+  assert.ok(specBoosted.faabPct.max <= 5, `speculative capped, got ${specBoosted.faabPct.max}`);
+});
+
+test("suggestFaab: unprojected players stay a small situational dart", () => {
+  // A trending-driven score with no real projection must NOT recommend real
+  // money — the exact Jack-Strand case (0.0 proj PPG but #1 trending).
+  const u = suggestFaab(80, { hasShock: true, fillsNeed: true, faabBudget: 200, unprojected: true });
+  assert.equal(u.unprojected, true);
+  assert.ok(u.faabPct.max <= 5, `unprojected bid should be a dart, got ${u.faabPct.max}`);
+  assert.match(u.faabLabel, /situational/);
 });
 
 test("suggestFaab: priority league (budget 0) and watch verdicts carry no bid", () => {
