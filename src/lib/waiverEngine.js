@@ -1,27 +1,40 @@
 // Pure waiver-wire scoring math for the Waivers tab.
 //
-// Ranks the free-agent pool by blending five 0-100 signals:
+// Ranks the free-agent pool by blending six 0-100 signals:
 //   dynasty      — long-term asset value (fused dynastyValue from rosterBuilder)
 //   projection   — rest-of-season scoring expectation, percentile within position
+//   upside       — youth-adjusted ascension: dynasty value reweighted toward
+//                  players still inside their ascending window (see upsideScore)
 //   form         — proj-vs-actual momentum (hotStreaks residuals)
 //   trending     — platform-wide add velocity (the opportunity-shock proxy: a
 //                  backup elevated by a starter injury spikes here within hours)
 //   availability — injury status / unsigned / recent missed weeks
 //
+// The intent for a dynasty pool is a BARBELL: a free agent earns a claim by
+// being a *young ascending stash* (dynasty + upside) OR by producing *right
+// now* (projection + form). What we deliberately do NOT reward is a healthy,
+// signed, replacement-level veteran — a 2nd/3rd-string body with no future and
+// no points. That's why `upside` exists (age was previously ignored, so those
+// veterans looked identical to young stashes) and why `availability` carries
+// only a light weight: being healthy and rostered-somewhere is table stakes,
+// not a reason to add someone.
+//
 // Signals that are unavailable (offseason: no projections, no streaks) come
 // back null and their weight is renormalized across the rest — so at week 0
-// the board degrades to dynasty + trending + availability with no special-case
-// code path. That renormalization IS the season-adaptation mechanism.
+// the board degrades to dynasty + upside + trending + availability with no
+// special-case code path. That renormalization IS the season-adaptation
+// mechanism.
 //
 // This module is dependency-free (no fetch, no Supabase) so it can be
 // unit-tested in isolation (waiverEngine.test.mjs). WaiverTab handles fetching.
 
 export const DEFAULT_WAIVER_WEIGHTS = {
-  dynasty: 0.30,
-  projection: 0.30,
-  form: 0.15,
-  trending: 0.15,
-  availability: 0.10,
+  dynasty: 0.25,
+  projection: 0.28,
+  upside: 0.17,
+  form: 0.12,
+  trending: 0.13,
+  availability: 0.05,
 };
 
 // Trending-only candidates (not in the FC/RA value pool) have no dynastyValue.
@@ -37,6 +50,34 @@ export function dynastyScore(candidate) {
   const v = candidate?.dynastyValue?.value;
   if (v == null) return candidate?.isLite ? LITE_DYNASTY_SCORE : null;
   return clamp(v / 1.3, 0, 100);
+}
+
+// Age curve for youth upside: full credit through the ascending window, then a
+// linear fade to zero as a player exits it. ≤22 → 100, 24 → ~78, 26 → ~56,
+// 28 → ~33, ≥31 → 0. Positionless on purpose — RB/WR/QB age curves differ, but
+// this is a coarse "still ascending vs. declining" gate, not a projection.
+function ageUpsideCurve(age) {
+  if (!Number.isFinite(age) || age <= 0) return null;
+  if (age <= 22) return 100;
+  if (age >= 31) return 0;
+  return clamp(100 - (age - 22) * (100 / 9), 0, 100);
+}
+
+/**
+ * Youth-upside signal — the piece that lets the dynasty board separate a young
+ * ascending stash from a same-value aging body. Age alone is NOT upside (a
+ * 22-yo camp arm nobody values is still worthless), so the age curve is gated
+ * by `pathStrength` (0-1): how real the ascending path is, derived by the
+ * caller from dynasty value and platform interest. A young player with no value
+ * and no buzz collapses to ~0; an old player collapses via the age curve no
+ * matter how much value they hold. That asymmetry is the whole point.
+ *
+ * Null when age is unknown — renormalize the weight away rather than guess.
+ */
+export function upsideScore(age, pathStrength = 0) {
+  const curve = ageUpsideCurve(age);
+  if (curve == null) return null;
+  return clamp(curve * clamp(pathStrength, 0, 1), 0, 100);
 }
 
 /**
@@ -121,33 +162,58 @@ export function availabilityScore(candidate, streak, week = 0) {
   return clamp(base, 0, 100);
 }
 
-// Verdict bands: [minScore, verdict, faab % band of budget]
+// Verdict bands: [minScore, verdict, faab % band of budget]. Speculative is a
+// deliberate DART range — a thin wire shouldn't recommend double-digit % of
+// budget on a WATCH-adjacent flier; that money is for the in-season injury that
+// actually flips a season.
 const VERDICT_BANDS = [
   [80, "priority-add", [20, 35]],
   [65, "strong-add", [10, 20]],
-  [50, "speculative", [3, 8]],
+  [50, "speculative", [1, 4]],
   [0, "watch", [0, 0]],
 ];
+
+// A speculative bid stays a dart even after roster-fit / shock bonuses — the
+// bonuses matter most where you're actually contesting (strong/priority).
+const SPECULATIVE_CEIL = 5;
 
 /**
  * FAAB advice for a scored candidate. Opportunity shocks and roster fits bid
  * the band up a few points — those are the adds leagues actually fight over.
  * In waiver-priority leagues (budget 0) only the verdict applies.
+ *
+ * `unprojected` = the player has no real points projection (trending/youth drove
+ * the score, not expected production). That's a SITUATION bet, not a points bet,
+ * so it's always a small dart no matter how high the score climbed — the app
+ * shouldn't recommend real money on a guy it can't project.
  */
-export function suggestFaab(waiverScore, { hasShock = false, fillsNeed = false, faabBudget = 0 } = {}) {
+export function suggestFaab(
+  waiverScore,
+  { hasShock = false, fillsNeed = false, faabBudget = 0, unprojected = false } = {},
+) {
   const [, verdict, band] = VERDICT_BANDS.find(([min]) => waiverScore >= min);
   if (!(faabBudget > 0) || verdict === "watch") {
-    return { verdict, faabPct: null, faabLabel: null };
+    return { verdict, faabPct: null, faabLabel: null, unprojected };
   }
-  const bonus = (hasShock ? 5 : 0) + (fillsNeed ? 3 : 0);
-  const lo = Math.min(40, band[0] + bonus);
-  const hi = Math.min(40, band[1] + bonus);
-  const loBid = Math.round((lo / 100) * faabBudget);
-  const hiBid = Math.round((hi / 100) * faabBudget);
+  const bid = (pct) => Math.max(pct > 0 ? 1 : 0, Math.round((pct / 100) * faabBudget));
+  if (unprojected) {
+    const hi = verdict === "priority-add" || verdict === "strong-add" ? 5 : 3;
+    return {
+      verdict,
+      faabPct: { min: 1, max: hi },
+      faabLabel: `$${bid(1)}–$${bid(hi)} of $${faabBudget} · situational`,
+      unprojected: true,
+    };
+  }
+  const bonus = (hasShock ? 3 : 0) + (fillsNeed ? 2 : 0);
+  const ceil = verdict === "speculative" ? SPECULATIVE_CEIL : 40;
+  const lo = Math.min(ceil, band[0] + bonus);
+  const hi = Math.min(ceil, band[1] + bonus);
   return {
     verdict,
     faabPct: { min: lo, max: hi },
-    faabLabel: `$${loBid}–$${hiBid} of $${faabBudget}`,
+    faabLabel: `$${bid(lo)}–$${bid(hi)} of $${faabBudget}`,
+    unprojected: false,
   };
 }
 
@@ -253,11 +319,25 @@ export function scoreWaiverCandidates({
     const adds = trendingAddsById.get(id) || 0;
     const drops = trendingDropsById.get(id) || 0;
 
+    const dynSig = dynastyScore({ ...ref, isLite });
+    const trendSig = trendingScore(adds, drops, maxAdds, maxDrops);
+
+    // How real is this young player's path to relevance? Established dynasty
+    // value counts fully; raw platform buzz counts a little less (it's noisier
+    // and often injury-driven, which is exactly the young-opportunity case we
+    // still want to reward). A player with neither has no path — upside → 0.
+    const pathStrength = clamp(
+      Math.max((dynSig ?? 0) / 100, (trendSig ?? 0) / 100 * 0.85),
+      0,
+      1,
+    );
+
     const signals = {
-      dynasty: dynastyScore({ ...ref, isLite }),
+      dynasty: dynSig,
       projection: projPctiles.get(id) ?? null,
+      upside: upsideScore(ref.age, pathStrength),
       form: formScore(streak),
-      trending: trendingScore(adds, drops, maxAdds, maxDrops),
+      trending: trendSig,
       availability: availabilityScore(ref, streak, week),
     };
 
@@ -281,8 +361,12 @@ export function scoreWaiverCandidates({
     const flags = [];
     const dyn = signals.dynasty;
     const trend = signals.trending;
+    const up = signals.upside;
     if (trend != null && trend >= 80 && dyn != null && dyn < 50) flags.push("opportunity-shock");
     else if (trend != null && trend >= 60) flags.push("trending-riser");
+    // Young player with a real ascending path — the dynasty stash worth a bench
+    // spot even before the points arrive.
+    if (up != null && up >= 50 && ref.age != null && ref.age <= 24) flags.push("young-upside");
     if (drops > adds && drops >= 10) flags.push("being-dropped");
     if (signals.availability <= 55) flags.push("injury-risk");
     if (fillsNeed) flags.push("fills-need");
@@ -290,10 +374,16 @@ export function scoreWaiverCandidates({
       flags.push("stash-only");
     }
 
+    // No real points projection (season or week) — the score came from trending
+    // / youth, not expected production. Surface it honestly and keep FAAB small.
+    const unprojected =
+      (rosPpg == null || rosPpg <= 0) && (weekProj == null || weekProj <= 0);
+
     const advice = suggestFaab(waiverScore, {
       hasShock: flags.includes("opportunity-shock"),
       fillsNeed,
       faabBudget,
+      unprojected,
     });
 
     return {
@@ -305,9 +395,11 @@ export function scoreWaiverCandidates({
       injuryStatus: ref.injuryStatus ?? null,
       isLite,
       waiverScore,
+      unprojected,
       breakdown: {
         dynasty: dyn != null ? round1(dyn) : null,
         projection: signals.projection != null ? round1(signals.projection) : null,
+        upside: up != null ? round1(up) : null,
         form: signals.form != null ? round1(signals.form) : null,
         trending: trend != null ? round1(trend) : null,
         availability: round1(signals.availability),
