@@ -1,6 +1,7 @@
 import { POSITION_PRIORITY } from "../../constants";
 import { getColor, rankLabel } from "../../lib/analysis";
 import { styles } from "../../styles";
+import RosterEfficiencyPanel from "./RosterEfficiencyPanel";
 
 export default function OverviewTab({
   byPos,
@@ -16,6 +17,8 @@ export default function OverviewTab({
   mySurplus,
   myRosterId,
   cliffCalendar,
+  leagueContext,
+  tradeMarket,
 }) {
   // Merge backend weakRooms with any bottom-third ranked rooms from posRanks
   const displayWeakRooms = (() => {
@@ -313,6 +316,15 @@ export default function OverviewTab({
           })}
         </div>
       </div>
+
+      {leagueTeams?.length > 1 && myRosterId != null && (
+        <RosterEfficiencyPanel
+          leagueTeams={leagueTeams}
+          leagueContext={leagueContext}
+          tradeMarket={tradeMarket}
+          myRosterId={myRosterId}
+        />
+      )}
 
       {leagueTeams && myNeeds && mySurplus && (() => {
         // Earliest picks that could sweeten deals (rounds 1-2 only)
