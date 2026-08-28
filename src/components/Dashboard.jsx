@@ -339,6 +339,8 @@ export default function Dashboard({
           mySurplus={surplusPositions}
           myRosterId={analysis.rosterId}
           cliffCalendar={analysis.cliffCalendar}
+          leagueContext={leagueContext}
+          tradeMarket={tradeMarket}
         />
       )}
 
