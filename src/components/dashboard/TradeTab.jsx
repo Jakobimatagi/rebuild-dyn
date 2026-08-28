@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { POSITION_PRIORITY } from "../../constants";
-import { evaluateTrade, evaluateThreeWayTrade, simulateTrade, buildTradeRationale, suggestBalancingAsset, getAssetTradeValue } from "../../lib/tradeEngine";
+import { evaluateTrade, evaluateThreeWayTrade, simulateTrade, buildTradeRationale, suggestBalancingAsset, getAssetTradeValue, assessRosterEfficiency } from "../../lib/tradeEngine";
 import { buildBlueprintImpact, compareBuildFit } from "../../lib/tradeBlueprintImpact";
 import { buildFairPackages, suggestBalancePackages } from "../../lib/tradePackages";
 import { pickSlotLabel } from "../../lib/marketValue";
@@ -879,6 +879,27 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
     }
   }, [sideA, sideB, teamA, teamB, leagueTeams, leagueContext, playerMarketMap]);
 
+  // Buying Power vs. Expected Value — how efficiently each side allocates the
+  // market value it's moving toward a real change in projected lineup output.
+  const efficiency = useMemo(() => {
+    if (!result || !simulation || !teamA || !teamB) return null;
+    // Buying power is the raw (pre-phase) market swing: received − sent.
+    const bpA = result.sideBValue - result.sideAValue;
+    const bpB = result.sideAValue - result.sideBValue;
+    return {
+      teamA: assessRosterEfficiency({
+        buyingPowerDelta: bpA,
+        ppgDelta: simulation.teamA?.teamPhase?.starterPpgDelta,
+        phase: simulation.teamA?.teamPhase?.before?.phase,
+      }),
+      teamB: assessRosterEfficiency({
+        buyingPowerDelta: bpB,
+        ppgDelta: simulation.teamB?.teamPhase?.starterPpgDelta,
+        phase: simulation.teamB?.teamPhase?.before?.phase,
+      }),
+    };
+  }, [result, simulation, teamA, teamB]);
+
   const pbPackages = useMemo(() => {
     if (!pbAnchor || !teamA || !teamB) return null;
     try {
@@ -1403,6 +1424,10 @@ function TradeCalculator({ leagueTeams, leagueContext, tradeMarket, teamPhase })
               </div>
             </div>
           </div>
+
+          {efficiency && (
+            <EfficiencyReadout efficiency={efficiency} teamA={teamA} teamB={teamB} />
+          )}
         </div>
       )}
 
@@ -1990,6 +2015,66 @@ function PostTradeImpact({ simulation }) {
 // fair; a 73/27 split is visibly lopsided at a glance.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Buying Power vs. Expected Value — per-side roster-efficiency read. Buying
+// power (aggregate market value) is only a guide; the goal is to allocate it
+// toward the best possible expected value. Flags over-extending and
+// over-hoarding — the two common efficiency mistakes.
+// ---------------------------------------------------------------------------
+
+function EfficiencyCard({ team, read, accent }) {
+  if (!read) return null;
+  return (
+    <div
+      style={{
+        padding: "10px 12px",
+        background: `${read.color}0d`,
+        border: `1px solid ${read.color}33`,
+        borderRadius: 4,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+        <span style={{ fontSize: 10, color: accent, letterSpacing: 1, fontWeight: 600 }}>
+          {team.label.toUpperCase()}
+        </span>
+        <span
+          style={{
+            fontSize: 9,
+            letterSpacing: 0.5,
+            padding: "2px 7px",
+            borderRadius: 2,
+            color: read.color,
+            background: `${read.color}1f`,
+            border: `1px solid ${read.color}55`,
+          }}
+        >
+          {read.grade}
+        </span>
+      </div>
+      <div style={{ fontSize: 11, color: "#fff", marginBottom: 3 }}>{read.headline}</div>
+      <div style={{ fontSize: 10, color: "#c8cfe3", lineHeight: 1.55 }}>{read.note}</div>
+    </div>
+  );
+}
+
+function EfficiencyReadout({ efficiency, teamA, teamB }) {
+  return (
+    <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+      <div style={{ fontSize: 9, color: "#808898", letterSpacing: 1.5, marginBottom: 8 }}>
+        BUYING POWER vs. EXPECTED VALUE · ROSTER EFFICIENCY
+      </div>
+      <div className="dyn-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <EfficiencyCard team={teamA} read={efficiency.teamA} accent="#ffd84d" />
+        <EfficiencyCard team={teamB} read={efficiency.teamB} accent="#00f5a0" />
+      </div>
+      <div style={{ fontSize: 9, color: "#606878", marginTop: 8, lineHeight: 1.5 }}>
+        Buying power = aggregate market value moved. Expected value = change in projected starter PPG.
+        The goal isn't just more buying power — it's allocating it toward the best expected value.
+      </div>
+    </div>
+  );
+}
+
 function SplitBar({ label, shareA, verdictText, textColor }) {
   const pct = Math.max(2, Math.min(98, shareA * 100));
   return (
@@ -2009,15 +2094,15 @@ function SplitBar({ label, shareA, verdictText, textColor }) {
 }
 
 function FairnessBars({ result, blueprintImpact, teamA, teamB }) {
-  // Value reading: each side's share of the total value changing hands.
-  // Team A receives sideBValue, team B receives sideAValue.
+  // Buying-power reading: each side's share of the total market value changing
+  // hands. Team A receives sideBValue, team B receives sideAValue.
   const totalVal = result.sideAValue + result.sideBValue;
   const valueShareA = totalVal > 0 ? result.sideBValue / totalVal : 0.5;
   const valuePct = Math.round(valueShareA * 100);
   const valueEven = Math.abs(valueShareA - 0.5) <= 0.035;
   const valueText = valueEven
-    ? "even value"
-    : `${valueShareA > 0.5 ? teamA.label : teamB.label} gets ${Math.max(valuePct, 100 - valuePct)}% of the value`;
+    ? "even buying power"
+    : `${valueShareA > 0.5 ? teamA.label : teamB.label} gets ${Math.max(valuePct, 100 - valuePct)}% of the buying power`;
   const valueColor = valueEven ? "#94a3b8" : valueShareA > 0.5 ? "#ffd84d" : "#00f5a0";
 
   const build = compareBuildFit(blueprintImpact?.teamA, blueprintImpact?.teamB);
@@ -2041,7 +2126,7 @@ function FairnessBars({ result, blueprintImpact, teamA, teamB }) {
         </div>
         <span />
       </div>
-      <SplitBar label="VALUE" shareA={valueShareA} verdictText={valueText} textColor={valueColor} />
+      <SplitBar label="BUYING POWER" shareA={valueShareA} verdictText={valueText} textColor={valueColor} />
       {build && <SplitBar label="BUILD FIT" shareA={buildShareA} verdictText={buildText} textColor={buildColor} />}
     </div>
   );
@@ -2434,6 +2519,10 @@ function TradeCalcKey() {
           [
             "Adjusted trade value",
             "Blend of internal dynasty scoring, league format adjustments, FantasyCalc market data when available, and Sleeper trade-market multipliers.",
+          ],
+          [
+            "Buying power vs. expected value",
+            "Buying power is the aggregate market value you control — a guide, not the goal. Expected value is what your lineup projects to produce (change in starter PPG). Roster efficiency is how well you convert buying power into expected value. Flags over-extending (spending big for little lift) and over-hoarding (banking power while forgoing present value).",
           ],
           [
             "Fit score",

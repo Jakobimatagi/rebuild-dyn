@@ -713,6 +713,96 @@ export function evaluateTrade(
 }
 
 // ---------------------------------------------------------------------------
+// Buying Power vs. Expected Value — roster efficiency read.
+//
+// "Buying power" is the aggregate market value of what a team controls — a
+// helpful guide, but a separate consideration from *expected value*: how much
+// a lineup actually projects to produce (proxied here by the change in starter
+// PPG). The goal isn't just to grow buying power, it's to allocate it toward
+// the best possible expected value. This flags the two common inefficiencies:
+//
+//   1. Over-extending — spending real buying power for little expected-value
+//      lift (going "all in" past the point of diminishing returns, shortening
+//      the contention window for a marginal gain).
+//   2. Over-hoarding — banking long-term buying power while giving up expected
+//      value in the short term.
+//
+// buyingPowerDelta: raw market-value swing for the side (received − sent, pts).
+// ppgDelta:         change in projected starter PPG for the side (from sim).
+// phase:            the side's current phase (contender/retool/rebuild) for tone.
+// ---------------------------------------------------------------------------
+
+export function assessRosterEfficiency({ buyingPowerDelta, ppgDelta, phase }) {
+  const bp = Math.round(buyingPowerDelta || 0);
+  const ppg = Number.isFinite(ppgDelta) ? ppgDelta : 0;
+  const ppgStr = `${ppg >= 0 ? "+" : ""}${ppg.toFixed(1)}`;
+  const bpStr = `${bp >= 0 ? "+" : ""}${bp}`;
+
+  const SPEND = -12;   // net buying power paid up past this = a real spend
+  const BANK = 12;     // net buying power gained past this = real accumulation
+  const EV_GAIN = 1.2; // meaningful short-term expected-value lift (starter PPG)
+  const EV_LOSS = -1.2;
+
+  // Mistake 1: over-extending. Paid real buying power for little/no EV lift.
+  if (bp <= SPEND && ppg < EV_GAIN) {
+    const windowNote =
+      phase === "contender"
+        ? " You're shortening your window without a real bump in expected value."
+        : phase === "rebuild"
+        ? " Steep price for a rebuild that isn't chasing wins yet."
+        : " Diminishing returns — the buying power spent outruns the payoff.";
+    return {
+      flag: "over-extended",
+      grade: "Over-extended",
+      color: "#ff6b35",
+      headline: "Overpaying for little lift",
+      note: `Spends ${Math.abs(bp)} buying power for only ${ppgStr} starter PPG.${windowNote}`,
+    };
+  }
+
+  // Mistake 2: over-hoarding. Banked buying power at the cost of present EV.
+  if (bp >= BANK && ppg <= EV_LOSS) {
+    return {
+      flag: "over-hoarding",
+      grade: "Long-term tilt",
+      color: "#7b8cff",
+      headline: "Banking power, losing now",
+      note: `Nets ${bpStr} buying power but ${ppgStr} starter PPG — forgoing present expected value for future flexibility. Make sure the long-term payoff justifies the short-term cost.`,
+    };
+  }
+
+  // Efficient allocation: turned buying power into real expected value.
+  if (ppg >= EV_GAIN) {
+    return {
+      flag: "efficient",
+      grade: "Efficient",
+      color: "#00f5a0",
+      headline: "Buying power well spent",
+      note: `Turns ${bpStr} buying power into ${ppgStr} starter PPG — an efficient allocation toward expected value.`,
+    };
+  }
+
+  // Accumulation without a present-EV cost — flexibility for a future move.
+  if (bp >= BANK) {
+    return {
+      flag: "accumulating",
+      grade: "Accumulating",
+      color: "#ffd84d",
+      headline: "Stockpiling buying power",
+      note: `Adds ${bpStr} buying power without giving up expected value now — dry powder for a future move.`,
+    };
+  }
+
+  return {
+    flag: "neutral",
+    grade: "Balanced",
+    color: "#94a3b8",
+    headline: "Roughly efficient",
+    note: `Buying power ${bpStr}, starter PPG ${ppgStr} — no major efficiency swing either way.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Three-way trade evaluation — each leg sends a set of assets, and every asset
 // is routed to one of the other two legs (asset.to = destination leg id).
 // Computes per-team value in/out, a phase-adjusted net, positional shifts, and
